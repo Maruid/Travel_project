@@ -384,12 +384,35 @@ export function openPlaceEditor(store, id, { near } = {}) {
       const box = $('#ai-result', el);
       setHTML(box, html`
         <p><i class="fa-solid fa-wand-magic-sparkles mr-1"></i><b>AI 초안</b>${count ? ` · ${count}개 항목 채움` : ''} · 가격·휴무는 틀릴 수 있으니 확인하세요.
-          ${r.grounded ? '' : html`<span class="text-amber-300">검색 근거를 찾지 못해 정확도가 낮을 수 있어요.</span>`}</p>
+          ${r.grounded ? '' : html`<span class="text-amber-300">검색 없이 만든 결과라 대표 메뉴·소개만 채웠어요.</span>`}</p>
+        ${!r.grounded && hasEstimate(r.fields) ? html`
+          <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-100 space-y-1">
+            <p><b>AI 추정 (검색 근거 없음)</b></p>
+            ${r.fields.price_min || r.fields.price_max ? html`<p>1인 ${r.fields.price_min ?? '?'} ~ ${r.fields.price_max ?? '?'} ${r.fields.price_currency || ''}</p>` : ''}
+            ${r.fields.warn_badge ? html`<p>주의: ${r.fields.warn_badge}</p>` : ''}
+            ${r.fields.visit_tip ? html`<p>팁: ${r.fields.visit_tip}</p>` : ''}
+            <button type="button" data-action="ai-apply-estimate" class="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 font-bold">그래도 빈 칸에 넣기</button>
+          </div>` : ''}
         ${r.sources?.length ? html`<div class="flex flex-wrap gap-1">${r.sources.map((s) => html`
           <a href="${s.uri}" target="_blank" rel="noopener" class="px-1.5 py-0.5 rounded bg-night-950/60 text-purple-200 underline truncate max-w-full">${s.title}</a>`)}</div>` : ''}
         ${r.searchSuggestions ? html`<iframe data-suggest sandbox="allow-popups allow-popups-to-escape-sandbox" class="w-full h-12 rounded-lg bg-white/5" title="Google 검색 제안"></iframe>` : ''}`);
       const frame = box.querySelector('[data-suggest]');
       if (frame) frame.srcdoc = r.searchSuggestions;   // Google 이 제공한 검색 제안 위젯 (스크립트 실행 불가한 샌드박스)
+      box._estimate = r.grounded ? null : r.fields;
+      box.classList.remove('hidden');
+    }
+
+    function hasEstimate(f = {}) {
+      return f.price_min != null || f.price_max != null || f.warn_badge || f.visit_tip;
+    }
+
+    // 실패 시 어떤 모델/한도에 걸렸는지 보여줌 (원인 파악용)
+    function renderAiError(e) {
+      if (!e.attempts?.length) return;
+      const box = $('#ai-result', el);
+      setHTML(box, html`
+        <p class="text-rose-200"><b>AI 호출 실패 상세</b> (이 내용을 알려주시면 원인을 바로 알 수 있어요)</p>
+        ${e.attempts.map((a) => html`<p class="font-mono break-all text-slate-300">${a.model} · ${a.grounded ? '검색' : '검색 없음'} · ${a.status}${a.quota ? ` · ${a.quota}` : ''}</p>`)}`);
       box.classList.remove('hidden');
     }
 
@@ -484,11 +507,14 @@ export function openPlaceEditor(store, id, { near } = {}) {
             currency: store.budget?.local_currency || null,
           });
           const f = r.fields || {};
-          const filled = ['signature', 'description', 'visit_tip', 'warn_badge', 'zone']
-            .filter((k) => fill(k, f[k]));
-          if (fill('price_min', f.price_min)) filled.push('price_min');
-          if (fill('price_max', f.price_max)) filled.push('price_max');
-          if (f.price_currency) fill('price_currency', f.price_currency);
+          // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
+          const textKeys = r.grounded ? ['signature', 'description', 'visit_tip', 'warn_badge', 'zone'] : ['signature', 'description', 'zone'];
+          const filled = textKeys.filter((k) => fill(k, f[k]));
+          if (r.grounded) {
+            if (fill('price_min', f.price_min)) filled.push('price_min');
+            if (fill('price_max', f.price_max)) filled.push('price_max');
+            if (f.price_currency) fill('price_currency', f.price_currency);
+          }
           // 카테고리가 비어 있으면 같은 종류의 기본 카테고리를 선택
           const catSel = form.elements.category_id;
           if (f.kind && !catSel.value) {
@@ -499,10 +525,16 @@ export function openPlaceEditor(store, id, { near } = {}) {
           toast(filled.length ? `${filled.length}개 항목을 채웠어요. 확인 후 저장하세요.` : '새로 채울 수 있는 정보가 없었어요.');
         } catch (e) {
           toast(e.message, 'error');
+          renderAiError(e);
         } finally {
           delete b.dataset.busy;
           b.innerHTML = label;
         }
+      },
+      'ai-apply-estimate': () => {
+        const est = $('#ai-result', el)._estimate || {};
+        const done = ['price_min', 'price_max', 'price_currency', 'visit_tip', 'warn_badge'].filter((k) => est[k] != null && fill(k, est[k]));
+        toast(done.length ? '추정값을 넣었어요. 꼭 확인해 주세요.' : '넣을 수 있는 빈 칸이 없어요.');
       },
     });
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));

@@ -37,9 +37,12 @@ export async function enrichPlace(params) {
   if (!navigator.onLine) throw new Error('온라인 상태에서만 사용할 수 있어요.');
   const { data, error } = await supabase.functions.invoke('enrich-place', { body: params });
   if (error) {
-    let code = null;
-    try { code = (await error.context?.json())?.error; } catch {}
-    throw new Error(AI_ERRORS[code] || 'AI 정보를 가져오지 못했어요. 잠시 후 다시 시도해 주세요.');
+    let body = null;
+    try { body = await error.context?.json(); } catch {}
+    const e = new Error(AI_ERRORS[body?.error] || 'AI 정보를 가져오지 못했어요. 잠시 후 다시 시도해 주세요.');
+    e.attempts = body?.attempts || [];   // 어떤 모델이 어떤 한도에 걸렸는지 (진단용)
+    if (e.attempts.length) console.warn('enrich-place attempts', e.attempts);
+    throw e;
   }
   return data;
 }

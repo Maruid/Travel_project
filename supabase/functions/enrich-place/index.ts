@@ -5,7 +5,9 @@
 //
 //   - 로그인 사용자 + 해당 여행 멤버만 (consume_ai_quota RPC 가 확인, 여행당 하루 50회)
 //   - API 키는 Edge Function Secrets 의 GEMINI_API_KEY (브라우저에 노출되지 않음)
-//   - 모델은 GEMINI_MODEL 로 바꿀 수 있음 (기본 gemini-flash-latest, 실패 시 gemini-2.5-flash)
+//   - 모델: GEMINI_MODEL → 무료 한도가 넉넉한 Lite 모델들 순서로 시도 (404/429 면 다음 후보)
+//   - 검색 그라운딩이 모든 모델에서 막히면(무료 티어 한도 0 등) 검색 없이 한 번 더 시도하고
+//     grounded:false 로 표시 → 클라이언트는 가격·휴무처럼 틀리기 쉬운 값은 자동으로 채우지 않음
 //   - 결과는 "초안": 클라이언트가 빈 칸만 채우고 사용자가 확인 후 저장
 // =====================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -16,7 +18,14 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const MODELS = [Deno.env.get('GEMINI_MODEL') || 'gemini-flash-latest', 'gemini-2.5-flash'];
+// 존재하지 않는 ID 는 404 로 건너뛰므로 후보를 넉넉히 둠
+const MODELS = [...new Set([
+  Deno.env.get('GEMINI_MODEL'),
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash',
+].filter((m): m is string => !!m && m.trim() !== '').map((m) => m.trim()))];
 const KINDS = ['food', 'cafe', 'bar', 'spot', 'shop', 'lodging', 'transit', 'etc'];
 
 function json(body: unknown, status = 200) {
@@ -34,7 +43,7 @@ const num = (v: unknown) => {
   return Number.isFinite(n) && n > 0 && n < 1e9 ? Math.round(n) : null;
 };
 
-function buildPrompt(p: Record<string, unknown>) {
+function buildPrompt(p: Record<string, unknown>, grounded: boolean) {
   const lines = [
     `장소 이름: ${p.name}`,
     p.zone ? `지역/동네: ${p.zone}` : '',
@@ -43,7 +52,10 @@ function buildPrompt(p: Record<string, unknown>) {
     p.mapsUrl ? `구글 맵 링크: ${p.mapsUrl}` : '',
   ].filter(Boolean).join('\n');
 
-  return `당신은 여행 가이드북 편집자입니다. 아래 장소를 Google 검색으로 확인하고, 검색으로 확인된 정보만으로 JSON 하나를 만드세요.
+  const intro = grounded
+    ? '당신은 여행 가이드북 편집자입니다. 아래 장소를 Google 검색으로 확인하고, 검색으로 확인된 정보만으로 JSON 하나를 만드세요.'
+    : '당신은 여행 가이드북 편집자입니다. 검색 도구 없이 답해야 합니다. 이 장소를 확실히 알고 있는 경우에만 값을 채우고, 조금이라도 불확실하면 null 로 두세요. 잘 알려지지 않은 가게라면 대부분 null 이 정상입니다.';
+  return `${intro}
 
 ${lines}
 
@@ -66,23 +78,47 @@ ${lines}
 \`\`\``;
 }
 
-async function callGemini(key: string, prompt: string) {
-  let last: Response | null = null;
-  for (const model of [...new Set(MODELS)]) {
+type Attempt = { model: string; grounded: boolean; status: number; quota?: string };
+
+// Google 에러 본문에서 걸린 한도 이름만 추려냄 (로그가 잘리지 않도록 짧게)
+function summarizeError(text: string): string {
+  try {
+    const err = JSON.parse(text).error;
+    const parts: string[] = [];
+    for (const d of err?.details || []) {
+      for (const v of d.violations || []) {
+        const dims = v.quotaDimensions ? Object.entries(v.quotaDimensions).map(([k, x]) => `${k}=${x}`).join(',') : '';
+        parts.push([v.quotaMetric, v.quotaId, dims].filter(Boolean).join(' | '));
+      }
+    }
+    return parts.join(' ; ') || String(err?.message || '').slice(0, 160);
+  } catch {
+    return text.slice(0, 160);
+  }
+}
+
+async function callGemini(key: string, prompt: string, grounded: boolean, attempts: Attempt[]) {
+  for (const model of MODELS) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
+        ...(grounded ? { tools: [{ google_search: {} }] } : {}),
         generationConfig: { temperature: 0.2 },
       }),
       signal: AbortSignal.timeout(30000),
     });
-    if (res.status === 404) { last = res; continue; }   // 모델 이름이 바뀐 경우 다음 후보로
-    return { res, model };
+    if (res.ok) {
+      attempts.push({ model, grounded, status: 200 });
+      return { data: await res.json(), model };
+    }
+    const quota = summarizeError(await res.text());
+    attempts.push({ model, grounded, status: res.status, quota });
+    console.error(JSON.stringify({ gemini: 'error', model, grounded, status: res.status, quota }));
+    if (res.status !== 404 && res.status !== 429) return null;   // 그 밖의 에러는 다른 모델로도 해결되지 않음
   }
-  return { res: last!, model: MODELS[MODELS.length - 1] };
+  return null;
 }
 
 Deno.serve(async (req) => {
@@ -115,8 +151,8 @@ Deno.serve(async (req) => {
     return json({ error: code }, code === 'AI_LIMIT' ? 429 : 403);
   }
 
-  // ---- Gemini 호출 ----
-  const prompt = buildPrompt({
+  // ---- Gemini 호출: 검색 그라운딩 → (전부 한도 초과면) 검색 없이 ----
+  const info = {
     name,
     zone: str(body.zone, 50),
     destination: str(body.destination, 80),
@@ -124,22 +160,26 @@ Deno.serve(async (req) => {
     lng: typeof body.lng === 'number' ? body.lng : null,
     mapsUrl: str(body.mapsUrl, 500),
     currency: str(body.currency, 3),
-  });
-
-  let res: Response, model: string;
+  };
+  const attempts: Attempt[] = [];
+  let result: { data: any; model: string } | null = null;
+  let grounded = true;
   try {
-    ({ res, model } = await callGemini(key, prompt));
+    result = await callGemini(key, buildPrompt(info, true), true, attempts);
+    if (!result && attempts.length && attempts.every((a) => a.status === 404 || a.status === 429)) {
+      grounded = false;
+      result = await callGemini(key, buildPrompt(info, false), false, attempts);
+    }
   } catch (e) {
     console.error('gemini fetch failed', e);
-    return json({ error: 'AI_FAILED' }, 502);
+    return json({ error: 'AI_FAILED', attempts }, 502);
   }
-  if (!res.ok) {
-    const detail = await res.text();
-    console.error('gemini error', res.status, detail.slice(0, 500));
-    return json({ error: res.status === 429 ? 'AI_BUSY' : 'AI_FAILED', status: res.status }, res.status === 429 ? 429 : 502);
+  if (!result) {
+    const busy = attempts.some((a) => a.status === 429);
+    return json({ error: busy ? 'AI_BUSY' : 'AI_FAILED', attempts }, busy ? 429 : 502);
   }
 
-  const data = await res.json();
+  const { data, model } = result;
   const cand = data.candidates?.[0];
   const text: string = (cand?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('');
   const match = text.match(/```json\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
@@ -178,8 +218,9 @@ Deno.serve(async (req) => {
     fields,
     sources,
     searchSuggestions: meta.searchEntryPoint?.renderedContent || null,
-    grounded: sources.length > 0,
+    grounded: grounded && sources.length > 0,
     remaining,
     model,
+    attempts,
   });
 });
