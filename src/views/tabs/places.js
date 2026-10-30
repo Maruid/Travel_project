@@ -384,7 +384,8 @@ export function openPlaceEditor(store, id, { near } = {}) {
       const box = $('#ai-result', el);
       setHTML(box, html`
         <p><i class="fa-solid fa-wand-magic-sparkles mr-1"></i><b>AI 초안</b>${count ? ` · ${count}개 항목 채움` : ''} · 가격·휴무는 틀릴 수 있으니 확인하세요.
-          ${r.grounded ? '' : html`<span class="text-amber-300">검색 없이 만든 결과라 대표 메뉴·소개만 채웠어요.</span>`}</p>
+          ${!r.grounded ? html`<span class="text-amber-300">검색 없이 만든 결과라 대표 메뉴·소개만 채웠어요.</span>`
+            : !r.sources?.length ? html`<span class="text-slate-300">검색은 했지만 근거 링크를 받지 못했어요.</span>` : ''}</p>
         ${!r.grounded && hasEstimate(r.fields) ? html`
           <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-100 space-y-1">
             <p><b>AI 추정 (검색 근거 없음)</b></p>
