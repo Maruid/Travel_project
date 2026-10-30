@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@import "@fortawesome/fontawesome-free/css/all.min.css";
+@import "leaflet/dist/leaflet.css";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+/* 기존 index.html 의 tailwind.config 를 v4 @theme 로 이전 */
+@theme {
+  --color-night-950: #060911;
+  --color-night-900: #0a0f1d;
+  --color-night-850: #0f172a;
+  --color-night-800: #15203b;
+  --color-night-700: #1e293b;
+
+  --color-neon-cyan: #00f2fe;
+  --color-neon-blue: #4facfe;
+  --color-neon-rose: #f43f5e;
+  --color-neon-amber: #f59e0b;
+  --color-neon-emerald: #10b981;
+  --color-neon-purple: #c084fc;
+
+  --font-sans: "Noto Sans KR", sans-serif;
+  --font-display: "Plus Jakarta Sans", "Noto Sans KR", sans-serif;
+  --font-mono: "Outfit", monospace;
+}
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+@utility glass-card {
+  background: rgba(21, 32, 59, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+@utility glass-nav {
+  background: rgba(10, 15, 29, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+@utility neon-border-cyan {
+  border: 1px solid rgba(0, 242, 254, 0.4);
+  box-shadow: 0 0 14px rgba(0, 242, 254, 0.2);
+}
+
+@layer components {
+  /* 폼 공통 */
+  .input {
+    @apply w-full bg-slate-800 border border-white/10 rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-neon-cyan/60;
+  }
+  .label { @apply text-[10px] text-slate-400 block mb-1; }
+  .btn-primary {
+    @apply w-full py-3 rounded-xl bg-neon-cyan text-night-950 font-black text-xs shadow-lg active:scale-[0.99] transition disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-200 text-[11px] font-bold border border-white/10 hover:bg-slate-700 transition;
+  }
+  .chip {
+    @apply flex-shrink-0 text-xs px-2.5 py-1 rounded-full font-medium glass-card text-slate-300;
+  }
+  .chip-active {
+    @apply flex-shrink-0 text-xs px-3 py-1 rounded-full font-bold bg-neon-cyan text-night-950 shadow-md;
+  }
+}
+
+/* 지도 */
+.leaflet-container { background: #090d16 !important; font-family: 'Noto Sans KR', sans-serif; }
+.leaflet-control-attribution { background: rgba(6, 9, 17, 0.7) !important; color: #94a3b8 !important; font-size: 9px !important; }
+.leaflet-control-attribution a { color: #cbd5e1 !important; }
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  50% { transform: scale(1.3); opacity: 0.4; }
+  100% { transform: scale(0.9); opacity: 0.9; }
+}
+.pulse-marker { animation: pulse-ring 2s infinite ease-in-out; }
+
+/* 마크다운 가이드 카드 */
+.md { font-size: 12px; line-height: 1.7; color: #cbd5e1; }
+.md p { margin: 0.4em 0; }
+.md strong { color: #fff; }
+.md ul, .md ol { padding-left: 1.2em; margin: 0.4em 0; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.2em 0; }
+.md hr { border-color: rgba(255,255,255,0.1); margin: 0.8em 0; }
+.md a { color: #00f2fe; text-decoration: underline; }
+.md h1, .md h2, .md h3 { color: #fff; font-weight: 800; margin: 0.6em 0 0.3em; }
+.md .copy-card {
+  position: relative; margin: 0.6em 0; padding: 0.75em 0.9em; border-radius: 14px;
+  background: rgba(6, 9, 17, 0.7); border: 1px solid rgba(255,255,255,0.08);
+  font-size: 15px; font-weight: 800; color: #fff; line-height: 1.5; white-space: pre-wrap;
+}
+.md .copy-card button {
+  position: absolute; top: 6px; right: 6px; font-size: 10px; padding: 2px 8px; border-radius: 6px;
+  background: #1e293b; color: #00f2fe; border: 1px solid rgba(0,242,254,0.3); font-weight: 700;
+}
+.md .copy-card pre { padding-right: 3.5em; white-space: pre-wrap; font-family: inherit; }

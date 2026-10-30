@@ -1,0 +1,38 @@
+name: Supabase keepalive
+
+# 1) Supabase 무료 프로젝트 비활성 정지 방지: 3일마다 ping() RPC 호출
+# 2) GitHub 은 60일간 저장소 활동이 없으면 예약 workflow 를 끄므로,
+#    .keepalive 파일을 갱신해 커밋 (deploy.yml 은 이 파일 변경을 무시)
+on:
+  schedule:
+    - cron: '17 3 */3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
+        run: |
+          status=$(curl -sS -o /tmp/out.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/ping" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Content-Type: application/json" -d '{}')
+          echo "HTTP $status: $(cat /tmp/out.txt)"
+          test "$status" = "200"
+
+      - uses: actions/checkout@v4
+      - name: Touch .keepalive
+        run: |
+          date -u +%Y-%m-%dT%H:%M:%SZ > .keepalive
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          git commit -m "chore: keepalive" || echo "no change"
+          git push

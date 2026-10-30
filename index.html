@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0f1d">
+  <title>Trip Guide</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;800;900&family=Outfit:wght@400;600;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="bg-night-950 text-slate-100 min-h-screen font-sans antialiased">
+  <div id="app" class="w-full max-w-md mx-auto min-h-screen flex flex-col bg-night-900 border-x border-white/5 relative"></div>
+
+  <!-- 공통 바텀시트 -->
+  <div id="sheet-backdrop" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50"></div>
+  <div id="sheet" class="fixed bottom-0 left-0 right-0 max-w-md mx-auto glass-card bg-night-950/95 border-t border-white/20 rounded-t-[32px] p-5 z-50 translate-y-full transition-transform duration-300 max-h-[88vh] overflow-y-auto no-scrollbar shadow-2xl">
+    <div class="w-12 h-1.5 bg-slate-600 rounded-full mx-auto mb-3"></div>
+    <div id="sheet-content"></div>
+  </div>
+
+  <!-- 토스트 -->
+  <div id="toast" class="hidden fixed top-16 left-1/2 -translate-x-1/2 bg-night-950/95 text-white border border-neon-cyan/40 text-xs px-4 py-2.5 rounded-full z-[60] shadow-2xl"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
