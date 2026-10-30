@@ -5,6 +5,7 @@ import { walkInfo, priceRange } from '../../lib/format.js';
 import { lookupMapsLink, geocode, currentPosition } from '../../lib/place-lookup.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color } from '../../lib/safe.js';
+import { downloadTripMap } from '../../lib/offline-map.js';
 
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
 
@@ -32,6 +33,9 @@ export function mount(root, store) {
         <select id="anchor-select" class="h-9 px-2 rounded-xl glass-card bg-night-950/80 text-[11px] text-slate-200 font-bold border border-white/20 max-w-40"></select>
         <button data-action="gps" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-neon-cyan border border-neon-cyan/40" title="내 위치">
           <i class="fa-solid fa-location-crosshairs text-sm"></i>
+        </button>
+        <button data-action="offline-map" id="btn-offline-map" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-emerald-300 border border-emerald-400/40 text-[10px] font-bold" title="이 여행 지도 오프라인 저장">
+          <i class="fa-solid fa-download text-sm"></i>
         </button>
       </div>
       <div id="float-card" class="hidden absolute bottom-2 left-2 right-2 z-20 glass-card bg-night-950/90 border border-neon-cyan/50 rounded-2xl p-2.5 shadow-2xl"></div>
@@ -201,6 +205,22 @@ export function mount(root, store) {
     sort: () => { state.sortByDistance = !state.sortByDistance; update(); },
     near: () => { state.nearOnly = !state.nearOnly; update(); },
     add: () => openPlaceEditor(store, null, { near: anchorPoint() }),
+    'offline-map': async (btn) => {
+      if (btn.dataset.busy) return;
+      if (!navigator.onLine) { toast('온라인 상태에서 받아주세요.', 'error'); return; }
+      const points = store.list('places').filter((p) => p.lat != null);
+      if (!confirmAction(`등록된 장소 ${points.length}곳 주변 지도를 오프라인용으로 저장할까요?\n(와이파이 환경을 권장해요)`)) return;
+      btn.dataset.busy = '1';
+      try {
+        const r = await downloadTripMap(points, (done, total) => { btn.textContent = `${Math.floor((done / total) * 100)}%`; });
+        toast(`지도 ${r.total - r.failed}장을 저장했어요.${r.failed ? ` (실패 ${r.failed})` : ''}`);
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        delete btn.dataset.busy;
+        setHTML(btn, html`<i class="fa-solid fa-download text-sm"></i>`);
+      }
+    },
     detail: (el, e) => {
       if (e.target.closest('[data-stop]')) return;
       openPlaceDetail(store, el.dataset.id, anchorPoint());

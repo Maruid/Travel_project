@@ -2,6 +2,9 @@ import './styles.css';
 import { route, startRouter } from './router.js';
 import { supabase } from './lib/supabase.js';
 import { consumeReturn } from './lib/auth.js';
+import { setupPWA } from './lib/pwa.js';
+
+setupPWA();
 
 route('/', () => import('./views/home.js'));
 route('/create', () => import('./views/create.js'));

@@ -48,6 +48,14 @@ export class TripStore {
     this._onOnline = () => this.sync();
     window.addEventListener('online', this._onOnline);
     window.addEventListener('offline', this._onOnline);
+
+    // navigator.onLine 은 "와이파이는 연결됐지만 인터넷은 안 되는" 상태를 못 잡으므로
+    // 화면에 다시 보일 때 + 보낼 게 남아 있으면 30초마다 재시도
+    this._onVisible = () => { if (document.visibilityState === 'visible') this.sync(); };
+    document.addEventListener('visibilitychange', this._onVisible);
+    this._retryTimer = setInterval(() => {
+      if (this.outbox.length && !this.flushing && document.visibilityState === 'visible') this.sync();
+    }, 30000);
   }
 
   // ---------------------------------------------------------- 구독/알림
@@ -101,11 +109,19 @@ export class TripStore {
   destroy() {
     window.removeEventListener('online', this._onOnline);
     window.removeEventListener('offline', this._onOnline);
+    document.removeEventListener('visibilitychange', this._onVisible);
+    clearInterval(this._retryTimer);
     if (this.channel) supabase.removeChannel(this.channel);
     this.listeners.clear();
   }
 
-  async sync() {
+  sync() {
+    // 여러 곳(온라인 복귀, 화면 복귀, 타이머)에서 동시에 불려도 한 번만 실행
+    if (!this._syncing) this._syncing = this._sync().finally(() => { this._syncing = null; });
+    return this._syncing;
+  }
+
+  async _sync() {
     if (!navigator.onLine) { this.status = 'offline'; this.emit(); return; }
     this.status = 'syncing'; this.emit();
     try {
