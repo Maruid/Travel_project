@@ -32,6 +32,9 @@ const ERROR_TEXT = {
   AUTH_REQUIRED: '로그인이 필요합니다.',
   FORBIDDEN: '권한이 없습니다.',
   ROW_LIMIT: '이 여행에 등록할 수 있는 최대 개수를 넘었습니다.',
+  INVALID_DEVICE_CODE: '코드가 틀렸거나 만료되었습니다. 기존 기기에서 새 코드를 받아주세요.',
+  ALREADY_OTHER_MEMBER: '이 기기는 이미 이 여행에 다른 이름으로 참여 중입니다.',
+  AI_LIMIT: '오늘 이 여행의 AI 사용 한도(50회)를 모두 썼어요.',
 };
 
 export function errorText(err) {

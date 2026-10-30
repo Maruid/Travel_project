@@ -46,6 +46,13 @@ supabase/
    - 대시보드: Edge Functions → Create function → `index.ts` 내용 붙여넣기 → **Verify JWT 끄기**
      (함수 안에서 직접 사용자 세션을 검증합니다)
 
+### 1-2. 추가 기능 (기기 추가 코드, AI 정보 채우기)
+1. SQL Editor 에서 `supabase/migration_002_devices_ai.sql` 실행 (schema.sql 이후, 다시 실행해도 안전)
+2. Edge Function `enrich-place` 생성 (이름 정확히) → `supabase/functions/enrich-place/index.ts` 붙여넣기 → **Verify JWT 끄기**
+3. Google AI Studio(aistudio.google.com)에서 API 키 발급 →
+   Supabase **Edge Functions → Secrets** 에 `GEMINI_API_KEY` 등록
+   (모델을 바꾸고 싶으면 `GEMINI_MODEL` 도 등록. 기본 `gemini-flash-latest`)
+
 ### 2. GitHub
 1. 저장소를 **public** 으로 만들고 이 폴더를 push (무료 계정 Pages 조건)
 2. **Settings → Pages → Source: GitHub Actions**
@@ -104,3 +111,15 @@ main 에 push 하면 자동 배포되고, 사용자 화면에는 다음에 앱�
 - `keepalive.yml` 이 3일마다 Supabase `ping()` 을 호출 → 무료 프로젝트 비활성 정지 방지
 - 같은 실행에서 `.keepalive` 파일을 커밋 → 공개 저장소의 예약 workflow 가 60일 무활동으로 꺼지는 것 방지
 - 처음 한 번은 Actions → Supabase keepalive → Run workflow 로 수동 실행해서 성공하는지 확인
+
+## 로그인과 여러 기기
+- 기본은 **익명**: 초대 링크로 들어와 이름만 고르면 됨 (브라우저마다 별도 계정)
+- 여러 기기에서 같은 사람으로 쓰려면
+  - **Google 로그인**: 홈 오른쪽 위 로그인. 이 기기에서 이미 익명으로 참여 중이면 "계정 연결"(기록 유지) 또는 "기존 계정 로그인" 중 선택
+  - **기기 추가 코드**: 쓰던 기기의 멤버 탭 → 다른 기기에서도 쓰기 → 8자리 코드(10분, 1회) → 새 기기의 홈 또는 초대 화면에서 입력
+- owner 의 "연결 해제"는 그 멤버의 모든 기기 연결을 끊고 이름을 다시 선택 가능하게 만듦
+
+## AI 정보 채우기
+장소 추가/수정 화면의 이름 옆 **AI로 정보 채우기** → Gemini 가 Google 검색으로 확인한 대표 메뉴, 1인 가격대, 방문 팁, 휴무 주의, 소개를 초안으로 채움.
+비어 있거나 자동으로 채운 칸만 덮어쓰고, 직접 입력한 칸은 건드리지 않음. 여행당 하루 50회 제한.
+

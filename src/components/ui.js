@@ -8,7 +8,8 @@ export function toast(msg, kind = 'info') {
   setHTML(el, html`<span class="flex items-center gap-2"><i class="fa-solid ${icon}"></i><span>${msg}</span></span>`);
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add('hidden'), 2600);
+  // 긴 안내 문구는 더 오래 보여줌
+  toastTimer = setTimeout(() => el.classList.add('hidden'), Math.min(7000, 2200 + String(msg).length * 45));
 }
 
 // ---------- 바텀시트 ----------

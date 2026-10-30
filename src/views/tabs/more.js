@@ -5,6 +5,7 @@ import { getUser, isAnonymous, linkGoogle } from '../../lib/auth.js';
 import { APP_URL } from '../../config.js';
 import { navigate } from '../../router.js';
 import { color, icon } from '../../lib/safe.js';
+import { openDeviceCodeIssue } from '../../components/account.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -50,7 +51,8 @@ export function mount(root, store) {
                 <span class="text-xs font-bold text-white truncate">${m.display_name}</span>
                 ${m.role === 'owner' ? html`<span class="text-[9px] px-1.5 rounded bg-amber-500/20 text-amber-300 font-bold">owner</span>` : ''}
                 ${m.id === me?.id ? html`<span class="text-[9px] px-1.5 rounded bg-neon-cyan/20 text-neon-cyan font-bold">나</span>` : ''}
-                ${!m.user_id ? html`<span class="text-[9px] text-slate-500">미연결</span>` : ''}
+                ${store.deviceCount(m.id) === 0 ? html`<span class="text-[9px] text-slate-500">미연결</span>`
+                  : store.deviceCount(m.id) > 1 ? html`<span class="text-[9px] text-slate-400"><i class="fa-solid fa-laptop-mobile"></i> ${store.deviceCount(m.id)}대</span>` : ''}
               </div>
               <div class="flex gap-1">
                 ${m.id === me?.id ? html`<button data-action="rename" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-300">이름 변경</button>` : ''}
@@ -85,10 +87,15 @@ export function mount(root, store) {
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-user-shield text-neon-cyan mr-1"></i>내 계정</h3>
           ${anonymous ? html`
-            <p class="text-[10px] text-slate-400 leading-relaxed">지금은 이 브라우저에만 연결된 임시 계정이에요. 브라우저 데이터를 지우면 다시 링크로 들어와야 합니다.
+            <p class="text-[10px] text-slate-400 leading-relaxed">지금은 이 브라우저에만 연결된 임시 계정이에요. 다른 기기에서도 "${me?.display_name || '나'}"(으)로 쓰려면 둘 중 하나를 선택하세요.
               ${owner ? html`<b class="text-amber-300">owner 는 Google 계정 연결을 권장합니다.</b>` : ''}</p>
-            <button data-action="link-google" class="btn-ghost w-full py-2.5"><i class="fa-brands fa-google mr-1"></i>Google 계정 연결</button>`
-          : html`<p class="text-[10px] text-emerald-300">Google 계정이 연결되어 있습니다.</p>`}
+            <div class="grid grid-cols-2 gap-2">
+              <button data-action="link-google" class="btn-ghost py-2.5"><i class="fa-brands fa-google mr-1"></i>Google 계정 연결</button>
+              <button data-action="device-code" class="btn-ghost py-2.5"><i class="fa-solid fa-key mr-1"></i>다른 기기에서도 쓰기</button>
+            </div>`
+          : html`
+            <p class="text-[10px] text-emerald-300 leading-relaxed">Google 계정이 연결되어 있어요. 다른 기기에서도 같은 계정으로 로그인하면 됩니다.</p>
+            <button data-action="device-code" class="btn-ghost w-full py-2"><i class="fa-solid fa-key mr-1"></i>로그인 없이 다른 기기 연결 (코드)</button>`}
           ${!owner ? html`<button data-action="leave" class="w-full py-2 rounded-xl text-slate-400 text-[11px]">이 여행에서 나가기</button>` : ''}
         </section>
       </div>`);
@@ -125,6 +132,7 @@ export function mount(root, store) {
       toast('삭제했습니다.'); navigate('/');
     },
     'link-google': () => linkGoogle().catch((e) => toast(errorText(e), 'error')),
+    'device-code': () => openDeviceCodeIssue(store.tripId),
     leave: () => confirmAction('이 여행에서 나갈까요?')
       && run(async () => { await rpc('leave_trip', { p_trip: store.tripId }); navigate('/'); }, '여행에서 나왔습니다.'),
   });
@@ -139,9 +147,9 @@ function openMemberMenu(store, memberId, run) {
     <h3 class="text-base font-black text-white mb-1">${m.display_name}</h3>
     <p class="text-[11px] text-slate-400 mb-3">owner 전용 관리 기능</p>
     <div class="space-y-2">
-      ${m.user_id ? html`
+      ${store.deviceCount(memberId) > 0 ? html`
         <button data-action="unlink" class="btn-ghost w-full py-2.5 text-left">
-          <b>연결 해제</b><span class="block text-[10px] text-slate-400 font-normal">브라우저를 초기화해 접근을 잃은 경우. 같은 링크로 들어와 이 이름을 다시 선택할 수 있게 됩니다.</span></button>
+          <b>연결 해제</b><span class="block text-[10px] text-slate-400 font-normal">브라우저를 초기화해 접근을 잃은 경우. 이 이름에 연결된 모든 기기가 끊기고, 같은 링크로 들어와 이 이름을 다시 선택할 수 있게 됩니다.</span></button>
         <button data-action="transfer" class="btn-ghost w-full py-2.5 text-left">
           <b>owner 넘기기</b><span class="block text-[10px] text-slate-400 font-normal">나는 일반 멤버가 됩니다.</span></button>` : ''}
       <button data-action="kick" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold text-left px-3">

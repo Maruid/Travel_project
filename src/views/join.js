@@ -3,6 +3,7 @@ import { ensureUser } from '../lib/auth.js';
 import { rpc, errorText } from '../lib/supabase.js';
 import { spinner, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
+import { startGoogleLogin, openDeviceCodeEntry } from '../components/account.js';
 
 export async function render(app, { token }) {
   setHTML(app, spinner('초대 정보를 확인하는 중...'));
@@ -29,7 +30,15 @@ export async function render(app, { token }) {
 
   setHTML(app, html`
     <main class="p-5 space-y-4">
-      <div class="glass-card p-5 rounded-2xl text-center mt-6">
+      <div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
+        <b>다른 기기에서 이미 이 여행에 참여 중인가요?</b> 새 이름으로 참여하면 같은 사람이 두 명으로 나뉘어요.
+        <div class="grid grid-cols-2 gap-2 mt-2">
+          <button data-action="google" class="btn-ghost py-2"><i class="fa-brands fa-google mr-1"></i>Google 로그인</button>
+          <button data-action="device-code" class="btn-ghost py-2"><i class="fa-solid fa-key mr-1"></i>기기 추가 코드</button>
+        </div>
+      </div>
+
+      <div class="glass-card p-5 rounded-2xl text-center">
         <div class="text-4xl mb-2">${trip.cover_emoji || '✈️'}</div>
         <p class="text-[10px] text-neon-cyan font-mono font-bold">INVITATION</p>
         <h1 class="text-lg font-black text-white mt-1">${trip.title}</h1>
@@ -70,6 +79,8 @@ export async function render(app, { token }) {
     claim: (el) => {
       if (confirm(`"${el.dataset.name}" (으)로 참여할까요?`)) join(el.dataset.name, el.dataset.id);
     },
+    google: () => startGoogleLogin({ hasLocalTrips: false }),
+    'device-code': () => openDeviceCodeEntry(),
   });
   $('#join-form', app).addEventListener('submit', (e) => {
     e.preventDefault();

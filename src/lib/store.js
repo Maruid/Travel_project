@@ -34,6 +34,7 @@ export class TripStore {
     this.budget = null;
     this.members = [];
     this.invite = null;
+    this.devices = [];        // 멤버별 추가 기기 (기기 추가 코드로 연결)
     this.globalCategories = [];
     this.tables = Object.fromEntries(CONTENT_TABLES.map((t) => [t, new Map()]));
     this.cursors = {};
@@ -70,7 +71,7 @@ export class TripStore {
     try {
       const c = JSON.parse(localStorage.getItem(this.cacheKey) || 'null');
       if (c) {
-        this.trip = c.trip; this.budget = c.budget; this.members = c.members || [];
+        this.trip = c.trip; this.budget = c.budget; this.members = c.members || []; this.devices = c.devices || [];
         this.invite = c.invite; this.globalCategories = c.globalCategories || [];
         this.cursors = c.cursors || {};
         for (const t of CONTENT_TABLES) this.tables[t] = new Map((c.tables?.[t] || []).map((r) => [r.id, r]));
@@ -86,7 +87,7 @@ export class TripStore {
   saveCache() {
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify({
-        trip: this.trip, budget: this.budget, members: this.members, invite: this.invite,
+        trip: this.trip, budget: this.budget, members: this.members, devices: this.devices, invite: this.invite,
         globalCategories: this.globalCategories, cursors: this.cursors,
         tables: Object.fromEntries(CONTENT_TABLES.map((t) => [t, [...this.tables[t].values()]])),
       }));
@@ -152,6 +153,9 @@ export class TripStore {
     this.trip = trip.data;
     this.budget = budget.data;
     this.members = members.data;
+    // 추가 기기 목록 (migration_002 이전 DB 에서는 테이블이 없을 수 있으므로 실패해도 무시)
+    const devices = await supabase.from('trip_member_devices').select('id, member_id, user_id, created_at, last_seen_at').eq('trip_id', id);
+    this.devices = devices.error ? [] : devices.data;
     this.invite = invite.data;
     this.globalCategories = globals.data;
 
@@ -325,7 +329,17 @@ export class TripStore {
 
   activeMembers() { return this.members.filter((m) => !m.removed_at); }
   member(id) { return this.members.find((m) => m.id === id) || null; }
-  get me() { return this.members.find((m) => m.user_id === this.userId && !m.removed_at) || null; }
+  get me() {
+    const active = this.members.filter((m) => !m.removed_at);
+    const direct = active.find((m) => m.user_id === this.userId);
+    if (direct) return direct;
+    const dev = this.devices.find((d) => d.user_id === this.userId);
+    return dev ? active.find((m) => m.id === dev.member_id) || null : null;
+  }
+  deviceCount(memberId) {
+    const m = this.member(memberId);
+    return (m?.user_id ? 1 : 0) + this.devices.filter((d) => d.member_id === memberId).length;
+  }
   get isOwner() { return this.me?.role === 'owner'; }
   get pendingCount() { return this.outbox.length; }
 

@@ -1,5 +1,6 @@
 import { html, setHTML, delegate } from '../lib/dom.js';
-import { ensureUser } from '../lib/auth.js';
+import { ensureUser, getUser } from '../lib/auth.js';
+import { accountChip, startGoogleLogin, openAccountMenu, openDeviceCodeEntry } from '../components/account.js';
 import { rpc, errorText } from '../lib/supabase.js';
 import { spinner, emptyCard, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
@@ -16,6 +17,7 @@ export async function render(app) {
     trips = cachedTrips();
     if (!trips.length) toast(errorText(e), 'error');
   }
+  const chip = await accountChip();
 
   setHTML(app, html`
     <header class="px-4 py-4 glass-nav sticky top-0 z-40 flex items-center justify-between">
@@ -23,7 +25,10 @@ export async function render(app) {
         <span class="w-2.5 h-2.5 rounded-full bg-neon-cyan animate-pulse shadow-[0_0_8px_#00f2fe]"></span>
         <h1 class="text-sm font-black tracking-wide text-white">MY TRIPS</h1>
       </div>
-      <button data-action="admin" class="text-[10px] text-slate-500 hover:text-slate-300">관리자</button>
+      <div class="flex items-center gap-2">
+        ${chip}
+        <button data-action="admin" class="text-[10px] text-slate-500 hover:text-slate-300">관리자</button>
+      </div>
     </header>
 
     <main class="flex-1 p-4 space-y-3">
@@ -44,6 +49,15 @@ export async function render(app) {
       <button data-action="create" class="btn-primary flex items-center justify-center gap-1.5">
         <i class="fa-solid fa-plus"></i> 생성 코드로 새 여행 만들기
       </button>
+
+      <div class="glass-card p-4 rounded-2xl space-y-2">
+        <p class="text-xs font-bold text-slate-300"><i class="fa-solid fa-laptop-mobile text-neon-cyan mr-1"></i>다른 기기에서 쓰던 여행이 안 보이나요?</p>
+        <p class="text-[10px] text-slate-500 leading-relaxed">Google 로 쓰고 있었다면 오른쪽 위 로그인을, 로그인 없이 쓰고 있었다면 기존 기기에서 받은 기기 추가 코드를 입력하세요.</p>
+        <div class="grid grid-cols-2 gap-2">
+          <button data-action="account-login" class="btn-ghost py-2"><i class="fa-brands fa-google mr-1"></i>Google 로그인</button>
+          <button data-action="device-code" class="btn-ghost py-2"><i class="fa-solid fa-key mr-1"></i>기기 추가 코드</button>
+        </div>
+      </div>
     </main>
   `);
 
@@ -51,6 +65,9 @@ export async function render(app) {
     open: (el) => navigate(`/trip/${el.dataset.id}/places`),
     create: () => navigate('/create'),
     admin: () => navigate('/admin'),
+    'account-login': () => startGoogleLogin({ hasLocalTrips: trips.length > 0 }),
+    'account-menu': async () => openAccountMenu(await getUser()),
+    'device-code': () => openDeviceCodeEntry(),
   });
   return { cleanup: off };
 }

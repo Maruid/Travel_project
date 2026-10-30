@@ -24,6 +24,26 @@ export async function lookupMapsLink(input) {
   return { ...best, resolvedUrl: data?.finalUrl || url };
 }
 
+// AI 정보 채우기 (Edge Function enrich-place → Gemini + Google 검색)
+const AI_ERRORS = {
+  AI_LIMIT: '오늘 이 여행의 AI 사용 한도(50회)를 모두 썼어요.',
+  AI_BUSY: 'AI 무료 사용량이 잠시 초과됐어요. 1분 뒤 다시 시도해 주세요.',
+  NO_API_KEY: 'AI 키가 아직 설정되지 않았어요. (관리자: Edge Function Secrets 에 GEMINI_API_KEY 등록)',
+  FORBIDDEN: '이 여행의 멤버만 사용할 수 있어요.',
+  AI_PARSE: 'AI 응답을 해석하지 못했어요. 다시 시도해 주세요.',
+};
+
+export async function enrichPlace(params) {
+  if (!navigator.onLine) throw new Error('온라인 상태에서만 사용할 수 있어요.');
+  const { data, error } = await supabase.functions.invoke('enrich-place', { body: params });
+  if (error) {
+    let code = null;
+    try { code = (await error.context?.json())?.error; } catch {}
+    throw new Error(AI_ERRORS[code] || 'AI 정보를 가져오지 못했어요. 잠시 후 다시 시도해 주세요.');
+  }
+  return data;
+}
+
 // 무료 지오코딩 (OpenStreetMap Nominatim)
 // 이용 정책: 초당 1회 이하, 자동완성 용도 금지 → 버튼을 눌렀을 때만 호출
 export async function geocode(query, { near } = {}) {

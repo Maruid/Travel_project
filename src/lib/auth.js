@@ -84,6 +84,33 @@ export async function linkGoogle() {
   if (error) throw error;
 }
 
+// 아직 서버로 못 보낸 변경 건수 (로그아웃 전 경고용)
+export function pendingChanges() {
+  let n = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k?.startsWith('trip-outbox:v1:')) continue;
+    try { n += JSON.parse(localStorage.getItem(k) || '[]').length; } catch {}
+  }
+  return n;
+}
+
+// 로그아웃: 공용 PC 에 여행 데이터가 남지 않도록 캐시도 함께 정리
 export async function signOut() {
   await supabase.auth.signOut();
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k?.startsWith('trip-cache:v1:') || k?.startsWith('trip-outbox:v1:') || k === LAST_USER_KEY) keys.push(k);
+  }
+  keys.forEach((k) => { try { localStorage.removeItem(k); } catch {} });
+}
+
+// OAuth 복귀 시 URL 에 실린 에러 (예: 이미 다른 계정에 연결된 Google 계정으로 "계정 연결")
+export function readAuthError() {
+  const fromQuery = new URLSearchParams(location.search);
+  const fromHash = location.hash.startsWith('#error') ? new URLSearchParams(location.hash.slice(1)) : null;
+  const p = fromQuery.get('error') ? fromQuery : fromHash;
+  if (!p?.get('error')) return null;
+  return { code: p.get('error_code') || p.get('error'), description: p.get('error_description') || '' };
 }

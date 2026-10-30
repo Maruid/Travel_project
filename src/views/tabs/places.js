@@ -2,7 +2,7 @@ import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { createMap, pinIcon, draggablePin, L } from '../../components/map.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
 import { walkInfo, priceRange } from '../../lib/format.js';
-import { lookupMapsLink, geocode, currentPosition } from '../../lib/place-lookup.js';
+import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color } from '../../lib/safe.js';
 import { downloadTripMap } from '../../lib/offline-map.js';
@@ -320,7 +320,15 @@ export function openPlaceEditor(store, id, { near } = {}) {
     </div>
 
     <form id="place-form" class="space-y-2.5">
-      <div><label class="label">이름 *</label><input name="name" class="input" required maxlength="100" value="${p.name || ''}"></div>
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <label class="label !mb-0">이름 *</label>
+          <button type="button" data-action="ai-fill" class="text-[10px] px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-400/40 font-bold">
+            <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>AI로 정보 채우기</button>
+        </div>
+        <input name="name" class="input" required maxlength="100" value="${p.name || ''}">
+        <div id="ai-result" class="hidden mt-2 p-2.5 rounded-xl bg-purple-500/10 border border-purple-400/30 text-[10px] text-purple-100 space-y-1.5"></div>
+      </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">카테고리</label>
           <select name="category_id" class="input">
@@ -372,7 +380,31 @@ export function openPlaceEditor(store, id, { near } = {}) {
     pm.on('click', (e) => setPos(+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6), { fly: false, note: '직접 지정' }));
 
     const form = $('#place-form', el);
-    const fillIfEmpty = (name, value) => { if (value && !form.elements[name].value) form.elements[name].value = value; };
+    function renderAiResult(r, count) {
+      const box = $('#ai-result', el);
+      setHTML(box, html`
+        <p><i class="fa-solid fa-wand-magic-sparkles mr-1"></i><b>AI 초안</b>${count ? ` · ${count}개 항목 채움` : ''} · 가격·휴무는 틀릴 수 있으니 확인하세요.
+          ${r.grounded ? '' : html`<span class="text-amber-300">검색 근거를 찾지 못해 정확도가 낮을 수 있어요.</span>`}</p>
+        ${r.sources?.length ? html`<div class="flex flex-wrap gap-1">${r.sources.map((s) => html`
+          <a href="${s.uri}" target="_blank" rel="noopener" class="px-1.5 py-0.5 rounded bg-night-950/60 text-purple-200 underline truncate max-w-full">${s.title}</a>`)}</div>` : ''}
+        ${r.searchSuggestions ? html`<iframe data-suggest sandbox="allow-popups allow-popups-to-escape-sandbox" class="w-full h-12 rounded-lg bg-white/5" title="Google 검색 제안"></iframe>` : ''}`);
+      const frame = box.querySelector('[data-suggest]');
+      if (frame) frame.srcdoc = r.searchSuggestions;   // Google 이 제공한 검색 제안 위젯 (스크립트 실행 불가한 샌드박스)
+      box.classList.remove('hidden');
+    }
+
+    const autoFilled = {};   // 필드명 → 마지막으로 자동 입력한 값
+    const fill = (name, value) => {
+      const input = form.elements[name];
+      if (!input || value == null || value === '') return false;
+      const cur = input.value.trim();
+      if (cur && cur !== autoFilled[name]) return false;   // 사용자가 직접 쓴 값은 보존
+      input.value = String(value);
+      autoFilled[name] = input.value.trim();
+      input.classList.add('ring-1', 'ring-purple-400/60');
+      setTimeout(() => input.classList.remove('ring-1', 'ring-purple-400/60'), 1500);
+      return true;
+    };
 
     async function fetchLink() {
       const url = $('#link-input', el).value.trim();
@@ -382,7 +414,7 @@ export function openPlaceEditor(store, id, { near } = {}) {
       btn.disabled = true; btn.textContent = '...';
       try {
         const r = await lookupMapsLink(url);
-        fillIfEmpty('name', r.name);
+        fill('name', r.name);
         if (r.lat != null) {
           setPos(r.lat, r.lng, { note: r.precision === 'pin' ? '링크에서 가져옴' : '지도 중심 좌표 · 핀을 확인하세요' });
           toast('위치를 가져왔습니다. 핀이 맞는지 확인해 주세요.');
@@ -427,7 +459,7 @@ export function openPlaceEditor(store, id, { near } = {}) {
         const r = $('#search-results', el)._rows?.[+b.dataset.i];
         if (!r) return;
         setPos(r.lat, r.lng, { note: '검색 결과' });
-        fillIfEmpty('name', r.name);
+        fill('name', r.name);
         setHTML($('#search-results', el), html``);
       },
       here: async () => {
@@ -435,6 +467,43 @@ export function openPlaceEditor(store, id, { near } = {}) {
         catch (e) { toast(e.message, 'error'); }
       },
       'clear-pos': () => setPos(null, null, { note: '위치 없음' }),
+      'ai-fill': async (b) => {
+        const name = form.elements.name.value.trim();
+        if (!name) { toast('이름을 먼저 입력하거나 링크로 가져와 주세요.', 'error'); return; }
+        if (b.dataset.busy) return;
+        b.dataset.busy = '1';
+        const label = b.innerHTML;
+        b.textContent = '검색 중... (10~20초)';
+        try {
+          const r = await enrichPlace({
+            tripId: store.tripId, name,
+            zone: form.elements.zone.value.trim() || null,
+            destination: store.trip.destination || null,
+            lat: pos.lat, lng: pos.lng,
+            mapsUrl: $('#link-input', el).value.trim() || null,
+            currency: store.budget?.local_currency || null,
+          });
+          const f = r.fields || {};
+          const filled = ['signature', 'description', 'visit_tip', 'warn_badge', 'zone']
+            .filter((k) => fill(k, f[k]));
+          if (fill('price_min', f.price_min)) filled.push('price_min');
+          if (fill('price_max', f.price_max)) filled.push('price_max');
+          if (f.price_currency) fill('price_currency', f.price_currency);
+          // 카테고리가 비어 있으면 같은 종류의 기본 카테고리를 선택
+          const catSel = form.elements.category_id;
+          if (f.kind && !catSel.value) {
+            const c = store.globalCategories.find((x) => x.kind === f.kind);
+            if (c) { catSel.value = c.id; filled.push('category'); }
+          }
+          renderAiResult(r, filled.length);
+          toast(filled.length ? `${filled.length}개 항목을 채웠어요. 확인 후 저장하세요.` : '새로 채울 수 있는 정보가 없었어요.');
+        } catch (e) {
+          toast(e.message, 'error');
+        } finally {
+          delete b.dataset.busy;
+          b.innerHTML = label;
+        }
+      },
     });
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));
 
