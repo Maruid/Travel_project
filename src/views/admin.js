@@ -32,24 +32,6 @@ export async function render(app) {
 
   // 익명 세션이면 Google 로그인 요구
   if (!user || isAnonymous(user)) {
-    // 생성 코드: 사용 가능 / 지난 코드(만료·소진·폐기)
-    const now = new Date();
-    const usable = (c) => !c.revoked && (!c.expires_at || new Date(c.expires_at) > now) && (c.max_uses == null || c.used_count < c.max_uses);
-    const live = codes.filter(usable);
-    const ended = codes.filter((c) => !usable(c));
-    const daysLeft = (c) => {
-      const t = c.ended_at || c.expires_at;
-      return t ? Math.max(0, 90 - Math.floor((now - new Date(t)) / 86400000)) : null;
-    };
-    const codeRow = (c, ok) => html`<div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60 text-[11px]">
-      <div class="min-w-0">
-        <button data-action="copy-code" data-code="${c.code}" class="font-mono font-bold ${ok ? 'text-neon-cyan' : 'text-slate-500 line-through'}">${c.code}</button>
-        <span class="text-[10px] text-slate-400 block truncate">${c.type === 'one_time' ? '일회성' : '영구'} · ${c.used_count}/${c.max_uses ?? '∞'}회 ${c.expires_at ? `· ~${c.expires_at.slice(0, 10)}` : ''} ${c.note ? `· ${c.note}` : ''}${!ok && daysLeft(c) != null ? ` · ${daysLeft(c)}일 뒤 자동 삭제` : ''}</span>
-      </div>
-      ${ok ? html`<button data-action="revoke" data-id="${c.id}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">폐기</button>`
-        : html`<button data-action="delete-code" data-id="${c.id}" data-code="${c.code}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">삭제</button>`}
-    </div>`;
-
     setHTML(app, html`${header}
       <main class="p-6 text-center space-y-4 mt-10">
         <i class="fa-solid fa-user-shield text-3xl text-neon-cyan"></i>
@@ -82,6 +64,24 @@ export async function render(app) {
       }),
       rpc('places_quota_status').catch(() => null),   // migration_003 이전이면 없음
     ]);
+
+    // 생성 코드: 사용 가능 / 지난 코드(만료·소진·폐기)
+    const now = new Date();
+    const usable = (c) => !c.revoked && (!c.expires_at || new Date(c.expires_at) > now) && (c.max_uses == null || c.used_count < c.max_uses);
+    const live = codes.filter(usable);
+    const ended = codes.filter((c) => !usable(c));
+    const daysLeft = (c) => {
+      const t = c.ended_at || c.expires_at;
+      return t ? Math.max(0, 90 - Math.floor((now - new Date(t)) / 86400000)) : null;
+    };
+    const codeRow = (c, ok) => html`<div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60 text-[11px]">
+      <div class="min-w-0">
+        <button data-action="copy-code" data-code="${c.code}" class="font-mono font-bold ${ok ? 'text-neon-cyan' : 'text-slate-500 line-through'}">${c.code}</button>
+        <span class="text-[10px] text-slate-400 block truncate">${c.type === 'one_time' ? '일회성' : '영구'} · ${c.used_count}/${c.max_uses ?? '∞'}회 ${c.expires_at ? `· ~${c.expires_at.slice(0, 10)}` : ''} ${c.note ? `· ${c.note}` : ''}${!ok && daysLeft(c) != null ? ` · ${daysLeft(c)}일 뒤 자동 삭제` : ''}</span>
+      </div>
+      ${ok ? html`<button data-action="revoke" data-id="${c.id}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">폐기</button>`
+        : html`<button data-action="delete-code" data-id="${c.id}" data-code="${c.code}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">삭제</button>`}
+    </div>`;
 
     setHTML(app, html`${header}
       <main class="p-4 space-y-3 pb-10">
