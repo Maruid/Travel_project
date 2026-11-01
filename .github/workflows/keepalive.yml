@@ -1,6 +1,7 @@
 name: Supabase keepalive
 
 # 1) Supabase 무료 프로젝트 비활성 정지 방지: 3일마다 ping() RPC 호출
+#    (migration_007 부터 ping 안에서 만료된 코드·오래된 사용량 기록도 정리)
 # 2) GitHub 은 60일간 저장소 활동이 없으면 예약 workflow 를 끄므로,
 #    .keepalive 파일을 갱신해 커밋 (deploy.yml 은 이 파일 변경을 무시)
 on:

@@ -32,6 +32,24 @@ export async function render(app) {
 
   // 익명 세션이면 Google 로그인 요구
   if (!user || isAnonymous(user)) {
+    // 생성 코드: 사용 가능 / 지난 코드(만료·소진·폐기)
+    const now = new Date();
+    const usable = (c) => !c.revoked && (!c.expires_at || new Date(c.expires_at) > now) && (c.max_uses == null || c.used_count < c.max_uses);
+    const live = codes.filter(usable);
+    const ended = codes.filter((c) => !usable(c));
+    const daysLeft = (c) => {
+      const t = c.ended_at || c.expires_at;
+      return t ? Math.max(0, 90 - Math.floor((now - new Date(t)) / 86400000)) : null;
+    };
+    const codeRow = (c, ok) => html`<div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60 text-[11px]">
+      <div class="min-w-0">
+        <button data-action="copy-code" data-code="${c.code}" class="font-mono font-bold ${ok ? 'text-neon-cyan' : 'text-slate-500 line-through'}">${c.code}</button>
+        <span class="text-[10px] text-slate-400 block truncate">${c.type === 'one_time' ? '일회성' : '영구'} · ${c.used_count}/${c.max_uses ?? '∞'}회 ${c.expires_at ? `· ~${c.expires_at.slice(0, 10)}` : ''} ${c.note ? `· ${c.note}` : ''}${!ok && daysLeft(c) != null ? ` · ${daysLeft(c)}일 뒤 자동 삭제` : ''}</span>
+      </div>
+      ${ok ? html`<button data-action="revoke" data-id="${c.id}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">폐기</button>`
+        : html`<button data-action="delete-code" data-id="${c.id}" data-code="${c.code}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">삭제</button>`}
+    </div>`;
+
     setHTML(app, html`${header}
       <main class="p-6 text-center space-y-4 mt-10">
         <i class="fa-solid fa-user-shield text-3xl text-neon-cyan"></i>
@@ -91,17 +109,16 @@ export async function render(app) {
             <button class="btn-primary col-span-2">코드 발급</button>
           </form>
           <div class="space-y-1.5 pt-1">
-            ${codes.length ? codes.map((c) => {
-              const usable = !c.revoked && (!c.expires_at || new Date(c.expires_at) > new Date()) && (c.max_uses == null || c.used_count < c.max_uses);
-              return html`<div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60 text-[11px]">
-                <div class="min-w-0">
-                  <button data-action="copy-code" data-code="${c.code}" class="font-mono font-bold ${usable ? 'text-neon-cyan' : 'text-slate-500 line-through'}">${c.code}</button>
-                  <span class="text-[10px] text-slate-400 block truncate">${c.type === 'one_time' ? '일회성' : '영구'} · ${c.used_count}/${c.max_uses ?? '∞'}회 ${c.expires_at ? `· ~${c.expires_at.slice(0, 10)}` : ''} ${c.note ? `· ${c.note}` : ''}</span>
-                </div>
-                ${!c.revoked ? html`<button data-action="revoke" data-id="${c.id}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">폐기</button>` : ''}
-              </div>`;
-            }) : emptyCard('발급된 코드가 없습니다.')}
+            ${live.length ? live.map((c) => codeRow(c, true)) : emptyCard('사용 가능한 코드가 없습니다.')}
           </div>
+          ${ended.length ? html`
+          <details class="pt-1">
+            <summary class="text-[11px] text-slate-400 cursor-pointer">지난 코드 ${ended.length}개 (만료·소진·폐기 · 90일 뒤 자동 삭제)</summary>
+            <div class="space-y-1.5 mt-2">
+              ${ended.map((c) => codeRow(c, false))}
+              <button data-action="delete-ended" class="w-full py-2 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[11px] font-bold">지난 코드 모두 삭제</button>
+            </div>
+          </details>` : ''}
         </section>
 
         <section class="glass-card p-4 rounded-2xl space-y-2">
@@ -144,6 +161,16 @@ export async function render(app) {
         if (!confirmAction('이 코드를 폐기할까요?')) return;
         const { error } = await supabase.from('creation_codes').update({ revoked: true }).eq('id', el.dataset.id);
         if (error) toast(errorText(error), 'error'); else load();
+      },
+      'delete-code': async (el) => {
+        if (!confirmAction(`코드 ${el.dataset.code} 를 완전히 삭제할까요? 이 코드로 만든 여행은 그대로 남아요.`)) return;
+        try { await rpc('admin_delete_codes', { p_id: el.dataset.id }); toast('삭제했습니다.'); load(); }
+        catch (e) { toast(errorText(e), 'error'); }
+      },
+      'delete-ended': async () => {
+        if (!confirmAction('지난 코드(만료·소진·폐기)를 모두 삭제할까요? 이 코드들로 만든 여행은 그대로 남아요.')) return;
+        try { const n = await rpc('admin_delete_codes', { p_id: null }); toast(`${n}개를 삭제했습니다.`); load(); }
+        catch (e) { toast(errorText(e), 'error'); }
       },
       'delete-trip': async (el) => {
         if (!confirmAction(`"${el.dataset.title}" 여행과 모든 데이터를 삭제할까요? 되돌릴 수 없습니다.`)) return;
