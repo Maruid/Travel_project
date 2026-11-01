@@ -170,6 +170,7 @@ Deno.serve(async (req) => {
     return data as number;
   };
 
+  let stage: 'search' | 'details' | null = null;   // 실패 시 어느 단계의 사용량을 되돌릴지
   try {
     // ---- 1) place_id 찾기 (IDs Only: 가장 저렴한 등급) ----
     let searched = false;
@@ -178,6 +179,7 @@ Deno.serve(async (req) => {
       // 주소가 있으면 "이름 + 주소", 없으면 "이름 + 지역 + 여행지"
       const textQuery = [name, address || [zone, destination].filter(Boolean).join(' ')].filter(Boolean).join(' ');
       await quota('search');
+      stage = 'search';
       const found = await placesFetch('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         body: JSON.stringify({
@@ -194,6 +196,7 @@ Deno.serve(async (req) => {
 
     // ---- 2) 상세 정보 (Enterprise 1건) ----
     const remaining = await quota('details');
+    stage = 'details';
     const detail = await placesFetch(
       `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?languageCode=ko`,
       { method: 'GET' }, key, DETAIL_FIELDS,
@@ -207,6 +210,11 @@ Deno.serve(async (req) => {
     if (code === 'PLACES_LIMIT') return json({ error: 'PLACES_LIMIT' }, 429);
     if (code === 'FORBIDDEN') return json({ error: 'FORBIDDEN' }, 403);
     const status = (e as { status?: number }).status;
+    // 구글이 거절한 호출은 과금되지 않으므로 앱 월 사용량에서도 되돌림
+    if (stage && status) {
+      await supabase.rpc('refund_places_quota', { p_trip: tripId, p_kind: stage }).then(() => {}, () => {});
+    }
+    if (status === 429) return json({ error: 'PLACES_RATE' }, 429);   // 구글 분당 한도: 잠시 후 재시도
     if (status === 404) return json({ error: 'NOT_FOUND' }, 404);
     return json({ error: 'PLACES_FAILED', status: status ?? null }, 502);
   }

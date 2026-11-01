@@ -30,7 +30,7 @@ export function mount(root, store) {
   };
 
   setHTML(root, html`
-    <div class="relative w-full h-[40vh] border-b border-white/10 flex-shrink-0">
+    <div class="relative w-full h-[38%] min-h-[180px] border-b border-white/10 flex-shrink-0">
       <div id="map" class="w-full h-full z-10"></div>
       <div class="absolute top-3 right-3 z-20 flex items-center gap-1.5">
         <select id="anchor-select" class="h-9 px-2 rounded-xl glass-card bg-night-950/80 text-[11px] text-slate-200 font-bold border border-white/20 max-w-40"></select>
@@ -44,9 +44,9 @@ export function mount(root, store) {
       <div id="float-card" class="hidden absolute bottom-2 left-2 right-2 z-20 glass-card bg-night-950/90 border border-neon-cyan/50 rounded-2xl p-2.5 shadow-2xl"></div>
     </div>
 
-    <div class="flex-1 flex flex-col p-3">
-      <div id="cat-chips" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2"></div>
-      <div class="flex items-center justify-between text-xs px-1 py-1 mb-1">
+    <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
+      <div id="cat-chips" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>
+      <div class="flex items-center justify-between text-xs px-1 py-1 mb-1 flex-shrink-0">
         <span id="count-text" class="text-slate-400 text-[11px]"></span>
         <div class="flex items-center gap-1.5">
           <button data-action="sort" id="btn-sort" class="text-[11px] px-2 py-0.5 rounded-lg glass-card text-slate-300"><i class="fa-solid fa-arrow-down-short-wide text-[10px]"></i> 거리순</button>
@@ -54,9 +54,24 @@ export function mount(root, store) {
           <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
         </div>
       </div>
-      <div id="place-list" class="space-y-2"></div>
+      <div id="place-scroll" class="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-3">
+        <div id="place-list" class="space-y-2"></div>
+      </div>
     </div>
   `);
+
+  // 장소 탭은 화면 높이에 맞춘 고정 레이아웃: 위는 지도, 아래 리스트만 스크롤
+  //  (헤더와 하단 탭바 높이를 빼서 꽉 채움)
+  const prevStyle = { height: root.style.height, paddingBottom: root.style.paddingBottom, flex: root.style.flex };
+  const fitHeight = () => {
+    const headerH = document.querySelector('header')?.offsetHeight || 56;
+    root.style.height = `calc(100dvh - ${headerH}px - 64px)`;
+    root.style.paddingBottom = '0';
+    root.style.flex = 'none';   // 부모의 flex-1 로 늘어나 하단 탭바 뒤로 리스트가 숨지 않도록
+  };
+  fitHeight();
+  const onResize = () => { fitHeight(); map?.invalidateSize(); };
+  window.addEventListener('resize', onResize);
 
   // ---------- 지도 ----------
   const anchors0 = store.list('places').filter((p) => p.is_anchor && p.lat != null);
@@ -109,8 +124,10 @@ export function mount(root, store) {
     markerLayer.clearLayers();
     for (const { p, cat } of rows) {
       if (p.lat == null) continue;
+      const selected = p.id === state.selectedId;
       const m = L.marker([p.lat, p.lng], {
-        icon: pinIcon({ color: cat?.color, icon: cat?.icon, size: p.is_anchor ? 34 : 28, pulse: p.is_anchor }),
+        icon: pinIcon({ color: cat?.color, icon: cat?.icon, size: selected ? 38 : p.is_anchor ? 34 : 28, pulse: selected || p.is_anchor }),
+        zIndexOffset: selected ? 1000 : 0,
       }).addTo(markerLayer);
       m.on('click', () => showFloat(p.id));
     }
@@ -123,7 +140,7 @@ export function mount(root, store) {
     $('#btn-near', root).className = `text-[11px] px-2 py-0.5 rounded-lg ${state.nearOnly ? 'bg-neon-cyan text-night-950 font-bold' : 'glass-card text-slate-300'}`;
 
     setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => html`
-      <div data-action="detail" data-id="${p.id}" class="glass-card p-3 rounded-2xl flex items-center justify-between gap-2 cursor-pointer hover:border-slate-500 transition ${p.id === state.selectedId ? 'neon-border-cyan' : ''}">
+      <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl flex items-center justify-between gap-2 cursor-pointer hover:border-slate-500 transition ${p.id === state.selectedId ? 'neon-border-cyan' : ''}">
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-1.5 mb-1 flex-wrap">
             ${cat ? html`<span class="text-[9px] border font-bold px-1.5 rounded" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
@@ -142,13 +159,13 @@ export function mount(root, store) {
         <div class="flex flex-col items-end gap-1 flex-shrink-0">
           ${walk.text ? html`<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">${walk.text}</span>`
             : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : ''}
-          <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" data-stop class="w-7 h-7 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
+          <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
             <i class="fa-solid fa-diamond-turn-right"></i></a>
         </div>
       </div>`)}` : emptyCard('조건에 맞는 장소가 없습니다.'));
   }
 
-  function showFloat(id) {
+  function showFloat(id, { fromList = false } = {}) {
     const p = store.get('places', id);
     if (!p) return;
     state.selectedId = id;
@@ -164,12 +181,25 @@ export function mount(root, store) {
           </div>
           <div class="text-[10px] text-slate-300 truncate"><span class="text-emerald-400 font-bold">${walk.text}</span> ${p.signature || ''}</div>
         </div>
+        <button data-action="detail" data-id="${p.id}" class="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-100 text-[10px] font-bold border border-white/10 flex-shrink-0">상세</button>
         <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="px-2.5 py-1.5 rounded-xl bg-neon-cyan text-night-950 text-[10px] font-black flex-shrink-0">길찾기</a>
         <button data-action="close-float" class="w-6 h-6 text-slate-400"><i class="fa-solid fa-xmark"></i></button>
       </div>`);
     el.classList.remove('hidden');
-    map.panTo([p.lat, p.lng], { animate: true });
-    renderList(filtered());
+    map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), 16), { duration: 0.5 });
+    const rows = filtered();
+    renderMarkers(rows);
+    renderList(rows);
+    // 지도 핀을 눌러 선택한 경우: 리스트에서 해당 카드가 보이도록
+    if (!fromList) document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function closeFloat() {
+    $('#float-card', root).classList.add('hidden');
+    state.selectedId = null;
+    const rows = filtered();
+    renderMarkers(rows);
+    renderList(rows);
   }
 
   function update() {
@@ -225,18 +255,31 @@ export function mount(root, store) {
         setHTML(btn, html`<i class="fa-solid fa-download text-sm"></i>`);
       }
     },
-    detail: (el, e) => {
-      if (e.target.closest('[data-stop]')) return;
-      openPlaceDetail(store, el.dataset.id, anchorPoint());
+    // 카드 탭: 지도에서 위치 확인. 이미 선택된 카드를 다시 누르거나 위치가 없으면 상세
+    select: (el) => {
+      const id = el.dataset.id;
+      const p = store.get('places', id);
+      if (!p) return;
+      const floatOpen = !$('#float-card', root).classList.contains('hidden');
+      if (p.lat == null || (state.selectedId === id && floatOpen)) openPlaceDetail(store, id, anchorPoint());
+      else showFloat(id, { fromList: true });
     },
-    'close-float': () => { $('#float-card', root).classList.add('hidden'); state.selectedId = null; renderList(filtered()); },
+    detail: (el) => openPlaceDetail(store, el.dataset.id, anchorPoint()),
+    'close-float': closeFloat,
   });
 
   update();
 
   return {
     update,
-    destroy: () => { off(); map.remove(); },
+    destroy: () => {
+      off();
+      window.removeEventListener('resize', onResize);
+      root.style.height = prevStyle.height;
+      root.style.paddingBottom = prevStyle.paddingBottom;
+      root.style.flex = prevStyle.flex;
+      map.remove();
+    },
   };
 }
 

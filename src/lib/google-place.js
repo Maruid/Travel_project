@@ -9,6 +9,7 @@ import { supabase } from './supabase.js';
 const ERRORS = {
   PLACES_LIMIT: '이번 달 구글 장소 조회 한도(900건)를 모두 썼어요. 다음 달 1일에 초기화돼요.',
   NOT_FOUND: '구글 지도에서 이 장소를 찾지 못했어요. 이름이나 지역을 확인해 주세요.',
+  PLACES_RATE: '구글 조회가 잠시 몰렸어요. 1분 뒤 다시 시도해 주세요.',
   NO_API_KEY: '구글 장소 키가 아직 설정되지 않았어요. (관리자: Edge Function Secrets 에 GOOGLE_PLACES_API_KEY 등록)',
   FORBIDDEN: '이 여행의 멤버만 사용할 수 있어요.',
 };

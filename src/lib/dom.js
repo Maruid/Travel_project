@@ -38,6 +38,10 @@ export function delegate(root, actions, eventName = 'click') {
   const handler = (e) => {
     const el = e.target.closest('[data-action]');
     if (!el || !root.contains(el)) return;
+    // 동작이 걸린 영역 안의 일반 링크(<a href>)를 누른 경우: 링크가 열리도록 그대로 둠
+    // (예: 장소 카드 안의 구글 맵 길찾기 버튼)
+    const link = e.target.closest('a[href]');
+    if (link && link !== el && el.contains(link)) return;
     const fn = actions[el.dataset.action];
     if (fn) { e.preventDefault(); fn(el, e); }
   };

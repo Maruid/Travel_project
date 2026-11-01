@@ -268,6 +268,7 @@ async function openGoogleBulk(store) {
     <div class="text-[11px] text-slate-300 leading-relaxed space-y-1 mb-3">
       <p>구글 정보가 없는 장소 <b class="text-white">${need}곳</b>에 영업시간, 평점, 폐업 여부, 정확한 좌표 등을 채워요.</p>
       <p class="text-slate-400">이름·소개·메뉴처럼 직접 쓴 내용은 그대로 두고, 빈 칸만 채워요.</p>
+      <p class="text-slate-400">구글 분당 한도 때문에 장소당 약 3초씩 걸려요. (${need}곳 ≈ ${Math.ceil(need * 3.5 / 60)}분)</p>
       ${left != null ? html`<p class="text-slate-400">이번 달 남은 조회: <b class="${left < need ? 'text-amber-300' : 'text-emerald-300'}">${left}건</b> / ${quota.limit}건 (장소당 2건)</p>` : ''}
       ${left != null && left < need ? html`<p class="text-amber-300">남은 한도만큼만 처리하고 멈춰요.</p>` : ''}
     </div>
@@ -290,17 +291,32 @@ async function openGoogleBulk(store) {
           i++;
           $('#bulk-text', el).textContent = `${i} / ${need} · ${p.name}`;
           $('#bulk-bar', el).style.width = `${Math.round((i / need) * 100)}%`;
-          try {
-            const r = await refreshFromGoogle(store, store.get('places', p.id) || p);
-            if (r.review) result.review.push({ id: p.id, name: p.name, distance: r.review.distance, gName: r.place.name });
-            else result.ok++;
-          } catch (e) {
-            if (e.code === 'PLACES_LIMIT') { result.failed.push({ name: '이번 달 한도 도달로 중단', id: null }); break; }
-            if (e.code === 'NOT_FOUND') result.notFound.push({ id: p.id, name: p.name });
-            else result.failed.push({ id: p.id, name: p.name, msg: e.message });
-            if (e.code === 'OFFLINE') break;
+          let stop = false;
+          for (let attempt = 1; attempt <= 3 && !stopped; attempt++) {
+            try {
+              const r = await refreshFromGoogle(store, store.get('places', p.id) || p);
+              if (r.review) result.review.push({ id: p.id, name: p.name, distance: r.review.distance, gName: r.place.name });
+              else result.ok++;
+              break;
+            } catch (e) {
+              // 구글 분당 한도: 1분 기다렸다가 같은 장소를 다시 시도
+              if (e.code === 'PLACES_RATE' && attempt < 3) {
+                for (let sec = 60; sec > 0 && !stopped; sec--) {
+                  $('#bulk-text', el).textContent = `${i} / ${need} · 구글 분당 한도로 잠시 대기 중 (${sec}초)`;
+                  await new Promise((r) => setTimeout(r, 1000));
+                }
+                continue;
+              }
+              if (e.code === 'PLACES_LIMIT') { result.failed.push({ name: '이번 달 한도 도달로 중단', id: null }); stop = true; }
+              else if (e.code === 'NOT_FOUND') result.notFound.push({ id: p.id, name: p.name });
+              else result.failed.push({ id: p.id, name: p.name, msg: e.message });
+              if (e.code === 'OFFLINE') stop = true;
+              break;
+            }
           }
-          await new Promise((r) => setTimeout(r, 250));   // 짧은 간격으로 순차 처리
+          if (stop) break;
+          // 장소당 검색 1건 + 상세 1건 → 3초 간격이면 분당 각 20건 (구글 분당 한도 30 안쪽)
+          await new Promise((r) => setTimeout(r, 3000));
         }
         const row = (x, note) => html`
           <button data-action="open" data-id="${x.id || ''}" class="w-full text-left text-[11px] px-2 py-1.5 rounded-lg bg-slate-800/80 text-slate-200">

@@ -20,3 +20,35 @@ test('라우트 패턴 (router.js 와 같은 변환)', () => {
   assert.ok(compile('/').test('/'));
   assert.ok(!compile('/').test('/admin'));
 });
+
+test('delegate: 동작 영역 안의 링크는 동작을 실행하지 않고 링크가 열리게 둔다', () => {
+  // 최소한의 DOM 흉내
+  const mk = (tag, attrs = {}, parent = null) => {
+    const n = { tagName: tag, attrs, parent, dataset: {}, href: attrs.href };
+    if (attrs['data-action']) n.dataset.action = attrs['data-action'];
+    n.closest = (sel) => {
+      for (let x = n; x; x = x.parent) {
+        if (sel === '[data-action]' && x.attrs['data-action']) return x;
+        if (sel === 'a[href]' && x.tagName === 'A' && x.attrs.href) return x;
+      }
+      return null;
+    };
+    n.contains = (o) => { for (let x = o; x; x = x.parent) if (x === n) return true; return false; };
+    return n;
+  };
+  const root = mk('DIV');
+  const card = mk('DIV', { 'data-action': 'select' }, root);
+  const link = mk('A', { href: 'https://maps.google.com' }, card);
+  const icon = mk('I', {}, link);
+  const text = mk('SPAN', {}, card);
+  let handler; root.addEventListener = (_, h) => { handler = h; };
+  const calls = [];
+  return import('../src/lib/dom.js').then(({ delegate }) => {
+    delegate(root, { select: () => calls.push('select') });
+    let prevented = 0;
+    handler({ target: icon, preventDefault: () => prevented++ });
+    assert.deepEqual(calls, []); assert.equal(prevented, 0);
+    handler({ target: text, preventDefault: () => prevented++ });
+    assert.deepEqual(calls, ['select']); assert.equal(prevented, 1);
+  });
+});
