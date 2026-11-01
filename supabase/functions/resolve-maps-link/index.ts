@@ -91,5 +91,6 @@ Deno.serve(async (req) => {
     if (/!3d-?\d|@-?\d+\.\d+,-?\d+\.\d+/.test(current.href)) break;
   }
 
+  // 좌표가 없는 링크(모바일 공유)는 앱이 이름·주소로 Places API(place-details) 를 조회해서 좌표를 받음
   return json({ finalUrl: current.href, chain });
 });

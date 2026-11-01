@@ -81,6 +81,7 @@ export function mount(root, store) {
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-gear text-amber-300 mr-1"></i>여행 설정 (owner)</h3>
           <button data-action="edit-trip" class="btn-ghost w-full py-2.5">여행 정보 수정</button>
+          <button data-action="google-bulk" class="btn-ghost w-full py-2.5"><i class="fa-brands fa-google mr-1"></i>등록된 장소 구글 정보 일괄 가져오기</button>
           <button data-action="delete-trip" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">여행 삭제</button>
         </section>` : ''}
 
@@ -123,6 +124,7 @@ export function mount(root, store) {
     'add-cat': () => openCategoryEditor(store, null),
     'edit-cat': (el) => openCategoryEditor(store, el.dataset.id),
     'edit-trip': () => openTripEditor(store, run),
+    'google-bulk': () => openGoogleBulk(store),
     'delete-trip': async () => {
       if (!confirmAction(`"${store.trip.title}" 여행과 모든 데이터를 삭제합니다. 되돌릴 수 없어요. 계속할까요?`)) return;
       if (prompt('확인을 위해 여행 이름을 입력하세요') !== store.trip.title) { toast('이름이 일치하지 않습니다.', 'error'); return; }
@@ -242,3 +244,81 @@ function openCategoryEditor(store, id) {
     return off;
   });
 }
+
+// =====================================================================
+// 등록된 장소에 구글 정보 일괄 반영 (owner)
+//  - 아직 구글 정보가 없는 장소만 대상 (장소당 검색 1건 + 상세 1건)
+//  - 이름·소개처럼 직접 쓴 내용은 유지, 빈 칸과 구글 전용 칸만 채움
+//  - 좌표가 기존 핀과 멀면 바꾸지 않고 "확인 필요" 목록에 표시
+// =====================================================================
+async function openGoogleBulk(store) {
+  // 장소 탭 모듈은 지도 라이브러리를 포함해 크므로 필요할 때만 불러옴
+  const { refreshFromGoogle, openPlaceDetail } = await import('./places.js');
+  const targets = store.list('places').filter((p) => !p.google_place_id);
+  if (!targets.length) { toast('모든 장소에 이미 구글 정보가 있어요.'); return; }
+  if (!navigator.onLine) { toast('온라인 상태에서 실행해 주세요.', 'error'); return; }
+
+  let quota = null;
+  try { quota = await rpc('places_quota_status'); } catch {}
+  const left = quota ? Math.max(0, quota.limit - Math.max(quota.details, quota.search)) : null;
+  const need = targets.length;
+
+  openSheet(html`
+    <h3 class="text-base font-black text-white mb-1">구글 정보 일괄 가져오기</h3>
+    <div class="text-[11px] text-slate-300 leading-relaxed space-y-1 mb-3">
+      <p>구글 정보가 없는 장소 <b class="text-white">${need}곳</b>에 영업시간, 평점, 폐업 여부, 정확한 좌표 등을 채워요.</p>
+      <p class="text-slate-400">이름·소개·메뉴처럼 직접 쓴 내용은 그대로 두고, 빈 칸만 채워요.</p>
+      ${left != null ? html`<p class="text-slate-400">이번 달 남은 조회: <b class="${left < need ? 'text-amber-300' : 'text-emerald-300'}">${left}건</b> / ${quota.limit}건 (장소당 2건)</p>` : ''}
+      ${left != null && left < need ? html`<p class="text-amber-300">남은 한도만큼만 처리하고 멈춰요.</p>` : ''}
+    </div>
+    <div id="bulk-progress" class="hidden mb-3">
+      <div class="w-full h-2 rounded-full bg-slate-800 overflow-hidden"><div id="bulk-bar" class="h-full bg-neon-cyan transition-all" style="width:0%"></div></div>
+      <p id="bulk-text" class="text-[11px] text-slate-400 mt-1"></p>
+    </div>
+    <div id="bulk-result" class="space-y-1.5"></div>
+    <button data-action="start" class="btn-primary mt-2">시작하기</button>
+  `, (el) => {
+    let stopped = false;
+    const off = delegate(el, {
+      start: async (b) => {
+        b.disabled = true; b.textContent = '진행 중... (창을 닫으면 멈춰요)';
+        $('#bulk-progress', el).classList.remove('hidden');
+        const result = { ok: 0, review: [], notFound: [], failed: [] };
+        let i = 0;
+        for (const p of targets) {
+          if (stopped) break;
+          i++;
+          $('#bulk-text', el).textContent = `${i} / ${need} · ${p.name}`;
+          $('#bulk-bar', el).style.width = `${Math.round((i / need) * 100)}%`;
+          try {
+            const r = await refreshFromGoogle(store, store.get('places', p.id) || p);
+            if (r.review) result.review.push({ id: p.id, name: p.name, distance: r.review.distance, gName: r.place.name });
+            else result.ok++;
+          } catch (e) {
+            if (e.code === 'PLACES_LIMIT') { result.failed.push({ name: '이번 달 한도 도달로 중단', id: null }); break; }
+            if (e.code === 'NOT_FOUND') result.notFound.push({ id: p.id, name: p.name });
+            else result.failed.push({ id: p.id, name: p.name, msg: e.message });
+            if (e.code === 'OFFLINE') break;
+          }
+          await new Promise((r) => setTimeout(r, 250));   // 짧은 간격으로 순차 처리
+        }
+        const row = (x, note) => html`
+          <button data-action="open" data-id="${x.id || ''}" class="w-full text-left text-[11px] px-2 py-1.5 rounded-lg bg-slate-800/80 text-slate-200">
+            ${x.name}${note ? html` <span class="text-slate-400">· ${note}</span>` : ''}</button>`;
+        setHTML($('#bulk-result', el), html`
+          <p class="text-xs text-emerald-300 font-bold">완료 ${result.ok}곳</p>
+          ${result.review.length ? html`<p class="text-xs text-amber-300 font-bold mt-2">확인 필요 ${result.review.length}곳 (구글 위치가 기존 핀과 멀어 좌표를 바꾸지 않음)</p>
+            ${result.review.map((x) => row(x, `${x.distance}m · 구글: ${x.gName || '?'}`))}` : ''}
+          ${result.notFound.length ? html`<p class="text-xs text-slate-300 font-bold mt-2">구글에서 찾지 못함 ${result.notFound.length}곳</p>
+            ${result.notFound.map((x) => row(x, '장소 수정에서 링크를 넣어 다시 시도'))}` : ''}
+          ${result.failed.length ? html`<p class="text-xs text-rose-300 font-bold mt-2">실패 ${result.failed.length}건</p>
+            ${result.failed.map((x) => row(x, x.msg || ''))}` : ''}`);
+        b.textContent = '완료';
+        $('#bulk-text', el).textContent = `${i} / ${need} 처리`;
+      },
+      open: (x) => { if (x.dataset.id) openPlaceDetail(store, x.dataset.id, null); },
+    });
+    return () => { stopped = true; off(); };
+  });
+}
+

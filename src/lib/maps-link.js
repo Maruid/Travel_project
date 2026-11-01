@@ -33,11 +33,33 @@ function decodePart(s) {
   try { return decodeURIComponent(s.replace(/\+/g, ' ')).trim(); } catch { return s.replace(/\+/g, ' ').trim(); }
 }
 
+// "가게이름 101-2 Nishikujo Kaigacho, Minami Ward, Kyoto, 601-8439 일본" → { name, address }
+//  - 숫자로 시작하는 토큰(번지) 또는 〒 부터를 주소로 봄. 없으면 첫 쉼표 앞을 이름으로.
+//  - 끝에 붙는 나라 이름(일본/Japan/日本 등)은 주소 검색을 방해하므로 제거
+const COUNTRY_TAIL = /[,\s]*(일본|대한민국|한국|日本|Japan|South Korea|Korea|Taiwan|대만|中国|China|Thailand|태국|Vietnam|베트남)\s*$/i;
+
+export function splitPlaceText(text) {
+  if (!text) return { name: null, address: null };
+  const t = text.replace(/\s+/g, ' ').trim();
+  const m = t.match(/(?:^|\s)(〒?\d[\dA-Za-z-]*(?:\s|,)[\s\S]*)$/);
+  let name = t, address = null;
+  if (m && m.index > 0) {
+    name = t.slice(0, m.index).trim();
+    address = m[1].trim();
+  } else if (t.includes(',')) {
+    const i = t.indexOf(',');
+    name = t.slice(0, i).trim();
+    address = t.slice(i + 1).trim();
+  }
+  if (address) address = address.replace(COUNTRY_TAIL, '').replace(/,\s*$/, '').trim() || null;
+  return { name: name || null, address };
+}
+
 /**
- * @returns {{ lat:number|null, lng:number|null, precision:'pin'|'center'|'query'|null, name:string|null, query:string|null }}
+ * @returns {{ lat:number|null, lng:number|null, precision:'pin'|'center'|'query'|null, name:string|null, address:string|null, query:string|null }}
  */
 export function parseMapsUrl(input) {
-  const result = { lat: null, lng: null, precision: null, name: null, query: null };
+  const result = { lat: null, lng: null, precision: null, name: null, address: null, query: null };
   if (!input) return result;
   const url = input.trim();
 
@@ -46,7 +68,7 @@ export function parseMapsUrl(input) {
 
   // 장소 이름: /maps/place/<name>/
   const placeMatch = u.pathname.match(/\/maps\/place\/([^/]+)/);
-  if (placeMatch) result.name = decodePart(placeMatch[1]);
+  if (placeMatch) Object.assign(result, splitPlaceText(decodePart(placeMatch[1])));
 
   // 1) !3d<lat>!4d<lng> (여러 개면 마지막이 해당 장소인 경우가 많음)
   const pinRe = new RegExp(`!3d${NUM}!4d${NUM}`, 'g');
@@ -78,7 +100,8 @@ export function parseMapsUrl(input) {
     if (valid(lat, lng)) return { ...result, lat, lng, precision: 'center' };
   }
 
-  if (result.name && !result.query) result.query = result.name;
+  // 좌표가 없으면 주소 검색이 가게 이름 검색보다 훨씬 잘 맞음
+  if (!result.query) result.query = result.address || result.name;
   if (result.query) result.precision = 'query';
   return result;
 }

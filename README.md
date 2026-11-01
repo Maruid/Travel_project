@@ -123,3 +123,16 @@ main 에 push 하면 자동 배포되고, 사용자 화면에는 다음에 앱�
 장소 추가/수정 화면의 이름 옆 **AI로 정보 채우기** → Gemini 가 Google 검색으로 확인한 대표 메뉴, 1인 가격대, 방문 팁, 휴무 주의, 소개를 초안으로 채움.
 비어 있거나 자동으로 채운 칸만 덮어쓰고, 직접 입력한 칸은 건드리지 않음. 여행당 하루 50회 제한.
 
+## 구글 지도 정보 (Places API)
+- 설정: Google Cloud 에서 **Places API (New)** 사용 설정 → API 키(제한: Places API (New)) →
+  Supabase Edge Functions Secrets 에 `GOOGLE_PLACES_API_KEY` 등록 → Edge Function `place-details` 배포 (Verify JWT 끄기)
+  → SQL Editor 에서 `supabase/migration_003_google_places.sql` 실행
+- 링크를 붙여넣으면 자동으로 조회: 이름, 정확한 좌표, 지역, 영업시간(요일별), 휴무 뱃지, 1인 가격대, 평점, 폐업 여부, 전화, 웹사이트
+- 등록된 장소: 상세 화면의 **구글 정보 가져오기** 또는 멤버 탭(owner)의 **일괄 가져오기**
+  - 직접 쓴 이름·소개·메뉴는 유지하고 빈 칸과 구글 전용 칸만 채움
+  - 좌표가 기존 핀과 300m 이상 떨어지면 바꾸지 않고 "확인 필요"로 표시
+- 비용: 조회 1회 = Text Search (IDs Only) 1건 + Place Details (Enterprise) 1건. place_id 가 저장된 장소는 1건
+  - 앱 자체 월 한도 900건 (구글 무료량 월 1,000건, 매달 1일 태평양 시간 기준 초기화). 관리자 화면에서 사용량 확인
+  - 리뷰·공식 요약 같은 Atmosphere 필드는 요청하지 않음 (요청 시 과금 등급 상승)
+- AI 정보 채우기는 구글 영업시간·가격을 확정 정보로 받아, 휴무·가격은 지어내지 않고 메뉴·소개·팁만 작성
+

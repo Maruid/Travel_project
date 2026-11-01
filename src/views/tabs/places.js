@@ -6,6 +6,9 @@ import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color } from '../../lib/safe.js';
 import { downloadTripMap } from '../../lib/offline-map.js';
+import {
+  fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
+} from '../../lib/google-place.js';
 
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
 
@@ -128,6 +131,7 @@ export function mount(root, store) {
             ${p.source ? html`<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold px-1.5 rounded">📺 ${p.source}</span>` : ''}
             <h4 class="font-bold text-xs text-white truncate">${p.name}</h4>
             ${p.zone ? html`<span class="text-[10px] text-slate-400">· ${p.zone}</span>` : ''}
+            ${p.rating ? html`<span class="text-[10px] text-amber-300 font-bold">★${Number(p.rating).toFixed(1)}</span>` : ''}
           </div>
           ${p.signature ? html`<p class="text-[11px] font-medium text-neon-cyan truncate">${p.signature}</p>` : ''}
           <div class="flex items-center gap-2 mt-0.5">
@@ -260,6 +264,7 @@ export function openPlaceDetail(store, id, from) {
       <span>${p.zone || ''}</span>
       <span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>
     </div>
+    ${googleBlock(p, store.trip.timezone)}
     <div class="space-y-2 text-xs">
       ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
       ${p.description ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">상세 안내</span><p class="text-slate-300 leading-relaxed whitespace-pre-line">${p.description}</p></div>` : ''}
@@ -269,12 +274,32 @@ export function openPlaceDetail(store, id, from) {
       <i class="fa-brands fa-youtube text-red-500 text-sm"></i> 유튜브 영상 보기</a>` : ''}
     <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="btn-primary mt-2 flex items-center justify-center gap-1.5">
       <i class="fa-solid fa-diamond-turn-right"></i> 구글 맵에서 길찾기</a>
+    <button data-action="google-refresh" class="btn-ghost w-full py-2.5 mt-2">
+      <i class="fa-brands fa-google mr-1"></i>${p.google_place_id ? '구글 정보 다시 가져오기' : '구글 정보 가져오기'}
+      ${p.google_synced_at ? html`<span class="text-[10px] text-slate-500 font-normal ml-1">(${String(p.google_synced_at).slice(0, 10)})</span>` : ''}
+    </button>
     <div class="grid grid-cols-2 gap-2 mt-2">
       <button data-action="edit" class="btn-ghost py-2.5"><i class="fa-solid fa-pen mr-1"></i>수정</button>
       <button data-action="delete" class="btn-ghost py-2.5 text-rose-300"><i class="fa-solid fa-trash-can mr-1"></i>삭제</button>
     </div>
   `, (el) => delegate(el, {
     edit: () => openPlaceEditor(store, id, { near: from }),
+    'google-refresh': async (b) => {
+      if (b.dataset.busy) return;
+      b.dataset.busy = '1';
+      b.textContent = '구글 정보 가져오는 중...';
+      try {
+        const r = await refreshFromGoogle(store, p);
+        toast(r.review
+          ? `구글 위치가 기존 핀과 ${r.review.distance}m 떨어져 있어 위치는 바꾸지 않았어요. 다른 지점인지 확인해 주세요.`
+          : '구글 정보를 반영했어요.', r.review ? 'error' : 'info');
+        openPlaceDetail(store, id, from);
+      } catch (e) {
+        toast(e.message, 'error');
+        delete b.dataset.busy;
+        b.textContent = '구글 정보 가져오기';
+      }
+    },
     delete: () => {
       if (!confirmAction(`"${p.name}" 을(를) 삭제할까요?`)) return;
       store.remove('places', id);
@@ -316,6 +341,10 @@ export function openPlaceEditor(store, id, { near } = {}) {
           <button data-action="here" class="btn-ghost !py-1"><i class="fa-solid fa-location-crosshairs mr-1"></i>현재 위치</button>
           <button data-action="clear-pos" class="btn-ghost !py-1 text-slate-400">위치 지우기</button>
         </div>
+      </div>
+      <div class="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
+        <span id="google-status" class="text-[10px] text-slate-400 min-w-0">구글 지도 정보: 링크를 넣으면 자동으로 가져와요</span>
+        <button data-action="google" class="btn-ghost !py-1 flex-shrink-0"><i class="fa-brands fa-google mr-1"></i>가져오기</button>
       </div>
     </div>
 
@@ -417,18 +446,85 @@ export function openPlaceEditor(store, id, { near } = {}) {
       box.classList.remove('hidden');
     }
 
-    const autoFilled = {};   // 필드명 → 마지막으로 자동 입력한 값
-    const fill = (name, value) => {
+    const autoFilled = {};   // 필드명 → { value, source } 마지막으로 자동 입력한 값
+    // source: 'link' | 'google' | 'ai'. 구글이 채운 사실 정보는 AI 가 덮어쓰지 않음
+    const fill = (name, value, source = 'link') => {
       const input = form.elements[name];
       if (!input || value == null || value === '') return false;
       const cur = input.value.trim();
-      if (cur && cur !== autoFilled[name]) return false;   // 사용자가 직접 쓴 값은 보존
+      const prev = autoFilled[name];
+      if (cur && cur !== prev?.value) return false;                       // 사용자가 직접 쓴 값은 보존
+      if (cur && prev?.source === 'google' && source === 'ai') return false;
       input.value = String(value);
-      autoFilled[name] = input.value.trim();
-      input.classList.add('ring-1', 'ring-purple-400/60');
-      setTimeout(() => input.classList.remove('ring-1', 'ring-purple-400/60'), 1500);
+      autoFilled[name] = { value: input.value.trim(), source };
+      const ring = source === 'google' ? 'ring-emerald-400/60' : 'ring-purple-400/60';
+      input.classList.add('ring-1', ring);
+      setTimeout(() => input.classList.remove('ring-1', ring), 1500);
       return true;
     };
+
+    // ----- 구글 장소 정보 -----
+    let google = googleFromPlace(p);   // 저장 시 함께 기록
+    let googleChanged = false;         // 이번 편집에서 새로 가져왔을 때만 구글 칸을 저장
+    function renderGoogleStatus(text, tone = 'muted') {
+      const elS = $('#google-status', el);
+      elS.className = `text-[10px] min-w-0 ${tone === 'ok' ? 'text-emerald-300' : tone === 'warn' ? 'text-amber-300' : tone === 'error' ? 'text-rose-300' : 'text-slate-400'}`;
+      elS.textContent = text;
+    }
+    if (google) {
+      renderGoogleStatus(`구글 지도 정보 있음${google.rating ? ` · ★${google.rating}` : ''}${google.openingHours?.weekday?.length ? ' · 영업시간' : ''}`, 'ok');
+    }
+
+    async function loadGoogle({ name, address, lat, lng, cacheKey, auto = false } = {}) {
+      const q = {
+        tripId: store.tripId,
+        placeId: google?.placeId || null,
+        name: name || form.elements.name.value.trim() || null,
+        address: address || null,
+        zone: form.elements.zone.value.trim() || null,
+        destination: store.trip.destination || null,
+        lat: lat ?? pos.lat, lng: lng ?? pos.lng,
+      };
+      if (!q.placeId && !q.name) { if (!auto) toast('이름을 먼저 입력하거나 링크를 넣어 주세요.', 'error'); return; }
+      renderGoogleStatus('구글 지도에서 정보를 가져오는 중...');
+      try {
+        const r = await fetchPlaceDetails(q, { cacheKey });
+        const g = r.place;
+        google = g;
+        googleChanged = true;
+        const far = r.distance != null && r.distance > REVIEW_DISTANCE_M;
+        fill('name', g.name, 'google');
+        if (g.lat != null && !far) setPos(g.lat, g.lng, { note: '구글 지도 위치' });
+        fill('zone', g.zone, 'google');
+        if (g.priceMin || g.priceMax) {
+          fill('price_min', g.priceMin, 'google');
+          fill('price_max', g.priceMax, 'google');
+          fill('price_currency', g.priceCurrency, 'google');
+        }
+        if (g.warnBadge) {
+          const closed = g.businessStatus === 'CLOSED_PERMANENTLY' || g.businessStatus === 'CLOSED_TEMPORARILY';
+          if (closed) { form.elements.warn_badge.value = g.warnBadge; autoFilled.warn_badge = { value: g.warnBadge, source: 'google' }; }
+          else fill('warn_badge', g.warnBadge, 'google');
+        }
+        const catSel = form.elements.category_id;
+        if (g.kind && !catSel.value) {
+          const c = store.globalCategories.find((x) => x.kind === g.kind);
+          if (c) catSel.value = c.id;
+        }
+        const parts = [g.rating ? `★${g.rating}${g.ratingCount ? ` (${g.ratingCount.toLocaleString()})` : ''}` : null,
+          g.openingHours?.weekday?.length ? '영업시간' : null, g.priceMin || g.priceMax ? '가격대' : null].filter(Boolean);
+        if (far) {
+          renderGoogleStatus(`구글 위치가 링크 위치와 ${r.distance}m 떨어져 있어요. 다른 지점일 수 있으니 이름을 확인하세요.`, 'warn');
+        } else if (g.businessStatus === 'CLOSED_PERMANENTLY') {
+          renderGoogleStatus('구글 지도에 폐업으로 표시된 곳이에요.', 'error');
+        } else {
+          renderGoogleStatus(`구글 지도 정보 반영${parts.length ? ` · ${parts.join(' · ')}` : ''}`, 'ok');
+        }
+      } catch (e) {
+        renderGoogleStatus(e.code === 'OFFLINE' ? '오프라인이라 구글 정보를 가져오지 못했어요.' : e.message, 'error');
+        if (!auto) toast(e.message, 'error');
+      }
+    }
 
     async function fetchLink() {
       const url = $('#link-input', el).value.trim();
@@ -439,14 +535,18 @@ export function openPlaceEditor(store, id, { near } = {}) {
       try {
         const r = await lookupMapsLink(url);
         fill('name', r.name);
-        if (r.lat != null) {
-          setPos(r.lat, r.lng, { note: r.precision === 'pin' ? '링크에서 가져옴' : '지도 중심 좌표 · 핀을 확인하세요' });
-          toast('위치를 가져왔습니다. 핀이 맞는지 확인해 주세요.');
-        } else if (r.query) {
+        if (r.lat != null) setPos(r.lat, r.lng, { note: r.precision === 'pin' ? '링크에서 가져옴' : '지도 중심 좌표 · 핀을 확인하세요' });
+        // 링크를 붙여넣으면 구글 지도 정보 자동 조회 (같은 링크는 다시 조회하지 않음)
+        if (r.name || r.address) {
+          google = null;   // 다른 장소 링크로 바꾼 경우 이전 place_id 를 쓰지 않도록
+          await loadGoogle({ name: r.name, address: r.address, lat: r.lat, lng: r.lng, cacheKey: `link:${r.resolvedUrl || url}`, auto: true });
+        }
+        if (pos.lat == null && r.query) {
+          // 구글 조회도 실패한 경우에만 무료 주소 검색으로 대체
           $('#search-input', el).value = r.query;
-          toast('링크에 좌표가 없어 이름으로 검색합니다.');
+          toast('위치를 찾지 못해 주소로 검색합니다. 결과를 고른 뒤 핀을 확인해 주세요.');
           await search();
-        } else {
+        } else if (pos.lat == null) {
           toast('링크에서 위치를 찾지 못했습니다. 지도를 눌러 지정해 주세요.', 'error');
         }
       } catch (e) {
@@ -491,6 +591,11 @@ export function openPlaceEditor(store, id, { near } = {}) {
         catch (e) { toast(e.message, 'error'); }
       },
       'clear-pos': () => setPos(null, null, { note: '위치 없음' }),
+      google: async (b) => {
+        if (b.dataset.busy) return;
+        b.dataset.busy = '1';
+        try { await loadGoogle(); } finally { delete b.dataset.busy; }
+      },
       'ai-fill': async (b) => {
         const name = form.elements.name.value.trim();
         if (!name) { toast('이름을 먼저 입력하거나 링크로 가져와 주세요.', 'error'); return; }
@@ -506,15 +611,20 @@ export function openPlaceEditor(store, id, { near } = {}) {
             lat: pos.lat, lng: pos.lng,
             mapsUrl: $('#link-input', el).value.trim() || null,
             currency: store.budget?.local_currency || null,
+            facts: google ? {
+              hours: google.openingHours?.weekday || [],
+              priceMin: google.priceMin ?? null, priceMax: google.priceMax ?? null, priceCurrency: google.priceCurrency ?? null,
+              closed: google.warnBadge || null,
+            } : null,
           });
           const f = r.fields || {};
           // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
           const textKeys = r.grounded ? ['signature', 'description', 'visit_tip', 'warn_badge', 'zone'] : ['signature', 'description', 'zone'];
-          const filled = textKeys.filter((k) => fill(k, f[k]));
+          const filled = textKeys.filter((k) => fill(k, f[k], 'ai'));
           if (r.grounded) {
-            if (fill('price_min', f.price_min)) filled.push('price_min');
-            if (fill('price_max', f.price_max)) filled.push('price_max');
-            if (f.price_currency) fill('price_currency', f.price_currency);
+            if (fill('price_min', f.price_min, 'ai')) filled.push('price_min');
+            if (fill('price_max', f.price_max, 'ai')) filled.push('price_max');
+            if (f.price_currency) fill('price_currency', f.price_currency, 'ai');
           }
           // 카테고리가 비어 있으면 같은 종류의 기본 카테고리를 선택
           const catSel = form.elements.category_id;
@@ -534,7 +644,7 @@ export function openPlaceEditor(store, id, { near } = {}) {
       },
       'ai-apply-estimate': () => {
         const est = $('#ai-result', el)._estimate || {};
-        const done = ['price_min', 'price_max', 'price_currency', 'visit_tip', 'warn_badge'].filter((k) => est[k] != null && fill(k, est[k]));
+        const done = ['price_min', 'price_max', 'price_currency', 'visit_tip', 'warn_badge'].filter((k) => est[k] != null && fill(k, est[k], 'ai'));
         toast(done.length ? '추정값을 넣었어요. 꼭 확인해 주세요.' : '넣을 수 있는 빈 칸이 없어요.');
       },
     });
@@ -554,10 +664,11 @@ export function openPlaceEditor(store, id, { near } = {}) {
         price_currency: v.price_min != null || v.price_max != null ? (v.price_currency || '').toUpperCase() || null : null,
         source: v.source,
         youtube_url: safeUrl(v.youtube_url),
-        maps_url: safeUrl(link),
+        maps_url: safeUrl(link) || (google?.mapsUrl ?? p.maps_url ?? null),
         map_query: p.map_query || null,
         is_anchor: !!form.elements.is_anchor.checked,
         lat: pos.lat, lng: pos.lng,
+        ...(googleChanged ? googleColumns(google) : {}),
       };
       if (id) store.update('places', id, data);
       else store.insert('places', data);
@@ -568,3 +679,43 @@ export function openPlaceEditor(store, id, { near } = {}) {
     return () => { off(); pm.remove(); };
   });
 }
+
+// =====================================================================
+// 구글 지도 정보 표시 (영업시간 · 평점 · 폐업 · 연락처)
+// =====================================================================
+function googleBlock(p, timezone) {
+  const hours = p.opening_hours?.weekday || [];
+  if (!p.google_place_id && !hours.length && !p.rating) return '';
+  const today = todayIndexMondayFirst(timezone);
+  const site = safeUrl(p.website);
+  return html`
+    <div class="p-3 rounded-2xl glass-card text-xs mb-2 space-y-2">
+      <div class="flex items-center justify-between">
+        <span class="text-[10px] font-bold text-slate-400"><i class="fa-brands fa-google mr-1"></i>구글 지도 정보</span>
+        ${p.rating ? html`<span class="text-amber-300 font-bold">★ ${Number(p.rating).toFixed(1)}
+          ${p.rating_count ? html`<span class="text-slate-400 font-normal">(${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : ''}
+      </div>
+      ${STATUS_TEXT[p.business_status] ? html`<p class="p-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-200 font-bold">⚠️ ${STATUS_TEXT[p.business_status]}</p>` : ''}
+      ${hours.length ? html`<ul class="space-y-0.5">${hours.map((h, i) => html`
+        <li class="${i === today ? 'text-white font-bold' : 'text-slate-400'}">${i === today ? '▶ ' : ''}${h}</li>`)}</ul>
+        <p class="text-[10px] text-slate-500">공휴일·연말연시 등 특별 휴무는 구글 지도에서 확인하세요.</p>` : ''}
+      ${p.phone || site ? html`<div class="flex gap-3 text-[11px]">
+        ${p.phone ? html`<a href="tel:${p.phone.replace(/[^\d+]/g, '')}" class="text-neon-cyan"><i class="fa-solid fa-phone mr-1"></i>${p.phone}</a>` : ''}
+        ${site ? html`<a href="${site}" target="_blank" rel="noopener" class="text-neon-cyan truncate"><i class="fa-solid fa-globe mr-1"></i>웹사이트</a>` : ''}
+      </div>` : ''}
+    </div>`;
+}
+
+// 등록된 장소 1곳에 구글 정보 반영 (place_id 가 있으면 1건, 없으면 검색 포함 2건)
+export async function refreshFromGoogle(store, p) {
+  const r = await fetchPlaceDetails({
+    tripId: store.tripId,
+    placeId: p.google_place_id || null,
+    name: p.name, zone: p.zone || null, destination: store.trip.destination || null,
+    lat: p.lat ?? null, lng: p.lng ?? null,
+  });
+  const { patch, review } = mergeIntoExisting(p, r.place, r.distance);
+  store.update('places', p.id, patch);
+  return { review, place: r.place, distance: r.distance };
+}
+

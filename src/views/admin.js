@@ -56,19 +56,21 @@ export async function render(app) {
   }
 
   async function load() {
-    const [stats, trips, codes] = await Promise.all([
+    const [stats, trips, codes, places] = await Promise.all([
       rpc('admin_stats'),
       rpc('admin_list_trips'),
       supabase.from('creation_codes').select('*').order('created_at', { ascending: false }).then((r) => {
         if (r.error) throw r.error; return r.data;
       }),
+      rpc('places_quota_status').catch(() => null),   // migration_003 이전이면 없음
     ]);
 
     setHTML(app, html`${header}
       <main class="p-4 space-y-3 pb-10">
         <section class="grid grid-cols-3 gap-2">
           ${[['여행', stats.trips], ['오늘 활성', stats.active_1d], ['7일 활성', stats.active_7d],
-             ['30일 활성', stats.active_30d], ['연결된 멤버', stats.members], ['DB 용량', mb(stats.db_size_bytes)]]
+             ['30일 활성', stats.active_30d], ['연결된 멤버', stats.members], ['DB 용량', mb(stats.db_size_bytes)],
+             ...(places ? [['구글 상세 조회', `${places.details}/${places.limit}`], ['구글 검색', `${places.search}/${places.limit}`]] : [])]
             .map(([k, v]) => html`<div class="glass-card p-3 rounded-2xl">
               <span class="text-[10px] text-slate-400 block">${k}</span>
               <span class="text-base font-black font-mono text-white">${v}</span></div>`)}

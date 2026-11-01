@@ -23,8 +23,6 @@ const MODELS = [...new Set([
   Deno.env.get('GEMINI_MODEL'),
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash-lite',
-  'gemini-2.5-flash',
 ].filter((m): m is string => !!m && m.trim() !== '').map((m) => m.trim()))];
 const KINDS = ['food', 'cafe', 'bar', 'spot', 'shop', 'lodging', 'transit', 'etc'];
 
@@ -43,7 +41,7 @@ const num = (v: unknown) => {
   return Number.isFinite(n) && n > 0 && n < 1e9 ? Math.round(n) : null;
 };
 
-function buildPrompt(p: Record<string, unknown>, grounded: boolean) {
+function buildPrompt(p: Record<string, unknown>, grounded: boolean, forceSearch = false) {
   const lines = [
     `장소 이름: ${p.name}`,
     p.zone ? `지역/동네: ${p.zone}` : '',
@@ -52,8 +50,11 @@ function buildPrompt(p: Record<string, unknown>, grounded: boolean) {
     p.mapsUrl ? `구글 맵 링크: ${p.mapsUrl}` : '',
   ].filter(Boolean).join('\n');
 
+  const where = [p.zone, p.destination].filter(Boolean).join(' ');
+  const queries = [`${p.name} ${where} 메뉴 가격`, `${p.name} ${where} 정기휴무 영업시간`]
+    .map((q) => `"${q.replace(/\s+/g, ' ').trim()}"`).join(', ');
   const intro = grounded
-    ? '당신은 여행 가이드북 편집자입니다. 아래 장소를 Google 검색으로 확인하고, 검색으로 확인된 정보만으로 JSON 하나를 만드세요.'
+    ? `당신은 여행 가이드북 편집자입니다. 아는 가게라도 기억에 의존하지 말고, 답하기 전에 반드시 Google 검색 도구로 ${queries} 를 검색하세요. 검색으로 확인된 정보만으로 JSON 하나를 만드세요.${forceSearch ? ' (이전 응답에서 검색을 하지 않았습니다. 이번에는 검색을 먼저 실행해야 합니다.)' : ''}`
     : '당신은 여행 가이드북 편집자입니다. 검색 도구 없이 답해야 합니다. 이 장소를 확실히 알고 있는 경우에만 값을 채우고, 조금이라도 불확실하면 null 로 두세요. 잘 알려지지 않은 가게라면 대부분 null 이 정상입니다.';
   return `${intro}
 
@@ -78,7 +79,76 @@ ${lines}
 \`\`\``;
 }
 
-type Attempt = { model: string; grounded: boolean; status: number; quota?: string };
+// 1단계: AI Studio 에서 검색이 잘 되던 것처럼 자연스러운 질문으로 조사 (자유 서술, JSON 요구 없음)
+function researchPrompt(p: Record<string, unknown>) {
+  const where = [p.zone, p.destination].filter(Boolean).join(' ');
+  return `${p.name}${where ? ` (${where})` : ''} 를 Google 에서 검색해서 아래 내용을 한국어로 정리해줘.
+- 대표 메뉴나 볼거리
+- 1인 기준 가격대 (현지 통화)
+- 영업시간과 정기 휴무일
+- 예약·웨이팅·결제 방법 같은 방문 팁
+- 어떤 곳인지 한두 문장 소개
+같은 이름의 다른 지점과 헷갈리지 않게 ${where || '해당 지역'}에 있는 곳 기준으로 찾아줘.${p.mapsUrl ? `\n참고 구글 맵 링크: ${p.mapsUrl}` : ''}`;
+}
+
+// 2단계: 조사 메모에 있는 내용만 JSON 으로 옮김 (검색 없이, 새 정보 추가 금지)
+function extractPrompt(p: Record<string, unknown>, memo: string) {
+  const facts = typeof p.facts === 'string' && p.facts ? `
+확정 정보 (구글 지도 공식 데이터, 메모와 다르면 이것이 우선):
+${p.facts}
+- price_min, price_max, currency, warn_badge 는 확정 정보에 값이 있으면 그 값을 그대로 쓰세요.
+` : '';
+  return `아래 조사 메모에 적힌 내용만 사용해서 JSON 하나를 만드세요. 메모에 없는 내용은 추측하지 말고 null.
+
+장소: ${p.name}
+${facts}
+----- 조사 메모 시작 -----
+${memo.slice(0, 6000)}
+----- 조사 메모 끝 -----
+
+규칙
+- 모든 문장은 자연스러운 한국어.
+- price_min, price_max: 1인 기준 가격. 숫자만. 메모에 가격이 없으면 null.
+- currency: ISO 통화 코드 (예: ${p.currency || 'JPY'}).
+- signature: 대표 메뉴 또는 볼거리 1~3개, 60자 이내.
+- description: 특징 2문장 이내, 150자 이내.
+- visit_tip: 웨이팅·예약·결제·추천 시간대 같은 실용 팁, 80자 이내.
+- warn_badge: 정기 휴무일이나 꼭 알아야 할 주의점을 아주 짧게 (예: "화요 휴무", "현금만"). 없으면 null. 12자 이내.
+- zone: 동네나 가까운 역 이름, 15자 이내.
+- kind: ${KINDS.join(' | ')} 중 하나.
+
+JSON 코드블록 하나만 출력하세요.
+\`\`\`json
+{"signature": null, "description": null, "price_min": null, "price_max": null, "currency": null, "visit_tip": null, "warn_badge": null, "zone": null, "kind": null}
+\`\`\``;
+}
+
+type Attempt = {
+  model: string; grounded: boolean; status: number; quota?: string;
+  // 성공 응답 진단: 검색을 실제로 했는지 판단하는 신호들
+  finish?: string; toolTokens?: number; queries?: number; chunks?: number; metaKeys?: string[]; partKinds?: string[];
+};
+
+// 검색 실행 신호 (Gemini 3.x 는 근거 메타데이터를 빠뜨리는 경우가 있어 여러 신호를 함께 봄)
+//  - groundingChunks / webSearchQueries      : 근거·검색어
+//  - usageMetadata.toolUsePromptTokenCount   : 도구(검색) 결과가 입력으로 들어간 토큰 수
+//  - content.parts 의 toolCall / toolResponse : 서버 측 도구 호출 흔적
+function diagnose(data: any) {
+  const cand = data?.candidates?.[0] || {};
+  const meta = cand.groundingMetadata || {};
+  const parts: any[] = cand.content?.parts || [];
+  const partKinds = [...new Set(parts.flatMap((p) => Object.keys(p)))];
+  const d = {
+    finish: cand.finishReason,
+    toolTokens: Number(data?.usageMetadata?.toolUsePromptTokenCount || 0),
+    queries: meta.webSearchQueries?.length || 0,
+    chunks: meta.groundingChunks?.length || 0,
+    metaKeys: Object.keys(meta),
+    partKinds,
+  };
+  const searched = d.chunks > 0 || d.queries > 0 || d.toolTokens > 0 || partKinds.some((k) => /tool/i.test(k));
+  return { ...d, searched };
+}
 
 // Google 에러 본문에서 걸린 한도 이름만 추려냄 (로그가 잘리지 않도록 짧게)
 function summarizeError(text: string): string {
@@ -97,21 +167,36 @@ function summarizeError(text: string): string {
   }
 }
 
+// AI Studio "Get code" 와 같은 형식 (google_search 표기로는 검색이 실행되지 않았음)
+function requestBody(prompt: string, grounded: boolean, minimalThinking: boolean) {
+  return JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    ...(grounded ? { tools: [{ googleSearch: {} }] } : {}),
+    ...(minimalThinking ? { generationConfig: { thinkingConfig: { thinkingLevel: 'MINIMAL' } } } : {}),
+  });
+}
+
 async function callGemini(key: string, prompt: string, grounded: boolean, attempts: Attempt[]) {
   for (const model of MODELS) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    const send = (minimalThinking: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        ...(grounded ? { tools: [{ google_search: {} }] } : {}),
-        generationConfig: { temperature: 0.2 },
-      }),
+      body: requestBody(prompt, grounded, minimalThinking),
       signal: AbortSignal.timeout(30000),
     });
+    let res = await send(true);
+    // 일부 모델은 MINIMAL 생각 수준을 지원하지 않음 → 생각 설정 없이 한 번 더
+    if (res.status === 400) {
+      const text = await res.text();
+      if (/thinking/i.test(text)) res = await send(false);
+      else res = new Response(text, { status: 400 });
+    }
     if (res.ok) {
-      attempts.push({ model, grounded, status: 200 });
-      return { data: await res.json(), model };
+      const data = await res.json();
+      const { searched: _s, ...diag } = diagnose(data);
+      attempts.push({ model, grounded, status: 200, ...diag });
+      console.log(JSON.stringify({ gemini: 'ok', model, grounded, ...diag }));
+      return { data, model };
     }
     const quota = summarizeError(await res.text());
     attempts.push({ model, grounded, status: res.status, quota });
@@ -119,6 +204,18 @@ async function callGemini(key: string, prompt: string, grounded: boolean, attemp
     if (res.status !== 404 && res.status !== 429) return null;   // 그 밖의 에러는 다른 모델로도 해결되지 않음
   }
   return null;
+}
+
+// 앱이 보낸 구글 지도 확정 정보 → 프롬프트용 짧은 문장
+function factsText(f: any): string | null {
+  if (!f || typeof f !== 'object') return null;
+  const lines: string[] = [];
+  if (Array.isArray(f.hours) && f.hours.length) lines.push(`영업시간: ${f.hours.slice(0, 7).map((h: unknown) => String(h).slice(0, 80)).join(' / ')}`);
+  if (Number.isFinite(f.priceMin) || Number.isFinite(f.priceMax)) {
+    lines.push(`1인 가격: ${f.priceMin ?? '?'} ~ ${f.priceMax ?? '?'} ${typeof f.priceCurrency === 'string' ? f.priceCurrency.slice(0, 3) : ''}`);
+  }
+  if (typeof f.closed === 'string' && f.closed) lines.push(`주의: ${f.closed.slice(0, 30)}`);
+  return lines.length ? lines.join('\n') : null;
 }
 
 Deno.serve(async (req) => {
@@ -160,13 +257,25 @@ Deno.serve(async (req) => {
     lng: typeof body.lng === 'number' ? body.lng : null,
     mapsUrl: str(body.mapsUrl, 500),
     currency: str(body.currency, 3),
+    facts: factsText(body.facts),
   };
   const attempts: Attempt[] = [];
-  let result: { data: any; model: string } | null = null;
+  const searched = (r: { data: any } | null) => !!r && diagnose(r.data).searched;
+  const textOf = (r: { data: any } | null) =>
+    (r?.data?.candidates?.[0]?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('').trim();
+
+  let research: { data: any; model: string } | null = null;   // 1단계 결과 (근거 링크는 여기서 나옴)
+  let result: { data: any; model: string } | null = null;     // JSON 이 담긴 최종 결과
   let grounded = true;
   try {
-    result = await callGemini(key, buildPrompt(info, true), true, attempts);
-    if (!result && attempts.length && attempts.every((a) => a.status === 404 || a.status === 429)) {
+    // 1단계: 검색 조사
+    research = await callGemini(key, researchPrompt(info), true, attempts);
+    if (research && textOf(research)) {
+      // 2단계: 메모 → JSON (검색 없이)
+      result = await callGemini(key, extractPrompt(info, textOf(research)), false, attempts);
+      grounded = searched(research);
+    } else if (!research && attempts.length && attempts.every((a) => a.status === 404 || a.status === 429)) {
+      // 검색을 쓸 수 없는 경우(무료 티어 등): 검색 없이 보수적으로
       grounded = false;
       result = await callGemini(key, buildPrompt(info, false), false, attempts);
     }
@@ -179,14 +288,13 @@ Deno.serve(async (req) => {
     return json({ error: busy ? 'AI_BUSY' : 'AI_FAILED', attempts }, busy ? 429 : 502);
   }
 
-  const { data, model } = result;
-  const cand = data.candidates?.[0];
-  const text: string = (cand?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('');
+  const { model } = result;
+  const text = textOf(result);
   const match = text.match(/```json\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
   let raw: Record<string, unknown> = {};
   try { raw = JSON.parse(match?.[1] || '{}'); } catch {
     console.error('parse failed', text.slice(0, 500));
-    return json({ error: 'AI_PARSE' }, 502);
+    return json({ error: 'AI_PARSE', attempts }, 502);
   }
 
   let priceMin = num(raw.price_min), priceMax = num(raw.price_max);
@@ -207,7 +315,7 @@ Deno.serve(async (req) => {
   };
 
   // 근거 링크 + Google 검색 제안(그라운딩 사용 시 표시 권장)
-  const meta = cand?.groundingMetadata || {};
+  const meta = research?.data?.candidates?.[0]?.groundingMetadata || {};
   const sources = (meta.groundingChunks || [])
     .map((c: { web?: { uri?: string; title?: string } }) => c.web)
     .filter((w: { uri?: string } | undefined) => w?.uri && /^https:\/\//.test(w.uri))
@@ -218,7 +326,9 @@ Deno.serve(async (req) => {
     fields,
     sources,
     searchSuggestions: meta.searchEntryPoint?.renderedContent || null,
-    grounded: grounded && sources.length > 0,
+    // 근거 링크가 빠져도 검색 실행 신호가 있으면 검색 기반 결과로 취급
+    grounded: grounded && (sources.length > 0 || searched(research)),
+    searched: grounded && searched(research),
     remaining,
     model,
     attempts,

@@ -57,3 +57,25 @@ test('잘못된 범위 좌표는 무시', () => {
   const r = parseMapsUrl('https://www.google.com/maps/@999,999,15z');
   assert.equal(r.lat, null);
 });
+
+test('모바일 공유 링크: 좌표 없는 place URL 은 이름/주소를 분리하고 주소로 검색', () => {
+  const r = parseMapsUrl('https://www.google.com/maps/place/%EB%A7%88%EC%93%B0%EC%95%BC+%EB%8F%84%EC%A7%80+%EC%A0%90+101-2+Nishikujo+Kaigacho,+Minami+Ward,+Kyoto,+601-8439+%EC%9D%BC%EB%B3%B8/data=!4m2!3m1!1s0x600106002b480db7:0x3c20e074cf736fe3!18m1!1e1?utm_source=mstt_1&entry=gps&g_st=ac');
+  assert.equal(r.lat, null);
+  assert.equal(r.precision, 'query');
+  assert.equal(r.name, '마쓰야 도지 점');
+  assert.equal(r.address, '101-2 Nishikujo Kaigacho, Minami Ward, Kyoto, 601-8439');
+  assert.equal(r.query, r.address);
+});
+
+test('이름만 있는 place URL', () => {
+  const r = parseMapsUrl('https://www.google.com/maps/place/Ichiran+Dotonbori/data=!4m2!3m1!1s0x0:0x1');
+  assert.equal(r.name, 'Ichiran Dotonbori');
+  assert.equal(r.address, null);
+  assert.equal(r.query, 'Ichiran Dotonbori');
+});
+
+test('이름, 쉼표 주소 형태', () => {
+  const r = parseMapsUrl('https://www.google.com/maps/place/Kuromon+Market,+Nipponbashi,+Chuo+Ward,+Osaka,+Japan/');
+  assert.equal(r.name, 'Kuromon Market');
+  assert.equal(r.address, 'Nipponbashi, Chuo Ward, Osaka');
+});

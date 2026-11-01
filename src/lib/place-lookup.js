@@ -13,12 +13,13 @@ export async function lookupMapsLink(input) {
 
   // 함수는 거쳐간 URL 전부를 돌려줌 → 좌표가 있는 쪽을 우선 사용
   const candidates = [...(data?.chain || []), data?.finalUrl].filter(Boolean);
-  let best = { lat: null, lng: null, precision: null, name: null, query: null };
+  let best = { lat: null, lng: null, precision: null, name: null, address: null, query: null };
   for (const c of candidates) {
     const p = parseMapsUrl(c);
     if (p.precision === 'pin') return { ...p, name: p.name || best.name, resolvedUrl: c };
     if (p.precision === 'center' && best.precision !== 'center') best = { ...p, name: p.name || best.name, resolvedUrl: c };
     if (!best.name && p.name) best.name = p.name;
+    if (!best.address && p.address) best.address = p.address;
     if (!best.query && p.query) best.query = p.query;
   }
   return { ...best, resolvedUrl: data?.finalUrl || url };
@@ -57,7 +58,16 @@ export async function geocode(query, { near } = {}) {
   }
   const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
   if (!res.ok) throw new Error('주소 검색에 실패했습니다.');
-  const rows = await res.json();
+  let rows = await res.json();
+
+  // 번지(101-2 등)까지 넣으면 못 찾는 경우가 많아 동네 단위로 한 번 더 (초당 1회 정책 때문에 잠시 대기)
+  const withoutNumber = query.replace(/^\s*〒?\d[\dA-Za-z-]*\s*,?\s*/, '');
+  if (!rows.length && withoutNumber && withoutNumber !== query) {
+    await new Promise((r) => setTimeout(r, 1100));
+    params.set('q', withoutNumber);
+    const res2 = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
+    if (res2.ok) rows = await res2.json();
+  }
   return rows.map((r) => ({
     lat: parseFloat(r.lat),
     lng: parseFloat(r.lon),
