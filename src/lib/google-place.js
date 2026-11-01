@@ -57,6 +57,7 @@ export function googleFromPlace(p) {
 }
 
 export const REVIEW_DISTANCE_M = 300;
+export const AUTO_NOTE_MIN_M = 15;   // 이보다 적게 움직인 자동 변경은 기록하지 않음
 
 /**
  * 이미 등록된 장소에 구글 정보를 합칠 때의 변경분
@@ -81,13 +82,21 @@ export function mergeIntoExisting(p, g, distance) {
   }
   if (empty(p.maps_url) && g.mapsUrl) patch.maps_url = g.mapsUrl;
 
+  // 위치 검토 기록 (places.geo_review): 새로 조회할 때마다 다시 정함
+  const at = new Date().toISOString();
+  patch.geo_review = null;
   if (g.lat != null && g.lng != null) {
     if (p.lat == null || p.lng == null) {
       patch.lat = g.lat; patch.lng = g.lng;
     } else if (distance != null && distance <= REVIEW_DISTANCE_M) {
       patch.lat = g.lat; patch.lng = g.lng;
+      // 실제로 움직인 경우만 조용히 기록 (되돌리기용 이전 좌표)
+      if (distance >= AUTO_NOTE_MIN_M) {
+        patch.geo_review = { type: 'auto', prevLat: p.lat, prevLng: p.lng, distance, at };
+      }
     } else if (distance != null) {
       review = { distance, gLat: g.lat, gLng: g.lng, gName: g.name };
+      patch.geo_review = { type: 'review', lat: g.lat, lng: g.lng, name: g.name || null, distance, at };
     }
   }
   return { patch, review };
@@ -107,3 +116,12 @@ export const STATUS_TEXT = {
   CLOSED_PERMANENTLY: '구글 지도에 폐업으로 표시된 곳이에요.',
   CLOSED_TEMPORARILY: '구글 지도에 임시 휴업으로 표시된 곳이에요.',
 };
+
+// 위치 검토 목록
+export const geoReviewOf = (p) => (p?.geo_review && typeof p.geo_review === 'object' ? p.geo_review : null);
+export function geoReviewList(places, type) {
+  return places.filter((p) => geoReviewOf(p)?.type === type);
+}
+export function distanceText(m) {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m)}m`;
+}

@@ -8,6 +8,7 @@ import { color, icon } from '../../lib/safe.js';
 import { openDeviceCodeIssue } from '../../components/account.js';
 import { downloadTripMap } from '../../lib/offline-map.js';
 import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
+import { openPlaceImport, openShareCodes } from '../place-import.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -29,6 +30,8 @@ export function mount(root, store) {
     const groupTitle = (text) => html`<h2 class="text-[11px] font-black text-slate-500 tracking-wider px-1 pt-2">${text}</h2>`;
     const anchorNear = getPref(PREF_ANCHOR_NEAR_SORT);
     const withCoords = store.list('places').filter((p) => p.lat != null).length;
+    const geoReviewCount = store.list('places').filter((p) => p.geo_review?.type === 'review').length;
+    const geoAutoCount = store.list('places').filter((p) => p.geo_review?.type === 'auto').length;
 
     setHTML(root, html`
       <div class="p-4 space-y-3">
@@ -103,6 +106,23 @@ export function mount(root, store) {
               : html`<p class="text-[11px] text-slate-500">기본 카테고리만 사용 중입니다.</p>`}
             </div>` : html`<p class="text-[11px] text-slate-500">owner 가 커스텀 카테고리를 꺼두었습니다.</p>`}
         </section>
+        <section class="glass-card p-4 rounded-2xl space-y-2">
+          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-copy text-neon-cyan mr-1"></i>장소 가져오기 · 공유</h3>
+          <p class="text-[10px] text-slate-400">내 다른 여행이나 공유 코드에서 장소를 골라 이 여행으로 복사해요.</p>
+          <div class="grid ${owner ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+            <button data-action="place-import" class="btn-ghost py-2.5"><i class="fa-solid fa-file-import mr-1"></i>가져오기</button>
+            ${owner ? html`<button data-action="share-codes" class="btn-ghost py-2.5"><i class="fa-solid fa-share-from-square mr-1"></i>공유 코드</button>` : ''}
+          </div>
+        </section>
+        ${geoReviewCount + geoAutoCount ? html`
+        <section class="glass-card p-4 rounded-2xl space-y-2">
+          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-location-dot text-amber-300 mr-1"></i>위치 검토</h3>
+          <div class="grid grid-cols-2 gap-2">
+            <button data-action="geo-review" data-type="review" class="btn-ghost py-2.5 ${geoReviewCount ? 'text-amber-200' : 'opacity-50'}">확인 필요 ${geoReviewCount}곳</button>
+            <button data-action="geo-review" data-type="auto" class="btn-ghost py-2.5 ${geoAutoCount ? '' : 'opacity-50'}">자동으로 바뀜 ${geoAutoCount}곳</button>
+          </div>
+          <p class="text-[10px] text-slate-500">자동으로 바뀐 곳은 구글 좌표가 기존 핀과 300m 이내라 바로 반영한 곳이에요. 비교해 보고 되돌릴 수 있어요.</p>
+        </section>` : ''}
         ${owner ? html`
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white"><i class="fa-brands fa-google text-neon-cyan mr-1"></i>구글 지도 정보</h3>
@@ -167,6 +187,12 @@ export function mount(root, store) {
     },
     'link-google': () => linkGoogle().catch((e) => toast(errorText(e), 'error')),
     'device-code': () => openDeviceCodeIssue(store.tripId),
+    'place-import': () => openPlaceImport(store),
+    'share-codes': () => openShareCodes(store),
+    'geo-review': async (el) => {
+      const { openGeoReview } = await import('./places.js');
+      openGeoReview(store, el.dataset.type, { onDone: () => closeSheet() });
+    },
     'anchor-near': (el) => {
       setPref(PREF_ANCHOR_NEAR_SORT, el.checked);
       toast(el.checked ? '장소 탭의 기준점 목록을 지도 중심에서 가까운 순으로 보여줘요.' : '기준점 목록을 등록 순서로 보여줘요.');
@@ -307,7 +333,7 @@ function openCategoryEditor(store, id) {
 // =====================================================================
 async function openGoogleBulk(store) {
   // 장소 탭 모듈은 지도 라이브러리를 포함해 크므로 필요할 때만 불러옴
-  const { refreshFromGoogle, openPlaceDetail } = await import('./places.js');
+  const { refreshFromGoogle, openPlaceDetail, openGeoReview } = await import('./places.js');
   const targets = store.list('places').filter((p) => !p.google_place_id);
   if (!targets.length) { toast('모든 장소에 이미 구글 정보가 있어요.'); return; }
   if (!navigator.onLine) { toast('온라인 상태에서 실행해 주세요.', 'error'); return; }
@@ -338,7 +364,7 @@ async function openGoogleBulk(store) {
       start: async (b) => {
         b.disabled = true; b.textContent = '진행 중... (창을 닫으면 멈춰요)';
         $('#bulk-progress', el).classList.remove('hidden');
-        const result = { ok: 0, review: [], notFound: [], failed: [] };
+        const result = { ok: 0, auto: 0, review: [], notFound: [], failed: [] };
         let i = 0;
         for (const p of targets) {
           if (stopped) break;
@@ -349,6 +375,7 @@ async function openGoogleBulk(store) {
           for (let attempt = 1; attempt <= 3 && !stopped; attempt++) {
             try {
               const r = await refreshFromGoogle(store, store.get('places', p.id) || p);
+              if (store.get('places', p.id)?.geo_review?.type === 'auto') result.auto++;
               if (r.review) result.review.push({ id: p.id, name: p.name, distance: r.review.distance, gName: r.place.name });
               else result.ok++;
               break;
@@ -378,7 +405,9 @@ async function openGoogleBulk(store) {
         setHTML($('#bulk-result', el), html`
           <p class="text-xs text-emerald-300 font-bold">완료 ${result.ok}곳</p>
           ${result.review.length ? html`<p class="text-xs text-amber-300 font-bold mt-2">확인 필요 ${result.review.length}곳 (구글 위치가 기존 핀과 멀어 좌표를 바꾸지 않음)</p>
-            ${result.review.map((x) => row(x, `${x.distance}m · 구글: ${x.gName || '?'}`))}` : ''}
+            <button data-action="review-now" data-type="review" class="w-full py-2 rounded-xl bg-amber-500/20 text-amber-100 text-[11px] font-bold border border-amber-500/40">지도에서 비교하며 검토하기</button>
+            <p class="text-[10px] text-slate-500">나중에 장소 탭 위 배너나 설정 → 위치 검토에서도 이어서 볼 수 있어요.</p>` : ''}
+          ${result.auto ? html`<p class="text-[11px] text-slate-400 mt-2">구글 좌표로 자동 조정 ${result.auto}곳 · <button data-action="review-now" data-type="auto" class="text-neon-cyan underline">확인하기</button></p>` : ''}
           ${result.notFound.length ? html`<p class="text-xs text-slate-300 font-bold mt-2">구글에서 찾지 못함 ${result.notFound.length}곳</p>
             ${result.notFound.map((x) => row(x, '장소 수정에서 링크를 넣어 다시 시도'))}` : ''}
           ${result.failed.length ? html`<p class="text-xs text-rose-300 font-bold mt-2">실패 ${result.failed.length}건</p>
@@ -387,6 +416,7 @@ async function openGoogleBulk(store) {
         $('#bulk-text', el).textContent = `${i} / ${need} 처리`;
       },
       open: (x) => { if (x.dataset.id) openPlaceDetail(store, x.dataset.id, null); },
+      'review-now': (x) => openGeoReview(store, x.dataset.type),
     });
     return () => { stopped = true; off(); };
   });

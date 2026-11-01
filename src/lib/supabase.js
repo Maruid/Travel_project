@@ -35,6 +35,9 @@ const ERROR_TEXT = {
   INVALID_DEVICE_CODE: '코드가 틀렸거나 만료되었습니다. 기존 기기에서 새 코드를 받아주세요.',
   ALREADY_OTHER_MEMBER: '이 기기는 이미 이 여행에 다른 이름으로 참여 중입니다.',
   AI_LIMIT: '오늘 이 여행의 AI 사용 한도(50회)를 모두 썼어요.',
+  INVALID_SHARE_CODE: '코드가 틀렸거나 만료(7일)되었어요. 공유한 사람에게 새 코드를 받아주세요.',
+  NO_PLACES: '공유할 장소를 하나 이상 골라주세요.',
+  SHARE_LIMIT: '이 여행의 공유 코드는 10개까지예요. 안 쓰는 코드를 끄고 다시 만들어 주세요.',
 };
 
 export function errorText(err) {

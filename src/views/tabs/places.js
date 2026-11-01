@@ -1,12 +1,13 @@
 import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
 import { createMap, pinIcon, draggablePin, L } from '../../components/map.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { walkInfo, priceRange } from '../../lib/format.js';
+import { walkInfo, priceRange, distanceKm } from '../../lib/format.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
-import { color } from '../../lib/safe.js';
+import { color, icon } from '../../lib/safe.js';
 import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
+  geoReviewOf, geoReviewList, distanceText,
 } from '../../lib/google-place.js';
 import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT } from '../../lib/prefs.js';
 import { SORTS, sortRows, nextSort, parseSort, sortToString } from '../../lib/place-sort.js';
@@ -19,6 +20,22 @@ export function googleMapsHref(p) {
   const q = p.map_query || (p.lat != null ? `${p.lat},${p.lng}` : p.name);
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
+
+// 뱃지: 이모지가 들어가도 높이가 같도록 고정 높이 + 가운데 정렬
+const BADGE = 'inline-flex items-center gap-0.5 h-[18px] px-1.5 rounded border text-[9px] font-bold leading-none whitespace-nowrap';
+const BADGE_COLLAPSED_MAX = 3;   // 접힌 카드에서 보이는 뱃지 수 (나머지는 +N, 펼치면 전부)
+
+function placeBadges(p, cat) {
+  const out = [];
+  if (cat) out.push(html`<span class="${BADGE}" style="color:${color(cat.color)};border-color:${color(cat.color)}66"><i class="fa-solid ${icon(cat.icon)} text-[8px]"></i>${cat.name}</span>`);
+  if (p.warn_badge) out.push(html`<span class="${BADGE} bg-rose-500/20 text-rose-300 border-rose-500/40">⚠️ ${p.warn_badge}</span>`);
+  if (p.is_anchor) out.push(html`<span class="${BADGE} bg-amber-500/20 text-amber-300 border-amber-500/30">기준점</span>`);
+  if (p.source) out.push(html`<span class="${BADGE} bg-purple-500/20 text-purple-300 border-purple-500/30">📺 ${p.source}</span>`);
+  return out;
+}
+
+// 전체 보기 범위: 기준점(없으면 지도 중심)에서 이 거리 안의 장소만
+const FIT_RADIUS_KM = 50;
 
 // 확대 규칙 (한 곳에서 관리)
 const ZOOM_ANCHOR = 15;   // 기준점 · 내 위치 · 기준점으로 초기화: 반경 약 1km
@@ -61,6 +78,9 @@ export function mount(root, store) {
           <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
         </div>
       </div>
+      <button data-action="geo-review" id="geo-banner" class="hidden w-full mb-1.5 px-3 h-8 flex-shrink-0 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 font-bold flex items-center justify-between">
+        <span><i class="fa-solid fa-location-dot mr-1"></i><span id="geo-banner-text"></span></span><span class="text-amber-300">검토 <i class="fa-solid fa-chevron-right text-[9px]"></i></span>
+      </button>
       <div id="place-scroll" class="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-3">
         <div id="place-list" class="space-y-2"></div>
       </div>
@@ -166,28 +186,32 @@ export function mount(root, store) {
 
     setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => {
       const selected = p.id === state.selectedId;
+      const badges = placeBadges(p, cat);
+      // 2줄: 별점(리뷰 수) · 가격 · 지역 — 지금 정렬 기준은 강조
+      const hl = 'px-1 rounded border';
+      const meta = [
+        p.rating ? html`<span class="font-bold flex-shrink-0 ${sk === 'rating' ? `${hl} bg-amber-400/15 text-amber-200 border-amber-400/40` : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}${p.rating_count != null ? html`<span class="font-normal text-slate-400"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : null,
+        priceRange(p) ? html`<span class="font-mono font-bold flex-shrink-0 ${sk === 'price' ? `${hl} bg-emerald-400/15 text-emerald-300 border-emerald-400/40` : 'text-emerald-400'}">${priceRange(p)}</span>` : null,
+        p.zone ? html`<span class="truncate">${p.zone}</span>` : null,
+      ].filter(Boolean);
       return html`
       <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl cursor-pointer hover:border-slate-500 transition ${selected ? 'neon-border-cyan' : ''}">
-        <div class="flex items-center justify-between gap-2">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-1.5 mb-1 flex-wrap">
-              ${cat ? html`<span class="text-[9px] border font-bold px-1.5 rounded" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
-              ${p.warn_badge ? html`<span class="text-[9px] bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold px-1.5 rounded">⚠️ ${p.warn_badge}</span>` : ''}
-              ${p.source ? html`<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold px-1.5 rounded">📺 ${p.source}</span>` : ''}
-              ${p.is_anchor ? html`<span class="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold px-1.5 rounded">기준점</span>` : ''}
-              <h4 class="font-bold text-xs text-white truncate">${p.name}</h4>
-              ${p.zone ? html`<span class="text-[10px] text-slate-400">· ${p.zone}</span>` : ''}
-              ${p.rating ? html`<span class="text-[10px] font-bold ${sk === 'rating' ? 'px-1 rounded bg-amber-400/15 text-amber-200 border border-amber-400/40' : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}${p.rating_count != null ? html`<span class="font-normal text-slate-400"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : ''}
-            </div>
-            ${p.signature ? html`<p class="text-[11px] font-medium text-neon-cyan truncate">${p.signature}</p>` : ''}
-            <div class="flex items-center gap-2 mt-0.5">
-              ${priceRange(p) ? html`<span class="text-[10px] font-mono font-bold ${sk === 'price' ? 'px-1 rounded bg-emerald-400/15 text-emerald-300 border border-emerald-400/40' : 'text-emerald-400'}">${priceRange(p)}</span>` : ''}
-              <p class="text-[10px] text-slate-400 truncate flex-1">${p.description || ''}</p>
-            </div>
+        <div class="flex gap-2">
+          <div class="flex-1 min-w-0 space-y-1">
+            <h4 class="font-bold text-[13px] text-white truncate leading-tight">${p.name}</h4>
+            ${meta.length ? html`<div class="flex items-center gap-1 text-[10px] text-slate-400 min-w-0 overflow-hidden whitespace-nowrap">
+              ${meta.map((m, i) => html`${i ? html`<span class="text-slate-600">·</span>` : ''}${m}`)}</div>` : ''}
+            ${badges.length ? html`<div class="flex items-center gap-1 ${selected ? 'flex-wrap' : 'overflow-hidden'}">
+              ${selected ? badges : badges.slice(0, BADGE_COLLAPSED_MAX)}
+              ${!selected && badges.length > BADGE_COLLAPSED_MAX ? html`<span class="${BADGE} bg-slate-800 text-slate-300 border-white/10">+${badges.length - BADGE_COLLAPSED_MAX}</span>` : ''}
+            </div>` : ''}
+            ${p.signature || p.description ? html`<p class="text-[11px] truncate">
+              ${p.signature ? html`<span class="font-medium text-neon-cyan">${p.signature}</span>` : ''}
+              ${p.description ? html`<span class="text-slate-400">${p.signature ? ' · ' : ''}${p.description}</span>` : ''}</p>` : ''}
           </div>
-          <div class="flex flex-col items-end gap-1 flex-shrink-0">
-            ${walk.text ? html`<span class="text-[10px] px-1.5 py-0.5 rounded font-bold ${sk === 'distance' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">${walk.text}</span>`
-              : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : ''}
+          <div class="flex flex-col items-end justify-between gap-1 flex-shrink-0">
+            ${walk.text ? html`<span class="${BADGE} ${sk === 'distance' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}">${walk.text}</span>`
+              : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : html`<span></span>`}
             <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
               <i class="fa-solid fa-diamond-turn-right"></i></a>
           </div>
@@ -203,7 +227,14 @@ export function mount(root, store) {
               <i class="fa-solid fa-diamond-turn-right mr-1"></i>길찾기</a>
           </div>` : ''}
       </div>`;
-    })}` : emptyCard('조건에 맞는 장소가 없습니다.'));
+    })}` : store.list('places').length ? emptyCard('조건에 맞는 장소가 없습니다.') : html`
+      <div class="glass-card p-5 rounded-2xl text-center space-y-3">
+        <p class="text-xs text-slate-300">아직 등록된 장소가 없어요.</p>
+        <div class="grid grid-cols-2 gap-2">
+          <button data-action="add" class="btn-ghost py-2.5"><i class="fa-solid fa-plus mr-1"></i>직접 추가</button>
+          <button data-action="import-places" class="btn-ghost py-2.5"><i class="fa-solid fa-file-import mr-1"></i>다른 여행에서</button>
+        </div>
+      </div>`);
   }
 
   // 장소 선택 (id = null 이면 해제). 지도가 펼쳐져 있으면 그 위치로 이동
@@ -244,7 +275,17 @@ export function mount(root, store) {
   }
   function resetView() {
     if (state.resetNext === 'all') {
-      const pts = filtered().filter(({ p }) => p.lat != null).map(({ p }) => [p.lat, p.lng]);
+      // 기준점(없으면 지도 중심)에서 50km 안만: 잘못 찍힌 핀이나 다른 지역 장소 때문에 지도가 너무 넓어지지 않도록
+      const a = anchorPoint();
+      const c = a || { lat: map.getCenter().lat, lng: map.getCenter().lng };
+      const located = filtered().filter(({ p }) => p.lat != null);
+      const inside = located.filter(({ p }) => distanceKm(c, p) <= FIT_RADIUS_KM);
+      const far = located.length - inside.length;
+      const pts = inside.map(({ p }) => [p.lat, p.lng]);
+      if (far) {
+        const names = located.filter(({ p }) => distanceKm(c, p) > FIT_RADIUS_KM).slice(0, 2).map(({ p }) => p.name).join(', ');
+        toast(`${a ? `${a.name || '기준점'}에서` : '지도 중심에서'} ${FIT_RADIUS_KM}km 넘게 떨어진 ${far}곳은 제외했어요 (${names}${far > 2 ? ' 등' : ''}). 위치가 잘못됐다면 수정해 주세요.`);
+      }
       if (pts.length > 1) map.flyToBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: ZOOM_SELECT, duration: 0.6 });
       else if (pts.length === 1) map.flyTo(pts[0], ZOOM_SELECT);
       else toast('지도에 표시할 장소가 없어요.');
@@ -265,6 +306,9 @@ export function mount(root, store) {
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
+    const pending = geoReviewList(store.list('places'), 'review').length;
+    $('#geo-banner', root).classList.toggle('hidden', !pending);
+    $('#geo-banner-text', root).textContent = `위치 확인 필요 ${pending}곳`;
   }
 
   // ---------- 이벤트 ----------
@@ -309,6 +353,8 @@ export function mount(root, store) {
       $('#place-scroll', root).scrollTop = 0;
     },
     add: () => openPlaceEditor(store, null, { near: anchorPoint() }),
+    'geo-review': () => openGeoReview(store, 'review'),
+    'import-places': async () => (await import('../place-import.js')).openPlaceImport(store),
     // 카드 탭: 지도에서 위치 확인 + 버튼 줄 펼침. 선택된 카드를 다시 누르거나 위치가 없으면 상세
     select: (el, e) => {
       if (e.target.closest('button')) return;   // 펼쳐진 버튼 줄의 버튼은 각자 동작
@@ -356,9 +402,7 @@ export function openPlaceDetail(store, id, from) {
   openSheet(html`
     <div class="flex items-center justify-between mb-1">
       <div class="flex items-center gap-1.5 flex-wrap">
-        ${cat ? html`<span class="text-[10px] px-2 py-0.5 rounded font-black border" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
-        ${p.warn_badge ? html`<span class="text-[10px] px-2 py-0.5 rounded font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">⚠️ ${p.warn_badge}</span>` : ''}
-        ${p.source ? html`<span class="text-[10px] px-2 py-0.5 rounded font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">📺 ${p.source}</span>` : ''}
+        ${placeBadges(p, cat)}
       </div>
       <span class="text-xs font-bold text-emerald-400">${walk.text}</span>
     </div>
@@ -367,6 +411,7 @@ export function openPlaceDetail(store, id, from) {
       <span>${p.zone || ''}</span>
       <span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>
     </div>
+    ${geoReviewCard(p)}
     ${googleBlock(p, store.trip.timezone)}
     <div class="space-y-2 text-xs">
       ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
@@ -390,6 +435,12 @@ export function openPlaceDetail(store, id, from) {
     </div>
   `, (el) => delegate(el, {
     edit: () => openPlaceEditor(store, id, { near: from }),
+    'geo-open': () => openGeoReview(store, geoReviewOf(p).type, { startId: id, onDone: () => openPlaceDetail(store, id, from) }),
+    'geo-keep': () => {
+      store.update('places', id, { geo_review: null });
+      toast('지금 위치를 그대로 두었어요.');
+      openPlaceDetail(store, id, from);
+    },
     'toggle-anchor': () => {
       const on = !p.is_anchor;
       store.update('places', id, { is_anchor: on });
@@ -788,6 +839,8 @@ export function openPlaceEditor(store, id, { near } = {}) {
         lat: pos.lat, lng: pos.lng,
         ...(googleChanged ? googleColumns(google) : {}),
       };
+      // 위치 검토 대기 중이던 장소의 핀을 직접 옮겼으면 검토 완료로 처리
+      if (id && geoReviewOf(p) && !googleChanged && (pos.lat !== p.lat || pos.lng !== p.lng)) data.geo_review = null;
       if (id) store.update('places', id, data);
       else store.insert('places', data);
       closeSheet();
@@ -837,3 +890,118 @@ export async function refreshFromGoogle(store, p) {
   return { review, place: r.place, distance: r.distance };
 }
 
+
+// =====================================================================
+// 구글 위치 검토 (places.geo_review)
+//  - review: 구글 위치가 300m 넘게 떨어져 좌표를 바꾸지 않은 곳 → 바꾸기 / 유지 / 직접 수정
+//  - auto:   300m 이내라 자동으로 바꾼 곳 → 이대로 두기 / 되돌리기
+// =====================================================================
+function geoReviewCard(p) {
+  const g = geoReviewOf(p);
+  if (!g) return '';
+  if (g.type === 'review') {
+    return html`
+      <div class="p-3 mb-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px]">
+        <p class="text-amber-200 font-bold"><i class="fa-solid fa-location-dot mr-1"></i>위치 확인 필요</p>
+        <p class="text-amber-100/80 mt-0.5">구글이 찾은 "${g.name || '?'}" 위치가 지금 핀과 ${distanceText(g.distance)} 떨어져 있어요.</p>
+        <button data-action="geo-open" class="mt-2 w-full py-2 rounded-xl bg-amber-500/20 text-amber-100 font-bold border border-amber-500/40">지도에서 비교하기</button>
+      </div>`;
+  }
+  return html`
+    <div class="flex items-center justify-between gap-2 px-3 py-2 mb-3 rounded-xl bg-slate-800/70 border border-white/10 text-[10px] text-slate-400">
+      <span><i class="fa-brands fa-google mr-1"></i>구글 좌표로 바뀜 (${distanceText(g.distance)})</span>
+      <span class="flex gap-2 flex-shrink-0">
+        <button data-action="geo-open" class="text-neon-cyan font-bold">비교 · 되돌리기</button>
+        <button data-action="geo-keep" class="text-slate-300">확인</button>
+      </span>
+    </div>`;
+}
+
+export function openGeoReview(store, type = 'review', { startId = null, onDone = null } = {}) {
+  const queue = geoReviewList(store.list('places'), type).map((p) => p.id);
+  if (!queue.length) { toast(type === 'review' ? '확인할 위치가 없어요.' : '자동으로 바뀐 위치가 없어요.'); return; }
+  let idx = Math.max(0, startId ? queue.indexOf(startId) : 0);
+  const decided = new Set();
+
+  const isReview = type === 'review';
+  openSheet(html`
+    <div class="flex items-center justify-between mb-2">
+      <h3 class="text-sm font-black text-white">${isReview ? '위치 확인' : '자동으로 바뀐 위치'}</h3>
+      <span id="gr-count" class="text-[11px] text-slate-400 font-mono"></span>
+    </div>
+    <div id="gr-map" class="w-full h-56 rounded-2xl overflow-hidden border border-white/10"></div>
+    <div class="flex items-center gap-3 text-[10px] text-slate-400 mt-1.5 px-1">
+      <span><span class="inline-block w-2 h-2 rounded-full bg-rose-400 mr-1"></span>${isReview ? '지금 저장된 핀' : '바뀌기 전'}</span>
+      <span><span class="inline-block w-2 h-2 rounded-full bg-sky-400 mr-1"></span>${isReview ? '구글 위치' : '지금 (구글)'}</span>
+    </div>
+    <div id="gr-info" class="mt-2"></div>
+    <div id="gr-actions" class="mt-2 space-y-2"></div>
+    <div class="flex justify-between mt-2">
+      <button data-action="prev" class="text-[11px] text-slate-400 px-2 py-1"><i class="fa-solid fa-chevron-left mr-1"></i>이전</button>
+      <button data-action="next" class="text-[11px] text-slate-400 px-2 py-1">건너뛰기<i class="fa-solid fa-chevron-right ml-1"></i></button>
+    </div>
+  `, (el) => {
+    const gm = createMap($('#gr-map', el), { zoom: 14 });
+    const layer = L.layerGroup().addTo(gm);
+    const dot = (c) => L.divIcon({ className: '', iconSize: [18, 18], iconAnchor: [9, 9],
+      html: `<div style="width:18px;height:18px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 0 8px ${c}"></div>` });
+
+    function show() {
+      const p = store.get('places', queue[idx]);
+      const g = geoReviewOf(p);
+      $('#gr-count', el).textContent = `${idx + 1} / ${queue.length}`;
+      layer.clearLayers();
+      if (!p || !g || decided.has(p.id)) {
+        setHTML($('#gr-info', el), html`<p class="text-xs text-emerald-300 font-bold text-center py-3">${p ? `"${p.name}" 은(는) 처리했어요.` : '삭제된 장소예요.'}</p>`);
+        setHTML($('#gr-actions', el), '');
+        return;
+      }
+      const a = isReview ? [p.lat, p.lng] : [g.prevLat, g.prevLng];   // 빨강
+      const b = isReview ? [g.lat, g.lng] : [p.lat, p.lng];           // 파랑
+      L.marker(a, { icon: dot('#fb7185') }).addTo(layer);
+      L.marker(b, { icon: dot('#38bdf8') }).addTo(layer);
+      L.polyline([a, b], { color: '#e2e8f0', weight: 2, dashArray: '6 6', opacity: 0.8 }).addTo(layer);
+      setTimeout(() => { gm.invalidateSize(); gm.fitBounds(L.latLngBounds([a, b]), { padding: [36, 36], maxZoom: 17 }); }, 60);
+
+      setHTML($('#gr-info', el), html`
+        <div class="p-3 rounded-2xl glass-card text-[11px] space-y-0.5">
+          <p class="text-white font-bold truncate">${p.name}</p>
+          ${isReview ? html`<p class="text-slate-400 truncate">구글: <span class="text-sky-300">${g.name || '?'}</span></p>` : ''}
+          <p class="text-slate-400">두 위치 차이 <b class="text-amber-200">${distanceText(g.distance)}</b>${p.zone ? html` · ${p.zone}` : ''}</p>
+        </div>`);
+      setHTML($('#gr-actions', el), isReview ? html`
+        <button data-action="use-google" class="btn-primary w-full">구글 위치로 바꾸기</button>
+        <div class="grid grid-cols-2 gap-2">
+          <button data-action="keep" class="btn-ghost py-2.5">지금 위치 유지</button>
+          <button data-action="edit" class="btn-ghost py-2.5"><i class="fa-solid fa-pen mr-1"></i>직접 수정</button>
+        </div>` : html`
+        <div class="grid grid-cols-2 gap-2">
+          <button data-action="keep" class="btn-ghost py-2.5">이대로 두기</button>
+          <button data-action="revert" class="btn-ghost py-2.5 text-amber-200"><i class="fa-solid fa-rotate-left mr-1"></i>되돌리기</button>
+        </div>`);
+    }
+
+    function decide(patch, msg) {
+      const id = queue[idx];
+      store.update('places', id, { ...patch, geo_review: null });
+      decided.add(id);
+      toast(msg);
+      const next = queue.findIndex((qid, i) => i > idx && !decided.has(qid));
+      const any = next >= 0 ? next : queue.findIndex((qid) => !decided.has(qid));
+      if (any < 0) { onDone ? onDone() : closeSheet(); toast(isReview ? '위치 확인을 모두 마쳤어요.' : '모두 확인했어요.'); return; }
+      idx = any; show();
+    }
+
+    const off = delegate(el, {
+      'use-google': () => { const g = geoReviewOf(store.get('places', queue[idx])); decide({ lat: g.lat, lng: g.lng }, '구글 위치로 바꿨어요.'); },
+      keep: () => decide({}, '지금 위치를 그대로 두었어요.'),
+      revert: () => { const g = geoReviewOf(store.get('places', queue[idx])); decide({ lat: g.prevLat, lng: g.prevLng }, '이전 위치로 되돌렸어요.'); },
+      // 편집기로 이동: 검토 기록은 DB 에 남아 있어서 나중에 다시 이어서 볼 수 있음
+      edit: () => openPlaceEditor(store, queue[idx], {}),
+      prev: () => { idx = (idx - 1 + queue.length) % queue.length; show(); },
+      next: () => { idx = (idx + 1) % queue.length; show(); },
+    });
+    show();
+    return () => { off(); gm.remove(); };
+  });
+}
