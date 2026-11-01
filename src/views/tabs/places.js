@@ -1,14 +1,15 @@
-import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
+import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
 import { createMap, pinIcon, draggablePin, L } from '../../components/map.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
 import { walkInfo, priceRange } from '../../lib/format.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color } from '../../lib/safe.js';
-import { downloadTripMap } from '../../lib/offline-map.js';
 import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
 } from '../../lib/google-place.js';
+import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT } from '../../lib/prefs.js';
+import { SORTS, sortRows, nextSort, parseSort, sortToString } from '../../lib/place-sort.js';
 
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
 
@@ -19,38 +20,44 @@ export function googleMapsHref(p) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 }
 
+// 확대 규칙 (한 곳에서 관리)
+const ZOOM_ANCHOR = 15;   // 기준점 · 내 위치 · 기준점으로 초기화: 반경 약 1km
+const ZOOM_SELECT = 16;   // 카드·핀 선택: 이보다 멀면 16까지 확대, 이미 더 확대했으면 유지
+
 export function mount(root, store) {
   const state = {
     cat: 'all',
     anchorId: null,        // 기준점 place id 또는 'gps'
     gps: null,
-    sortByDistance: false,
-    nearOnly: false,
+    sort: parseSort(getPrefStr(PREF_PLACE_SORT)),   // { key: distance|rating|price, dir: asc|desc }
     selectedId: null,
+    collapsed: getPref(PREF_MAP_COLLAPSED),
+    resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
 
   setHTML(root, html`
-    <div class="relative w-full h-[38%] min-h-[180px] border-b border-white/10 flex-shrink-0">
+    <div id="map-wrap" class="relative w-full h-[38%] min-h-[180px] border-b border-white/10 flex-shrink-0">
       <div id="map" class="w-full h-full z-10"></div>
       <div class="absolute top-3 right-3 z-20 flex items-center gap-1.5">
         <select id="anchor-select" class="h-9 px-2 rounded-xl glass-card bg-night-950/80 text-[11px] text-slate-200 font-bold border border-white/20 max-w-40"></select>
         <button data-action="gps" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-neon-cyan border border-neon-cyan/40" title="내 위치">
           <i class="fa-solid fa-location-crosshairs text-sm"></i>
         </button>
-        <button data-action="offline-map" id="btn-offline-map" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-emerald-300 border border-emerald-400/40 text-[10px] font-bold" title="이 여행 지도 오프라인 저장">
-          <i class="fa-solid fa-download text-sm"></i>
-        </button>
+        <button data-action="reset-view" id="btn-reset-view" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-slate-200 border border-white/20"></button>
       </div>
-      <div id="float-card" class="hidden absolute bottom-2 left-2 right-2 z-20 glass-card bg-night-950/90 border border-neon-cyan/50 rounded-2xl p-2.5 shadow-2xl"></div>
+      <button data-action="toggle-map" class="absolute bottom-2 right-2 z-20 h-7 px-2.5 rounded-lg glass-card bg-night-950/80 text-[10px] text-slate-200 font-bold border border-white/20">
+        <i class="fa-solid fa-chevron-up mr-1"></i>지도 접기</button>
     </div>
+    <button data-action="toggle-map" id="map-bar" class="hidden w-full h-9 flex-shrink-0 flex items-center justify-center gap-2 border-b border-white/10 bg-night-950/60 text-[11px] text-slate-300 font-bold">
+      <i class="fa-solid fa-map text-neon-cyan"></i><span id="map-bar-text">지도 펼치기</span><i class="fa-solid fa-chevron-down"></i>
+    </button>
 
     <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
       <div id="cat-chips" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>
-      <div class="flex items-center justify-between text-xs px-1 py-1 mb-1 flex-shrink-0">
-        <span id="count-text" class="text-slate-400 text-[11px]"></span>
-        <div class="flex items-center gap-1.5">
-          <button data-action="sort" id="btn-sort" class="text-[11px] px-2 py-0.5 rounded-lg glass-card text-slate-300"><i class="fa-solid fa-arrow-down-short-wide text-[10px]"></i> 거리순</button>
-          <button data-action="near" id="btn-near" class="text-[11px] px-2 py-0.5 rounded-lg glass-card text-slate-300"><i class="fa-solid fa-person-walking"></i> 7분 이내</button>
+      <div class="flex items-center justify-between gap-2 text-xs px-1 py-1 mb-1 flex-shrink-0">
+        <span id="count-text" class="text-slate-400 text-[11px] truncate min-w-0"></span>
+        <div class="flex items-center gap-1.5 flex-shrink-0">
+          <div id="sort-chips" class="flex items-center gap-1"></div>
           <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
         </div>
       </div>
@@ -82,6 +89,9 @@ export function mount(root, store) {
   let gpsMarker = null;
   setTimeout(() => map.invalidateSize(), 100);
 
+  // 지도의 빈 곳을 누르면 선택 해제 (핀 클릭은 지도로 전달되지 않음)
+  map.on('click', () => { if (state.selectedId) select(null); });
+
   function anchorPoint() {
     if (state.anchorId === 'gps') return state.gps;
     const p = store.get('places', state.anchorId);
@@ -92,20 +102,28 @@ export function mount(root, store) {
     const from = anchorPoint();
     let rows = store.list('places').map((p) => ({ p, walk: walkInfo(from, p), cat: store.category(p.category_id) }));
     if (state.cat !== 'all') rows = rows.filter((r) => r.p.category_id === state.cat);
-    if (state.nearOnly) rows = rows.filter((r) => r.walk.min <= 7);
-    if (state.sortByDistance) rows.sort((a, b) => a.walk.meters - b.walk.meters);
-    return rows;
+    return sortRows(rows, state.sort);
   }
 
+  // 기준점 목록: 설정에서 켜면 "지금 지도 중심에서 가까운 순" (여러 도시를 도는 여행용)
   function renderAnchorSelect() {
-    const anchors = store.list('places').filter((p) => p.is_anchor && p.lat != null);
+    let anchors = store.list('places').filter((p) => p.is_anchor && p.lat != null);
     if (state.anchorId == null && anchors[0]) state.anchorId = anchors[0].id;
+    if (getPref(PREF_ANCHOR_NEAR_SORT) && anchors.length > 1) {
+      const c = map.getCenter();
+      const center = { lat: c.lat, lng: c.lng };
+      anchors = anchors.map((a) => ({ a, d: walkInfo(center, a).meters })).sort((x, y) => x.d - y.d).map((x) => x.a);
+    }
     const sel = $('#anchor-select', root);
     setHTML(sel, html`
       ${anchors.length ? '' : html`<option value="">기준점 없음</option>`}
       ${anchors.map((a) => html`<option value="${a.id}" ${a.id === state.anchorId ? 'selected' : ''}>기준: ${a.name}</option>`)}
       <option value="gps" ${state.anchorId === 'gps' ? 'selected' : ''}>기준: 내 GPS</option>`);
   }
+  // 지도를 움직인 뒤 기준점 목록 순서 갱신 (목록을 열어둔 중에는 건드리지 않음)
+  map.on('moveend', () => {
+    if (getPref(PREF_ANCHOR_NEAR_SORT) && document.activeElement !== $('#anchor-select', root)) renderAnchorSelect();
+  });
 
   function renderChips() {
     const places = store.list('places');
@@ -129,82 +147,121 @@ export function mount(root, store) {
         icon: pinIcon({ color: cat?.color, icon: cat?.icon, size: selected ? 38 : p.is_anchor ? 34 : 28, pulse: selected || p.is_anchor }),
         zIndexOffset: selected ? 1000 : 0,
       }).addTo(markerLayer);
-      m.on('click', () => showFloat(p.id));
+      // 선택된 핀 위에 이름 라벨 (bindTooltip 은 텍스트를 escape 하지 않으므로 직접 escape)
+      if (selected) m.bindTooltip(esc(p.name), { permanent: true, direction: 'top', offset: [0, -20], className: 'pin-label' }).openTooltip();
+      m.on('click', () => select(p.id, { from: 'map' }));
     }
   }
 
   function renderList(rows) {
     const from = anchorPoint();
     $('#count-text', root).textContent = `${rows.length}곳${from ? ` · ${from.name || '내 위치'} 기준` : ''}`;
-    $('#btn-sort', root).className = `text-[11px] px-2 py-0.5 rounded-lg ${state.sortByDistance ? 'bg-neon-cyan text-night-950 font-bold' : 'glass-card text-slate-300'}`;
-    $('#btn-near', root).className = `text-[11px] px-2 py-0.5 rounded-lg ${state.nearOnly ? 'bg-neon-cyan text-night-950 font-bold' : 'glass-card text-slate-300'}`;
+    // 정렬 칩: 켜진 칩은 방향 이름(예: 별점 높은 순)과 화살표, 다시 누르면 방향 반전
+    setHTML($('#sort-chips', root), html`${Object.entries(SORTS).map(([key, def]) => {
+      const on = state.sort.key === key;
+      return html`<button data-action="sort" data-key="${key}" class="text-[11px] px-2 py-0.5 rounded-lg whitespace-nowrap ${on ? 'bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/50 font-bold' : 'glass-card text-slate-400'}">
+        ${on ? html`${def.dirLabel[state.sort.dir]} <i class="fa-solid ${state.sort.dir === 'asc' ? 'fa-arrow-up' : 'fa-arrow-down'} text-[9px]"></i>` : def.label}</button>`;
+    })}`);
+    const sk = state.sort.key;
 
-    setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => html`
-      <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl flex items-center justify-between gap-2 cursor-pointer hover:border-slate-500 transition ${p.id === state.selectedId ? 'neon-border-cyan' : ''}">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-1.5 mb-1 flex-wrap">
-            ${cat ? html`<span class="text-[9px] border font-bold px-1.5 rounded" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
-            ${p.warn_badge ? html`<span class="text-[9px] bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold px-1.5 rounded">⚠️ ${p.warn_badge}</span>` : ''}
-            ${p.source ? html`<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold px-1.5 rounded">📺 ${p.source}</span>` : ''}
-            <h4 class="font-bold text-xs text-white truncate">${p.name}</h4>
-            ${p.zone ? html`<span class="text-[10px] text-slate-400">· ${p.zone}</span>` : ''}
-            ${p.rating ? html`<span class="text-[10px] text-amber-300 font-bold">★${Number(p.rating).toFixed(1)}</span>` : ''}
+    setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => {
+      const selected = p.id === state.selectedId;
+      return html`
+      <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl cursor-pointer hover:border-slate-500 transition ${selected ? 'neon-border-cyan' : ''}">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-1.5 mb-1 flex-wrap">
+              ${cat ? html`<span class="text-[9px] border font-bold px-1.5 rounded" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
+              ${p.warn_badge ? html`<span class="text-[9px] bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold px-1.5 rounded">⚠️ ${p.warn_badge}</span>` : ''}
+              ${p.source ? html`<span class="text-[9px] bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold px-1.5 rounded">📺 ${p.source}</span>` : ''}
+              ${p.is_anchor ? html`<span class="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold px-1.5 rounded">기준점</span>` : ''}
+              <h4 class="font-bold text-xs text-white truncate">${p.name}</h4>
+              ${p.zone ? html`<span class="text-[10px] text-slate-400">· ${p.zone}</span>` : ''}
+              ${p.rating ? html`<span class="text-[10px] font-bold ${sk === 'rating' ? 'px-1 rounded bg-amber-400/15 text-amber-200 border border-amber-400/40' : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}${p.rating_count != null ? html`<span class="font-normal text-slate-400"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : ''}
+            </div>
+            ${p.signature ? html`<p class="text-[11px] font-medium text-neon-cyan truncate">${p.signature}</p>` : ''}
+            <div class="flex items-center gap-2 mt-0.5">
+              ${priceRange(p) ? html`<span class="text-[10px] font-mono font-bold ${sk === 'price' ? 'px-1 rounded bg-emerald-400/15 text-emerald-300 border border-emerald-400/40' : 'text-emerald-400'}">${priceRange(p)}</span>` : ''}
+              <p class="text-[10px] text-slate-400 truncate flex-1">${p.description || ''}</p>
+            </div>
           </div>
-          ${p.signature ? html`<p class="text-[11px] font-medium text-neon-cyan truncate">${p.signature}</p>` : ''}
-          <div class="flex items-center gap-2 mt-0.5">
-            ${priceRange(p) ? html`<span class="text-[10px] text-emerald-400 font-mono font-bold">${priceRange(p)}</span>` : ''}
-            <p class="text-[10px] text-slate-400 truncate flex-1">${p.description || ''}</p>
+          <div class="flex flex-col items-end gap-1 flex-shrink-0">
+            ${walk.text ? html`<span class="text-[10px] px-1.5 py-0.5 rounded font-bold ${sk === 'distance' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}">${walk.text}</span>`
+              : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : ''}
+            <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
+              <i class="fa-solid fa-diamond-turn-right"></i></a>
           </div>
         </div>
-        <div class="flex flex-col items-end gap-1 flex-shrink-0">
-          ${walk.text ? html`<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">${walk.text}</span>`
-            : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : ''}
-          <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
-            <i class="fa-solid fa-diamond-turn-right"></i></a>
-        </div>
-      </div>`)}` : emptyCard('조건에 맞는 장소가 없습니다.'));
+        ${selected ? html`
+          <div class="grid ${state.collapsed && p.lat != null ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 mt-2.5 pt-2.5 border-t border-white/10">
+            ${state.collapsed && p.lat != null ? html`
+              <button data-action="show-on-map" data-id="${p.id}" class="py-2 rounded-xl bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
+                <i class="fa-solid fa-map-location-dot mr-1 text-neon-cyan"></i>지도에서 보기</button>` : ''}
+            <button data-action="detail" data-id="${p.id}" class="py-2 rounded-xl bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
+              <i class="fa-solid fa-circle-info mr-1"></i>상세 보기</button>
+            <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="py-2 rounded-xl bg-neon-cyan text-night-950 text-[11px] font-black text-center">
+              <i class="fa-solid fa-diamond-turn-right mr-1"></i>길찾기</a>
+          </div>` : ''}
+      </div>`;
+    })}` : emptyCard('조건에 맞는 장소가 없습니다.'));
   }
 
-  function showFloat(id, { fromList = false } = {}) {
-    const p = store.get('places', id);
-    if (!p) return;
+  // 장소 선택 (id = null 이면 해제). 지도가 펼쳐져 있으면 그 위치로 이동
+  function select(id, { from = 'list' } = {}) {
     state.selectedId = id;
-    const cat = store.category(p.category_id);
-    const walk = walkInfo(anchorPoint(), p);
-    const el = $('#float-card', root);
-    setHTML(el, html`
-      <div class="flex items-center justify-between gap-2">
-        <div class="flex-1 min-w-0" data-action="detail" data-id="${p.id}">
-          <div class="flex items-center gap-1.5 mb-0.5">
-            ${cat ? html`<span class="text-[9px] px-1.5 rounded font-bold border" style="color:${color(cat.color)};border-color:${color(cat.color)}66">${cat.name}</span>` : ''}
-            <h4 class="font-extrabold text-xs text-white truncate">${p.name}</h4>
-          </div>
-          <div class="text-[10px] text-slate-300 truncate"><span class="text-emerald-400 font-bold">${walk.text}</span> ${p.signature || ''}</div>
-        </div>
-        <button data-action="detail" data-id="${p.id}" class="px-2.5 py-1.5 rounded-xl bg-slate-800 text-slate-100 text-[10px] font-bold border border-white/10 flex-shrink-0">상세</button>
-        <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="px-2.5 py-1.5 rounded-xl bg-neon-cyan text-night-950 text-[10px] font-black flex-shrink-0">길찾기</a>
-        <button data-action="close-float" class="w-6 h-6 text-slate-400"><i class="fa-solid fa-xmark"></i></button>
-      </div>`);
-    el.classList.remove('hidden');
-    map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), 16), { duration: 0.5 });
+    const p = id ? store.get('places', id) : null;
+    if (p && p.lat != null && !state.collapsed) {
+      map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 });
+    }
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
-    // 지도 핀을 눌러 선택한 경우: 리스트에서 해당 카드가 보이도록
-    if (!fromList) document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // 지도 핀으로 선택한 경우: 리스트에서 그 카드가 보이도록
+    if (p && from === 'map') document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
-  function closeFloat() {
-    $('#float-card', root).classList.add('hidden');
-    state.selectedId = null;
-    const rows = filtered();
-    renderMarkers(rows);
-    renderList(rows);
+  // ---------- 지도 접기 / 펼치기 ----------
+  function applyCollapsed() {
+    $('#map-wrap', root).classList.toggle('hidden', state.collapsed);
+    $('#map-bar', root).classList.toggle('hidden', !state.collapsed);
+    const a = anchorPoint();
+    $('#map-bar-text', root).textContent = `지도 펼치기${a?.name ? ` · ${a.name} 기준` : ''}`;
+    if (!state.collapsed) setTimeout(() => map.invalidateSize(), 50);
+  }
+  function setCollapsed(on) {
+    state.collapsed = on;
+    setPref(PREF_MAP_COLLAPSED, on);
+    applyCollapsed();
+    renderList(filtered());
+  }
+
+  // ---------- 초기화: 기준점(15) ↔ 전체 보기 ----------
+  function renderResetButton() {
+    const toAll = state.resetNext === 'all';
+    const btn = $('#btn-reset-view', root);
+    btn.title = toAll ? '전체 보기' : '기준점으로';
+    setHTML(btn, toAll ? html`<i class="fa-solid fa-expand text-sm"></i>` : html`<i class="fa-solid fa-house-flag text-sm text-amber-300"></i>`);
+  }
+  function resetView() {
+    if (state.resetNext === 'all') {
+      const pts = filtered().filter(({ p }) => p.lat != null).map(({ p }) => [p.lat, p.lng]);
+      if (pts.length > 1) map.flyToBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: ZOOM_SELECT, duration: 0.6 });
+      else if (pts.length === 1) map.flyTo(pts[0], ZOOM_SELECT);
+      else toast('지도에 표시할 장소가 없어요.');
+      state.resetNext = 'anchor';
+    } else {
+      const a = anchorPoint();
+      if (a) map.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
+      else toast('기준점이 없어요. 장소 상세에서 기준점으로 지정할 수 있어요.');
+      state.resetNext = 'all';
+    }
+    renderResetButton();
   }
 
   function update() {
     renderAnchorSelect();
     renderChips();
+    if (state.selectedId && !store.get('places', state.selectedId)) state.selectedId = null;
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
@@ -212,8 +269,13 @@ export function mount(root, store) {
 
   // ---------- 이벤트 ----------
   $('#anchor-select', root).addEventListener('change', (e) => {
-    if (e.target.value === 'gps') locate();
-    else { state.anchorId = e.target.value || null; const a = anchorPoint(); if (a) map.panTo([a.lat, a.lng]); update(); }
+    if (e.target.value === 'gps') { locate(); return; }
+    state.anchorId = e.target.value || null;
+    const a = anchorPoint();
+    if (a && !state.collapsed) map.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
+    state.resetNext = 'all';
+    renderResetButton();
+    update();
   });
 
   async function locate() {
@@ -225,7 +287,9 @@ export function mount(root, store) {
         icon: L.divIcon({ className: '', iconSize: [16, 16], iconAnchor: [8, 8],
           html: '<div class="w-4 h-4 rounded-full bg-neon-cyan border-2 border-white shadow-[0_0_12px_#00f2fe]"></div>' }),
       }).addTo(map);
-      map.flyTo([state.gps.lat, state.gps.lng], 15);
+      if (!state.collapsed) map.flyTo([state.gps.lat, state.gps.lng], ZOOM_ANCHOR);
+      state.resetNext = 'all';
+      renderResetButton();
       update();
     } catch (e) {
       toast(e.message, 'error');
@@ -235,39 +299,35 @@ export function mount(root, store) {
 
   const off = delegate(root, {
     gps: locate,
+    'reset-view': resetView,
+    'toggle-map': () => setCollapsed(!state.collapsed),
     cat: (el) => { state.cat = el.dataset.cat; update(); },
-    sort: () => { state.sortByDistance = !state.sortByDistance; update(); },
-    near: () => { state.nearOnly = !state.nearOnly; update(); },
-    add: () => openPlaceEditor(store, null, { near: anchorPoint() }),
-    'offline-map': async (btn) => {
-      if (btn.dataset.busy) return;
-      if (!navigator.onLine) { toast('온라인 상태에서 받아주세요.', 'error'); return; }
-      const points = store.list('places').filter((p) => p.lat != null);
-      if (!confirmAction(`등록된 장소 ${points.length}곳 주변 지도를 오프라인용으로 저장할까요?\n(와이파이 환경을 권장해요)`)) return;
-      btn.dataset.busy = '1';
-      try {
-        const r = await downloadTripMap(points, (done, total) => { btn.textContent = `${Math.floor((done / total) * 100)}%`; });
-        toast(`지도 ${r.total - r.failed}장을 저장했어요.${r.failed ? ` (실패 ${r.failed})` : ''}`);
-      } catch (e) {
-        toast(e.message, 'error');
-      } finally {
-        delete btn.dataset.busy;
-        setHTML(btn, html`<i class="fa-solid fa-download text-sm"></i>`);
-      }
+    sort: (el) => {
+      state.sort = nextSort(state.sort, el.dataset.key);
+      setPrefStr(PREF_PLACE_SORT, sortToString(state.sort));
+      update();
+      $('#place-scroll', root).scrollTop = 0;
     },
-    // 카드 탭: 지도에서 위치 확인. 이미 선택된 카드를 다시 누르거나 위치가 없으면 상세
-    select: (el) => {
+    add: () => openPlaceEditor(store, null, { near: anchorPoint() }),
+    // 카드 탭: 지도에서 위치 확인 + 버튼 줄 펼침. 선택된 카드를 다시 누르거나 위치가 없으면 상세
+    select: (el, e) => {
+      if (e.target.closest('button')) return;   // 펼쳐진 버튼 줄의 버튼은 각자 동작
       const id = el.dataset.id;
       const p = store.get('places', id);
       if (!p) return;
-      const floatOpen = !$('#float-card', root).classList.contains('hidden');
-      if (p.lat == null || (state.selectedId === id && floatOpen)) openPlaceDetail(store, id, anchorPoint());
-      else showFloat(id, { fromList: true });
+      if (p.lat == null || state.selectedId === id) openPlaceDetail(store, id, anchorPoint());
+      else select(id);
     },
     detail: (el) => openPlaceDetail(store, el.dataset.id, anchorPoint()),
-    'close-float': closeFloat,
+    'show-on-map': (el) => {
+      setCollapsed(false);
+      const p = store.get('places', el.dataset.id);
+      if (p?.lat != null) setTimeout(() => map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 }), 80);
+    },
   });
 
+  applyCollapsed();
+  renderResetButton();
   update();
 
   return {
@@ -321,12 +381,21 @@ export function openPlaceDetail(store, id, from) {
       <i class="fa-brands fa-google mr-1"></i>${p.google_place_id ? '구글 정보 다시 가져오기' : '구글 정보 가져오기'}
       ${p.google_synced_at ? html`<span class="text-[10px] text-slate-500 font-normal ml-1">(${String(p.google_synced_at).slice(0, 10)})</span>` : ''}
     </button>
+    ${p.lat != null ? html`
+      <button data-action="toggle-anchor" class="w-full mt-2 py-2.5 rounded-xl text-xs font-bold border ${p.is_anchor ? 'bg-amber-500/15 text-amber-200 border-amber-500/40' : 'bg-slate-800 text-slate-200 border-white/10'}">
+        <i class="fa-solid fa-house-flag mr-1"></i>${p.is_anchor ? '기준점 해제' : '거리 계산 기준점으로 지정'}</button>` : ''}
     <div class="grid grid-cols-2 gap-2 mt-2">
       <button data-action="edit" class="btn-ghost py-2.5"><i class="fa-solid fa-pen mr-1"></i>수정</button>
       <button data-action="delete" class="btn-ghost py-2.5 text-rose-300"><i class="fa-solid fa-trash-can mr-1"></i>삭제</button>
     </div>
   `, (el) => delegate(el, {
     edit: () => openPlaceEditor(store, id, { near: from }),
+    'toggle-anchor': () => {
+      const on = !p.is_anchor;
+      store.update('places', id, { is_anchor: on });
+      toast(on ? `"${p.name}" 을(를) 기준점으로 지정했어요. 지도 위 기준 목록에서 고를 수 있어요.` : '기준점에서 해제했어요.');
+      openPlaceDetail(store, id, from);
+    },
     'google-refresh': async (b) => {
       if (b.dataset.busy) return;
       b.dataset.busy = '1';
@@ -554,6 +623,10 @@ export function openPlaceEditor(store, id, { near } = {}) {
           const c = store.globalCategories.find((x) => x.kind === g.kind);
           if (c) catSel.value = c.id;
         }
+        // 새 장소이고 숙소·역이면 거리 계산 기준점으로 미리 체크 (해제 가능)
+        if (!id && (g.kind === 'lodging' || g.kind === 'transit') && !form.elements.is_anchor.dataset.touched) {
+          form.elements.is_anchor.checked = true;
+        }
         const parts = [g.rating ? `★${g.rating}${g.ratingCount ? ` (${g.ratingCount.toLocaleString()})` : ''}` : null,
           g.openingHours?.weekday?.length ? '영업시간' : null, g.priceMin || g.priceMax ? '가격대' : null].filter(Boolean);
         if (far) {
@@ -692,6 +765,8 @@ export function openPlaceEditor(store, id, { near } = {}) {
       },
     });
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));
+    // 사용자가 기준점 체크를 직접 바꿨으면 자동 체크하지 않음
+    form.elements.is_anchor.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();

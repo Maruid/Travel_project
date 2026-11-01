@@ -6,6 +6,8 @@ import { APP_URL } from '../../config.js';
 import { navigate } from '../../router.js';
 import { color, icon } from '../../lib/safe.js';
 import { openDeviceCodeIssue } from '../../components/account.js';
+import { downloadTripMap } from '../../lib/offline-map.js';
+import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -24,9 +26,13 @@ export function mount(root, store) {
     const members = store.activeMembers();
     const customCats = store.list('categories');
 
+    const groupTitle = (text) => html`<h2 class="text-[11px] font-black text-slate-500 tracking-wider px-1 pt-2">${text}</h2>`;
+    const anchorNear = getPref(PREF_ANCHOR_NEAR_SORT);
+    const withCoords = store.list('places').filter((p) => p.lat != null).length;
+
     setHTML(root, html`
       <div class="p-4 space-y-3">
-        <!-- 초대 링크 -->
+        ${groupTitle('함께하기')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-link text-neon-cyan mr-1"></i>초대 링크</h3>
           <p class="text-[10px] text-slate-400">이 링크를 받은 사람은 누구나 참여해서 편집할 수 있어요.</p>
@@ -38,7 +44,6 @@ export function mount(root, store) {
           ${owner ? html`<button data-action="regen" class="text-[10px] text-amber-300 underline">링크 재발급 (기존 링크는 더 이상 동작하지 않음)</button>` : ''}
         </section>
 
-        <!-- 멤버 -->
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <div class="flex items-center justify-between">
             <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-users text-neon-cyan mr-1"></i>멤버 ${members.length}명</h3>
@@ -62,7 +67,29 @@ export function mount(root, store) {
             </div>`)}
         </section>
 
-        <!-- 카테고리 -->
+        ${groupTitle('지도 · 오프라인')}
+        <section class="glass-card p-4 rounded-2xl space-y-2.5">
+          <div>
+            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-download text-emerald-300 mr-1"></i>오프라인 지도 저장</h3>
+            <p class="text-[10px] text-slate-400 mt-0.5">위치가 있는 장소 ${withCoords}곳 주변 지도를 이 기기에 저장해요. 와이파이에서 출발 전에 한 번 해두세요.</p>
+          </div>
+          <button data-action="offline-map" class="btn-ghost w-full py-2.5"><i class="fa-solid fa-download mr-1"></i>이 여행 지도 저장하기</button>
+          <details class="text-[10px] text-slate-400">
+            <summary class="cursor-pointer text-slate-300">출발 전 체크리스트</summary>
+            <ol class="list-decimal pl-4 mt-1 space-y-0.5">
+              <li>여행 화면의 탭들을 한 번씩 열어 데이터 받아두기</li>
+              <li>위의 지도 저장 (지명 글자는 지도를 한 번 둘러봐야 저장돼요)</li>
+              <li>홈 화면에 앱 추가 (아이폰: 공유 → 홈 화면에 추가)</li>
+            </ol>
+          </details>
+          <label class="flex items-start gap-2 pt-2 border-t border-white/5 cursor-pointer">
+            <input type="checkbox" data-action="anchor-near" ${anchorNear ? 'checked' : ''} class="accent-cyan-400 mt-0.5">
+            <span class="text-[11px] text-slate-300">기준점 목록을 지도 중심에서 가까운 순으로 정렬
+              <span class="block text-[10px] text-slate-500">여러 도시를 도는 여행에서 유용해요. 이 기기에만 적용돼요.</span></span>
+          </label>
+        </section>
+
+        ${groupTitle('장소 데이터')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <div class="flex items-center justify-between">
             <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-tags text-neon-cyan mr-1"></i>커스텀 카테고리</h3>
@@ -76,17 +103,22 @@ export function mount(root, store) {
               : html`<p class="text-[11px] text-slate-500">기본 카테고리만 사용 중입니다.</p>`}
             </div>` : html`<p class="text-[11px] text-slate-500">owner 가 커스텀 카테고리를 꺼두었습니다.</p>`}
         </section>
-
         ${owner ? html`
         <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-gear text-amber-300 mr-1"></i>여행 설정 (owner)</h3>
-          <button data-action="edit-trip" class="btn-ghost w-full py-2.5">여행 정보 수정</button>
-          <button data-action="google-bulk" class="btn-ghost w-full py-2.5"><i class="fa-brands fa-google mr-1"></i>등록된 장소 구글 정보 일괄 가져오기</button>
+          <h3 class="text-xs font-bold text-white"><i class="fa-brands fa-google text-neon-cyan mr-1"></i>구글 지도 정보</h3>
+          <p class="text-[10px] text-slate-400">구글 정보가 없는 등록된 장소에 영업시간, 평점, 정확한 좌표 등을 한 번에 채워요.</p>
+          <button data-action="google-bulk" class="btn-ghost w-full py-2.5">등록된 장소 일괄 가져오기</button>
+        </section>` : ''}
+
+        ${owner ? html`
+        ${groupTitle('여행 관리')}
+        <section class="glass-card p-4 rounded-2xl space-y-2">
+          <button data-action="edit-trip" class="btn-ghost w-full py-2.5"><i class="fa-solid fa-pen mr-1"></i>여행 정보 수정</button>
           <button data-action="delete-trip" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">여행 삭제</button>
         </section>` : ''}
 
+        ${groupTitle('내 계정')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-user-shield text-neon-cyan mr-1"></i>내 계정</h3>
           ${anonymous ? html`
             <p class="text-[10px] text-slate-400 leading-relaxed">지금은 이 브라우저에만 연결된 임시 계정이에요. 다른 기기에서도 "${me?.display_name || '나'}"(으)로 쓰려면 둘 중 하나를 선택하세요.
               ${owner ? html`<b class="text-amber-300">owner 는 Google 계정 연결을 권장합니다.</b>` : ''}</p>
@@ -135,6 +167,28 @@ export function mount(root, store) {
     },
     'link-google': () => linkGoogle().catch((e) => toast(errorText(e), 'error')),
     'device-code': () => openDeviceCodeIssue(store.tripId),
+    'anchor-near': (el) => {
+      setPref(PREF_ANCHOR_NEAR_SORT, el.checked);
+      toast(el.checked ? '장소 탭의 기준점 목록을 지도 중심에서 가까운 순으로 보여줘요.' : '기준점 목록을 등록 순서로 보여줘요.');
+    },
+    'offline-map': async (btn) => {
+      if (btn.dataset.busy) return;
+      if (!navigator.onLine) { toast('온라인 상태에서 받아주세요.', 'error'); return; }
+      const points = store.list('places').filter((p) => p.lat != null);
+      if (!points.length) { toast('위치가 등록된 장소가 없어요.', 'error'); return; }
+      if (!confirmAction(`등록된 장소 ${points.length}곳 주변 지도를 오프라인용으로 저장할까요?\n(와이파이 환경을 권장해요)`)) return;
+      btn.dataset.busy = '1';
+      const label = btn.innerHTML;
+      try {
+        const r = await downloadTripMap(points, (done, total) => { btn.textContent = `저장 중... ${Math.floor((done / total) * 100)}%`; });
+        toast(`지도 ${r.total - r.failed}장을 저장했어요.${r.failed ? ` (실패 ${r.failed})` : ''}`);
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        delete btn.dataset.busy;
+        btn.innerHTML = label;
+      }
+    },
     leave: () => confirmAction('이 여행에서 나갈까요?')
       && run(async () => { await rpc('leave_trip', { p_trip: store.tripId }); navigate('/'); }, '여행에서 나왔습니다.'),
   });

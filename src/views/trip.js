@@ -10,8 +10,8 @@ const TABS = [
   { key: 'schedule', label: '일정',   icon: 'fa-calendar-day',     load: () => import('./tabs/schedule.js') },
   { key: 'guides',   label: '가이드', icon: 'fa-lightbulb',        load: () => import('./tabs/guides.js') },
   { key: 'budget',   label: '가계부', icon: 'fa-wallet',           load: () => import('./tabs/budget.js') },
-  { key: 'todos',    label: '투두',   icon: 'fa-list-check',       load: () => import('./tabs/todos.js') },
-  { key: 'more',     label: '멤버',   icon: 'fa-users',            load: () => import('./tabs/more.js') },
+  { key: 'todos',    label: '할 일',  icon: 'fa-list-check',       load: () => import('./tabs/todos.js') },
+  { key: 'more',     label: '설정',   icon: 'fa-gear',            load: () => import('./tabs/more.js') },
 ];
 
 export async function render(app, params) {

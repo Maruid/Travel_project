@@ -71,6 +71,13 @@
 .leaflet-control-attribution { background: rgba(6, 9, 17, 0.7) !important; color: #94a3b8 !important; font-size: 9px !important; }
 .leaflet-control-attribution a { color: #cbd5e1 !important; }
 
+/* 선택된 핀 위 이름 라벨 */
+.leaflet-tooltip.pin-label {
+  background: rgba(6, 9, 17, 0.92); color: #fff; border: 1px solid rgba(0, 242, 254, 0.5);
+  border-radius: 8px; padding: 2px 8px; font-size: 11px; font-weight: 700; box-shadow: 0 4px 12px rgba(0,0,0,.5);
+}
+.leaflet-tooltip.pin-label::before { border-top-color: rgba(0, 242, 254, 0.5); }
+
 @keyframes pulse-ring {
   0% { transform: scale(0.9); opacity: 0.9; }
   50% { transform: scale(1.3); opacity: 0.4; }

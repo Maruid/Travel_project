@@ -72,7 +72,7 @@ export function openDeviceCodeEntry() {
   openSheet(html`
     <h3 class="text-base font-black text-white mb-1">기기 추가 코드 입력</h3>
     <p class="text-[11px] text-slate-400 mb-3 leading-relaxed">
-      이미 쓰고 있는 기기에서 <b class="text-slate-200">멤버 탭 → 다른 기기에서도 쓰기</b>를 누르면 8자리 코드가 나와요. (10분간 유효)</p>
+      이미 쓰고 있는 기기에서 <b class="text-slate-200">설정 탭 → 다른 기기에서도 쓰기</b>를 누르면 8자리 코드가 나와요. (10분간 유효)</p>
     <form id="device-code-form" class="space-y-2.5">
       <input name="code" class="input text-center font-mono text-lg tracking-[0.3em] uppercase" maxlength="12"
              autocomplete="off" autocapitalize="characters" placeholder="ABCD2345" required>

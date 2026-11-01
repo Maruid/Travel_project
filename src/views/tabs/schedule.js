@@ -78,7 +78,7 @@ export function mount(root, store) {
             }) : emptyCard('아직 일정이 없습니다.')}
           </div>
           <button data-action="add" class="btn-primary"><i class="fa-solid fa-plus mr-1"></i>일정 추가</button>
-        ` : emptyCard('여행 날짜가 없습니다. 멤버 탭에서 여행 정보를 설정하거나 날짜를 추가하세요.')}
+        ` : emptyCard('여행 날짜가 없습니다. 설정 탭에서 여행 정보를 설정하거나 날짜를 추가하세요.')}
       </div>
     `);
   }
