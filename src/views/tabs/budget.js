@@ -1,11 +1,12 @@
 import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { money, todayIn, shortTime, CURRENCIES } from '../../lib/format.js';
+import { money, todayIn, shortTime, rateText } from '../../lib/format.js';
 import { color } from '../../lib/safe.js';
-import { currencyOptions } from '../../lib/currency.js';
+import { currencyOptions, unitOf } from '../../lib/currency.js';
+const unitText = (c) => unitOf(c) ?? c;
 import { fetchRate } from '../../lib/fx.js';
 
-const curOpts = (selected, extra) => currencyOptions(selected, extra).map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`);
+const curOpts = (selected, extra, fallback) => currencyOptions(selected, extra, fallback).map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`);
 
 const EXPENSE_CATS = ['음식', '교통', '쇼핑', '카페', '관광', '숙박', '기타'];
 const METHOD_TEXT = { cash: '현금', card: '카드', other: '기타' };
@@ -49,7 +50,7 @@ export function mount(root, store) {
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs font-bold text-slate-400">여행 가계부</span>
             <button data-action="settings" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-emerald-300 border border-emerald-500/30 font-mono font-bold">
-              1 ${L} = ${rate} ${H} · 예산 관리</button>
+              ${rateText(b)} · 예산 관리</button>
           </div>
           <div class="grid grid-cols-2 gap-2 mb-3">
             <div class="p-2.5 rounded-xl bg-night-950/60 border border-white/5">
@@ -152,7 +153,7 @@ function openExpenseEditor(store, id) {
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">금액 *</label><input name="amount" type="number" min="0" step="any" class="input text-sm font-bold font-mono" required value="${e.amount ?? ''}"></div>
         <div><label class="label">통화</label><select name="currency" class="input">
-          ${curOpts(e.currency, [b.local_currency, b.home_currency])}</select></div>
+          ${curOpts(e.currency, [b.local_currency, b.home_currency], b.local_currency)}</select></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">항목</label><select name="category" class="input">
@@ -204,12 +205,12 @@ function openBudgetSettings(store) {
     <h3 class="text-base font-black text-white mb-3">예산 & 환율</h3>
     <form id="budget-form" class="glass-card p-3 rounded-2xl space-y-2.5 mb-3">
       <div class="grid grid-cols-2 gap-2">
-        <div><label class="label">현지 통화</label><select name="local_currency" class="input">${curOpts(b.local_currency)}</select></div>
-        <div><label class="label">내 통화</label><select name="home_currency" class="input">${curOpts(b.home_currency)}</select></div>
+        <div><label class="label">현지 통화</label><select name="local_currency" class="input">${curOpts(b.local_currency, [], 'JPY')}</select></div>
+        <div><label class="label">내 통화</label><select name="home_currency" class="input">${curOpts(b.home_currency, [], 'KRW')}</select></div>
       </div>
       <div>
         <div class="flex items-center justify-between">
-          <label class="label">환율 (<span id="rate-unit">1 ${b.local_currency} = ? ${b.home_currency}</span>)</label>
+          <label class="label">환율 (<span id="rate-unit">1${unitText(b.local_currency)} = ?${unitText(b.home_currency)}</span>)</label>
           <button type="button" data-action="fetch-rate" class="text-[10px] text-neon-cyan font-bold"><i class="fa-solid fa-rotate mr-0.5"></i>최신 환율로</button>
         </div>
         <input name="rate" type="number" step="any" min="0" class="input font-mono" value="${b.rate}">
@@ -240,7 +241,7 @@ function openBudgetSettings(store) {
     async function fillRate() {
       const from = form.elements.local_currency.value;
       const to = form.elements.home_currency.value;
-      $('#rate-unit', el).textContent = `1 ${from} = ? ${to}`;
+      $('#rate-unit', el).textContent = `1${unitText(from)} = ?${unitText(to)}`;
       const note = $('#rate-note', el);
       const my = ++seq;
       note.className = 'text-[10px] text-slate-400 mt-1';

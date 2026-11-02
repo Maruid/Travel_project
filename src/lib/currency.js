@@ -23,13 +23,22 @@ export const CURRENCY_INFO = {
 };
 export const CURRENCIES = Object.keys(CURRENCY_INFO);
 
+export const isCurrencyCode = (c) => typeof c === 'string' && /^[A-Z]{3}$/.test(c);
+
+// 한국어 단위 (엔, 원, 달러 ...). 모르는 코드는 null
+export const unitOf = (code) => CURRENCY_INFO[code]?.[1] ?? null;
+
 export function currencyLabel(code) {
   const info = CURRENCY_INFO[code];
   return info ? `${info[0]} - ${info[1]} (${code})` : code;
 }
 
-// <option> 목록 (지원 목록에 없는 기존 값도 맨 앞에 유지)
-export function currencyOptions(selected, extra = []) {
-  const codes = [...new Set([...extra, ...(selected && !CURRENCY_INFO[selected] ? [selected] : []), ...CURRENCIES])].filter(Boolean);
+// <option> 목록
+//  - 지원 목록에 없어도 정상 코드(영문 3글자)면 맨 앞에 유지
+//  - 잘린 값('J' 등)은 버리고 fallback 을 선택 (그대로 다시 저장되는 것 방지)
+export function currencyOptions(selected, extra = [], fallback = null) {
+  if (!isCurrencyCode(selected)) selected = isCurrencyCode(fallback) ? fallback : null;
+  const keep = selected && !CURRENCY_INFO[selected] ? [selected] : [];
+  const codes = [...new Set([...extra.filter(isCurrencyCode), ...keep, ...CURRENCIES])];
   return codes.map((c) => ({ code: c, label: currencyLabel(c), selected: c === selected }));
 }

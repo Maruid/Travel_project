@@ -25,6 +25,21 @@ const isNetworkError = (err) =>
 
 // 서버에서 온 두 버전 중 더 새 것 (updated_at 기준, 같으면 들어온 쪽)
 //  - 로컬에서만 바꾼 값은 updated_at 이 그대로라 들어온 값으로 바뀌지만, 보낼 변경(outbox)이 다시 덮어씀
+// Realtime 이 char(3) 통화 코드를 1글자로 잘라 보내던 문제 방어 (migration_008 이후엔 발생하지 않음)
+const CODE_KEYS = ['local_currency', 'home_currency', 'price_currency', 'currency'];
+const isCode = (v) => typeof v === 'string' && /^[A-Z]{3}$/.test(v);
+export function keepValidCodes(incoming, cur) {
+  if (!incoming || !cur) return incoming;
+  let out = incoming;
+  for (const k of CODE_KEYS) {
+    if (incoming[k] != null && !isCode(incoming[k]) && isCode(cur[k])) {
+      if (out === incoming) out = { ...incoming };
+      out[k] = cur[k];
+    }
+  }
+  return out;
+}
+
 export function newer(cur, incoming) {
   if (!incoming) return cur ?? incoming;
   const a = ts(cur?.updated_at); const b = ts(incoming.updated_at);
@@ -192,6 +207,7 @@ export class TripStore {
     if (!row?.id) return;
     const cur = this.tables[table].get(row.id);
     if (newer(cur, row) !== row) return;   // 이미 더 새 버전이 있으면 무시
+    row = keepValidCodes(row, cur);
     this.tables[table].set(row.id, row);
     if (row.updated_at && (!this.cursors[table] || row.updated_at > this.cursors[table])) {
       this.cursors[table] = row.updated_at;
@@ -228,7 +244,7 @@ export class TripStore {
           this.saveCache(); this.emit();
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trip_budgets', filter: `trip_id=eq.${id}` },
-        (p) => { this.budget = newer(this.budget, p.new); this.applyOutboxLocally(); this.saveCache(); this.emit(); })
+        (p) => { this.budget = newer(this.budget, keepValidCodes(p.new, this.budget)); this.applyOutboxLocally(); this.saveCache(); this.emit(); })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips', filter: `id=eq.${id}` },
         (p) => { this.trip = newer(this.trip, p.new); this.saveCache(); this.emit(); });
     this.channel = ch.subscribe((status) => {

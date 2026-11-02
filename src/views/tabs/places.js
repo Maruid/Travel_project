@@ -1,7 +1,8 @@
 import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
 import { createMap, pinIcon, draggablePin, L } from '../../components/map.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { walkInfo, priceRange, distanceKm } from '../../lib/format.js';
+import { walkInfo, priceRange, priceInHome, distanceKm } from '../../lib/format.js';
+import { isCurrencyCode } from '../../lib/currency.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color, icon } from '../../lib/safe.js';
@@ -191,7 +192,7 @@ export function mount(root, store) {
       const hl = 'px-1 rounded border';
       const meta = [
         p.rating ? html`<span class="font-bold flex-shrink-0 ${sk === 'rating' ? `${hl} bg-amber-400/15 text-amber-200 border-amber-400/40` : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}${p.rating_count != null ? html`<span class="font-normal text-slate-400"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : null,
-        priceRange(p) ? html`<span class="font-mono font-bold flex-shrink-0 ${sk === 'price' ? `${hl} bg-emerald-400/15 text-emerald-300 border-emerald-400/40` : 'text-emerald-400'}">${priceRange(p)}</span>` : null,
+        priceRange(p) ? html`<span class="font-mono font-bold flex-shrink-0 ${sk === 'price' ? `${hl} bg-emerald-400/15 text-emerald-300 border-emerald-400/40` : 'text-emerald-400'}">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="flex-shrink-0 text-slate-400">(${priceInHome(p, store.budget)})</span>` : ''}` : null,
         p.zone ? html`<span class="truncate">${p.zone}</span>` : null,
       ].filter(Boolean);
       return html`
@@ -247,8 +248,9 @@ export function mount(root, store) {
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
-    // 지도 핀으로 선택한 경우: 리스트에서 그 카드가 보이도록
-    if (p && from === 'map') document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // 선택한 카드가 리스트 위·아래에 걸쳐 있으면 펼쳐진 카드 전체가 보이도록 스크롤
+    //  (지도 핀으로 선택한 경우에도 같은 방식으로 카드를 보여줌)
+    if (p) requestAnimationFrame(() => document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   }
 
   // ---------- 지도 접기 / 펼치기 ----------
@@ -409,7 +411,7 @@ export function openPlaceDetail(store, id, from) {
     <h3 class="text-lg font-black text-white mt-1">${p.name}</h3>
     <div class="flex items-center justify-between text-xs text-slate-400 mb-3">
       <span>${p.zone || ''}</span>
-      <span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>
+      <span class="text-right"><span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="block text-[10px] text-slate-400">${priceInHome(p, store.budget)}</span>` : ''}</span>
     </div>
     ${geoReviewCard(p)}
     ${googleBlock(p, store.trip.timezone)}
@@ -538,7 +540,7 @@ export function openPlaceEditor(store, id, { near } = {}) {
       <div class="grid grid-cols-[1fr_1fr_auto] gap-2">
         <div><label class="label">최저가</label><input name="price_min" type="number" min="0" step="any" class="input" value="${p.price_min ?? ''}"></div>
         <div><label class="label">최고가</label><input name="price_max" type="number" min="0" step="any" class="input" value="${p.price_max ?? ''}"></div>
-        <div><label class="label">통화</label><input name="price_currency" class="input w-16 uppercase" maxlength="3" value="${p.price_currency || store.budget?.local_currency || ''}"></div>
+        <div><label class="label">통화</label><input name="price_currency" class="input w-16 uppercase" maxlength="3" value="${isCurrencyCode(p.price_currency) ? p.price_currency : isCurrencyCode(store.budget?.local_currency) ? store.budget.local_currency : ''}"></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">출처</label><input name="source" class="input" maxlength="50" value="${p.source || ''}" placeholder="예: 유튜버 이름"></div>
@@ -823,6 +825,11 @@ export function openPlaceEditor(store, id, { near } = {}) {
       e.preventDefault();
       const v = formValues(form);
       const link = $('#link-input', el).value.trim();
+      const cur = (v.price_currency || '').toUpperCase();
+      if ((v.price_min != null || v.price_max != null) && !isCurrencyCode(cur)) {
+        toast('가격 통화는 JPY 처럼 영문 3글자로 입력해 주세요.', 'error');
+        return;
+      }
       const data = {
         name: v.name,
         category_id: v.category_id,
@@ -830,7 +837,7 @@ export function openPlaceEditor(store, id, { near } = {}) {
         visit_tip: v.visit_tip, warn_badge: v.warn_badge,
         price_min: v.price_min != null ? Number(v.price_min) : null,
         price_max: v.price_max != null ? Number(v.price_max) : null,
-        price_currency: v.price_min != null || v.price_max != null ? (v.price_currency || '').toUpperCase() || null : null,
+        price_currency: v.price_min != null || v.price_max != null ? cur : null,
         source: v.source,
         youtube_url: safeUrl(v.youtube_url),
         maps_url: safeUrl(link) || (google?.mapsUrl ?? p.maps_url ?? null),
