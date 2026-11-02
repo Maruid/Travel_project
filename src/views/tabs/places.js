@@ -1,5 +1,16 @@
 import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
-import { createMap, pinIcon, draggablePin, L } from '../../components/map.js';
+// 지도 라이브러리(MapLibre, 약 1.2MB)는 따로 불러옴: 장소 리스트를 먼저 보여주고 지도는 준비되는 대로 붙임
+let L = null; let createMap = null; let pinIcon = null; let draggablePin = null;
+let mapLibPromise = null;
+export function loadMapLib() {
+  if (!mapLibPromise) {
+    mapLibPromise = import('../../components/map.js').then((m) => {
+      ({ L, createMap, pinIcon, draggablePin } = m);
+      return m;
+    }).catch((e) => { mapLibPromise = null; throw e; });
+  }
+  return mapLibPromise;
+}
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
 import { walkInfo, priceRange, priceInHome, distanceKm } from '../../lib/format.js';
 import { isCurrencyCode } from '../../lib/currency.js';
@@ -55,6 +66,8 @@ export function mount(root, store) {
 
   setHTML(root, html`
     <div id="map-wrap" class="relative w-full h-[38%] min-h-[180px] border-b border-white/10 flex-shrink-0">
+      <div id="map-loading" class="absolute inset-0 flex items-center justify-center text-[11px] text-slate-500">
+        <i class="fa-solid fa-map mr-1.5"></i>지도 불러오는 중...</div>
       <div id="map" class="w-full h-full z-10"></div>
       <div class="absolute top-3 right-3 z-20 flex items-center gap-1.5">
         <select id="anchor-select" class="h-9 px-2 rounded-xl glass-card bg-night-950/80 text-[11px] text-slate-200 font-bold border border-white/20 max-w-40"></select>
@@ -101,17 +114,42 @@ export function mount(root, store) {
   const onResize = () => { fitHeight(); map?.invalidateSize(); };
   window.addEventListener('resize', onResize);
 
-  // ---------- 지도 ----------
-  const anchors0 = store.list('places').filter((p) => p.is_anchor && p.lat != null);
-  const withCoords0 = store.list('places').filter((p) => p.lat != null);
-  const start = anchors0[0] || withCoords0[0];
-  const map = createMap($('#map', root), { center: start ? [start.lat, start.lng] : undefined, zoom: start ? 14 : 3 });
-  const markerLayer = L.layerGroup().addTo(map);
+  // ---------- 지도 (라이브러리가 준비되면 생성. 그 전에는 map = null 이고 리스트만 동작) ----------
+  let map = null;
+  let markerLayer = null;
   let gpsMarker = null;
-  setTimeout(() => map.invalidateSize(), 100);
+  let destroyed = false;
 
-  // 지도의 빈 곳을 누르면 선택 해제 (핀 클릭은 지도로 전달되지 않음)
-  map.on('click', () => { if (state.selectedId) select(null); });
+  function initMap() {
+    if (destroyed || map) return;
+    const anchors0 = store.list('places').filter((p) => p.is_anchor && p.lat != null);
+    const withCoords0 = store.list('places').filter((p) => p.lat != null);
+    const a = anchorPoint();
+    const start = a || anchors0[0] || withCoords0[0];
+    map = createMap($('#map', root), { center: start ? [start.lat, start.lng] : undefined, zoom: start ? 14 : 3 });
+    markerLayer = L.layerGroup().addTo(map);
+    $('#map-loading', root)?.remove();
+    setTimeout(() => map?.invalidateSize(), 100);
+    // 지도의 빈 곳을 누르면 선택 해제 (핀 클릭은 지도로 전달되지 않음)
+    map.on('click', () => { if (state.selectedId) select(null); });
+    // 지도를 움직인 뒤 기준점 목록 순서 갱신 (목록을 열어둔 중에는 건드리지 않음)
+    map.on('moveend', () => {
+      if (getPref(PREF_ANCHOR_NEAR_SORT) && document.activeElement !== $('#anchor-select', root)) renderAnchorSelect();
+    });
+    drawGps();
+    renderMarkers(filtered());
+    const sel = state.selectedId && store.get('places', state.selectedId);
+    if (sel?.lat != null) map.setView([sel.lat, sel.lng], ZOOM_SELECT);
+  }
+
+  function drawGps() {
+    if (!map || !state.gps) return;
+    gpsMarker?.remove();
+    gpsMarker = L.marker([state.gps.lat, state.gps.lng], {
+      icon: L.divIcon({ className: '', iconSize: [16, 16], iconAnchor: [8, 8],
+        html: '<div class="w-4 h-4 rounded-full bg-neon-cyan border-2 border-white shadow-[0_0_12px_#00f2fe]"></div>' }),
+    }).addTo(map);
+  }
 
   function anchorPoint() {
     if (state.anchorId === 'gps') return state.gps;
@@ -130,7 +168,7 @@ export function mount(root, store) {
   function renderAnchorSelect() {
     let anchors = store.list('places').filter((p) => p.is_anchor && p.lat != null);
     if (state.anchorId == null && anchors[0]) state.anchorId = anchors[0].id;
-    if (getPref(PREF_ANCHOR_NEAR_SORT) && anchors.length > 1) {
+    if (map && getPref(PREF_ANCHOR_NEAR_SORT) && anchors.length > 1) {
       const c = map.getCenter();
       const center = { lat: c.lat, lng: c.lng };
       anchors = anchors.map((a) => ({ a, d: walkInfo(center, a).meters })).sort((x, y) => x.d - y.d).map((x) => x.a);
@@ -141,10 +179,6 @@ export function mount(root, store) {
       ${anchors.map((a) => html`<option value="${a.id}" ${a.id === state.anchorId ? 'selected' : ''}>기준: ${a.name}</option>`)}
       <option value="gps" ${state.anchorId === 'gps' ? 'selected' : ''}>기준: 내 GPS</option>`);
   }
-  // 지도를 움직인 뒤 기준점 목록 순서 갱신 (목록을 열어둔 중에는 건드리지 않음)
-  map.on('moveend', () => {
-    if (getPref(PREF_ANCHOR_NEAR_SORT) && document.activeElement !== $('#anchor-select', root)) renderAnchorSelect();
-  });
 
   function renderChips() {
     const places = store.list('places');
@@ -160,6 +194,7 @@ export function mount(root, store) {
   }
 
   function renderMarkers(rows) {
+    if (!markerLayer) return;
     markerLayer.clearLayers();
     for (const { p, cat } of rows) {
       if (p.lat == null) continue;
@@ -242,7 +277,7 @@ export function mount(root, store) {
   function select(id, { from = 'list' } = {}) {
     state.selectedId = id;
     const p = id ? store.get('places', id) : null;
-    if (p && p.lat != null && !state.collapsed) {
+    if (map && p && p.lat != null && !state.collapsed) {
       map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 });
     }
     const rows = filtered();
@@ -259,7 +294,7 @@ export function mount(root, store) {
     $('#map-bar', root).classList.toggle('hidden', !state.collapsed);
     const a = anchorPoint();
     $('#map-bar-text', root).textContent = `지도 펼치기${a?.name ? ` · ${a.name} 기준` : ''}`;
-    if (!state.collapsed) setTimeout(() => map.invalidateSize(), 50);
+    if (!state.collapsed) setTimeout(() => map?.invalidateSize(), 50);
   }
   function setCollapsed(on) {
     state.collapsed = on;
@@ -276,6 +311,7 @@ export function mount(root, store) {
     setHTML(btn, toAll ? html`<i class="fa-solid fa-expand text-sm"></i>` : html`<i class="fa-solid fa-house-flag text-sm text-amber-300"></i>`);
   }
   function resetView() {
+    if (!map) { toast('지도를 불러오는 중이에요.'); return; }
     if (state.resetNext === 'all') {
       // 기준점(없으면 지도 중심)에서 50km 안만: 잘못 찍힌 핀이나 다른 지역 장소 때문에 지도가 너무 넓어지지 않도록
       const a = anchorPoint();
@@ -318,7 +354,7 @@ export function mount(root, store) {
     if (e.target.value === 'gps') { locate(); return; }
     state.anchorId = e.target.value || null;
     const a = anchorPoint();
-    if (a && !state.collapsed) map.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
+    if (a && !state.collapsed) map?.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
     state.resetNext = 'all';
     renderResetButton();
     update();
@@ -328,12 +364,8 @@ export function mount(root, store) {
     try {
       state.gps = { ...(await currentPosition()), name: '내 위치' };
       state.anchorId = 'gps';
-      gpsMarker?.remove();
-      gpsMarker = L.marker([state.gps.lat, state.gps.lng], {
-        icon: L.divIcon({ className: '', iconSize: [16, 16], iconAnchor: [8, 8],
-          html: '<div class="w-4 h-4 rounded-full bg-neon-cyan border-2 border-white shadow-[0_0_12px_#00f2fe]"></div>' }),
-      }).addTo(map);
-      if (!state.collapsed) map.flyTo([state.gps.lat, state.gps.lng], ZOOM_ANCHOR);
+      drawGps();
+      if (!state.collapsed) map?.flyTo([state.gps.lat, state.gps.lng], ZOOM_ANCHOR);
       state.resetNext = 'all';
       renderResetButton();
       update();
@@ -370,13 +402,18 @@ export function mount(root, store) {
     'show-on-map': (el) => {
       setCollapsed(false);
       const p = store.get('places', el.dataset.id);
-      if (p?.lat != null) setTimeout(() => map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 }), 80);
+      if (p?.lat != null) setTimeout(() => map?.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 }), 80);
     },
   });
 
   applyCollapsed();
   renderResetButton();
   update();
+  // 리스트를 먼저 그린 뒤 지도 라이브러리를 불러와 붙임
+  loadMapLib().then(initMap).catch(() => {
+    const el = $('#map-loading', root);
+    if (el) el.textContent = '지도를 불러오지 못했어요. 온라인 상태에서 다시 열어주세요.';
+  });
 
   return {
     update,
@@ -386,7 +423,8 @@ export function mount(root, store) {
       root.style.height = prevStyle.height;
       root.style.paddingBottom = prevStyle.paddingBottom;
       root.style.flex = prevStyle.flex;
-      map.remove();
+      destroyed = true;
+      map?.remove();
     },
   };
 }
@@ -477,7 +515,8 @@ export function openPlaceDetail(store, id, from) {
 // =====================================================================
 // 추가/수정 시트: 링크 붙여넣기 → 좌표 자동 추출 → 미니 지도에서 핀 확인
 // =====================================================================
-export function openPlaceEditor(store, id, { near } = {}) {
+export async function openPlaceEditor(store, id, { near } = {}) {
+  await loadMapLib();   // 위치 선택 미니 지도용
   const p = id ? store.get('places', id) : {};
   const cats = store.categories();
   const pos = { lat: p.lat ?? null, lng: p.lng ?? null };
@@ -924,7 +963,8 @@ function geoReviewCard(p) {
     </div>`;
 }
 
-export function openGeoReview(store, type = 'review', { startId = null, onDone = null } = {}) {
+export async function openGeoReview(store, type = 'review', { startId = null, onDone = null } = {}) {
+  await loadMapLib();
   const queue = geoReviewList(store.list('places'), type).map((p) => p.id);
   if (!queue.length) { toast(type === 'review' ? '확인할 위치가 없어요.' : '자동으로 바뀐 위치가 없어요.'); return; }
   let idx = Math.max(0, startId ? queue.indexOf(startId) : 0);
