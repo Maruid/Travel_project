@@ -46,6 +46,35 @@ const num = (v: unknown) => {
   return Number.isFinite(n) && n > 0 && n < 1e9 ? Math.round(n) : null;
 };
 
+
+// 이 여행의 카테고리 목록 (앱이 보냄) → AI 가 번호로 고름
+type Cat = { id: string; name: string; kind: string };
+const KIND_LABEL: Record<string, string> = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
+function readCategories(v: unknown): Cat[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((c: any) => ({
+    id: typeof c?.id === 'string' && /^[0-9a-f-]{36}$/i.test(c.id) ? c.id : '',
+    name: typeof c?.name === 'string' ? c.name.replace(/\s+/g, ' ').trim().slice(0, 20) : '',
+    kind: typeof c?.kind === 'string' && KINDS.includes(c.kind) ? c.kind : 'etc',
+  })).filter((c) => c.id && c.name).slice(0, 40);
+}
+function categoryRule(cats: Cat[]) {
+  if (!cats.length) return '';
+  return `- category: 아래 카테고리 목록에서 이 장소에 가장 알맞은 것의 번호 하나 (숫자). 이름이 구체적인 카테고리(예: 라멘, 야키니쿠)가 맞으면 일반 카테고리(식당)보다 우선. 맞는 게 없으면 null.
+카테고리 목록:
+${cats.map((c, i) => `${i + 1}. ${c.name} (${KIND_LABEL[c.kind]})`).join('\n')}`;
+}
+function pickCategory(cats: Cat[], v: unknown): string | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : NaN;
+  if (Number.isInteger(n) && n >= 1 && n <= cats.length) return cats[n - 1].id;
+  if (typeof v === 'string') {
+    const name = v.replace(/\s+/g, '').toLowerCase();
+    const hit = cats.find((c) => c.name.replace(/\s+/g, '').toLowerCase() === name);
+    if (hit) return hit.id;
+  }
+  return null;
+}
+
 function buildPrompt(p: Record<string, unknown>, grounded: boolean, forceSearch = false) {
   const lines = [
     `장소 이름: ${p.name}`,
@@ -77,10 +106,11 @@ ${lines}
 - warn_badge: 정기 휴무일이나 꼭 알아야 할 주의점을 아주 짧게 (예: "화요 휴무", "현금만", "예약 필수"). 없으면 null. 12자 이내.
 - zone: 동네나 가까운 역 이름, 15자 이내.
 - kind: ${KINDS.join(' | ')} 중 하나.
+${categoryRule((p.cats as Cat[]) || [])}
 
 다른 설명 없이 아래 형식의 JSON 코드블록 하나만 출력하세요.
 \`\`\`json
-{"signature": null, "description": null, "price_min": null, "price_max": null, "currency": null, "visit_tip": null, "warn_badge": null, "zone": null, "kind": null}
+{"signature": null, "description": null, "price_min": null, "price_max": null, "currency": null, "visit_tip": null, "warn_badge": null, "zone": null, "kind": null, "category": null}
 \`\`\``;
 }
 
@@ -121,10 +151,11 @@ ${memo.slice(0, 6000)}
 - warn_badge: 정기 휴무일이나 꼭 알아야 할 주의점을 아주 짧게 (예: "화요 휴무", "현금만"). 없으면 null. 12자 이내.
 - zone: 동네나 가까운 역 이름, 15자 이내.
 - kind: ${KINDS.join(' | ')} 중 하나.
+${categoryRule((p.cats as Cat[]) || [])}
 
 JSON 코드블록 하나만 출력하세요.
 \`\`\`json
-{"signature": null, "description": null, "price_min": null, "price_max": null, "currency": null, "visit_tip": null, "warn_badge": null, "zone": null, "kind": null}
+{"signature": null, "description": null, "price_min": null, "price_max": null, "currency": null, "visit_tip": null, "warn_badge": null, "zone": null, "kind": null, "category": null}
 \`\`\``;
 }
 
@@ -308,6 +339,7 @@ async function run(req: Request, send: (o: unknown) => void) {
     mapsUrl: str(body.mapsUrl, 500),
     currency: str(body.currency, 3),
     facts: factsText(body.facts),
+    cats: readCategories(body.categories),
   };
   const attempts: Attempt[] = [];
   const usage: Usage = { prompt: 0, output: 0, tool: 0, thoughts: 0, total: 0 };
@@ -373,6 +405,7 @@ async function run(req: Request, send: (o: unknown) => void) {
     warn_badge: str(raw.warn_badge, 30),
     zone: str(raw.zone, 50),
     kind,
+    category_id: pickCategory(info.cats, raw.category),
   };
 
   // 근거 링크 + AI 가 검색한 말

@@ -139,10 +139,39 @@ function addUsage(u: Usage, data: any) {
 const KIND_TEXT: Record<string, string> = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const norm = (s: string) => s.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
 
+
+// 이 여행의 카테고리 목록 (앱이 보냄) → AI 가 번호로 고름
+type Cat = { id: string; name: string; kind: string };
+const KIND_LABEL: Record<string, string> = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
+function readCategories(v: unknown): Cat[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((c: any) => ({
+    id: typeof c?.id === 'string' && /^[0-9a-f-]{36}$/i.test(c.id) ? c.id : '',
+    name: typeof c?.name === 'string' ? c.name.replace(/\s+/g, ' ').trim().slice(0, 20) : '',
+    kind: typeof c?.kind === 'string' && KINDS.includes(c.kind) ? c.kind : 'etc',
+  })).filter((c) => c.id && c.name).slice(0, 40);
+}
+function categoryRule(cats: Cat[]) {
+  if (!cats.length) return '';
+  return `- category: 아래 카테고리 목록에서 이 장소에 가장 알맞은 것의 번호 하나 (숫자). 이름이 구체적인 카테고리(예: 라멘, 야키니쿠)가 맞으면 일반 카테고리(식당)보다 우선. 맞는 게 없으면 null.
+카테고리 목록:
+${cats.map((c, i) => `${i + 1}. ${c.name} (${KIND_LABEL[c.kind]})`).join('\n')}`;
+}
+function pickCategory(cats: Cat[], v: unknown): string | null {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && /^\d+$/.test(v.trim()) ? Number(v) : NaN;
+  if (Number.isInteger(n) && n >= 1 && n <= cats.length) return cats[n - 1].id;
+  if (typeof v === 'string') {
+    const name = v.replace(/\s+/g, '').toLowerCase();
+    const hit = cats.find((c) => c.name.replace(/\s+/g, '').toLowerCase() === name);
+    if (hit) return hit.id;
+  }
+  return null;
+}
+
 type Ctx = {
   keyword: string; destination: string | null; scope: 'anchor' | 'all';
   anchor: { name: string; lat: number | null; lng: number | null } | null;
-  count: number; dates: string | null; existing: string[]; currency: string | null;
+  count: number; dates: string | null; existing: string[]; currency: string | null; cats: Cat[];
 };
 
 function researchPrompt(c: Ctx) {
@@ -175,10 +204,11 @@ ${memo.slice(0, 8000)}
 - reason: 왜 추천하는지 한국어 1~2문장, 90자 이내.
 - price_min, price_max: 1인 기준 숫자만. 모르면 null. currency: ISO 통화 코드 (예: ${c.currency || 'JPY'}).
 - warn: 정기 휴무·현금만·예약 필수 같은 주의점, 12자 이내, 없으면 null.
+${categoryRule(c.cats)}
 
 JSON 코드블록 하나만 출력하세요.
 \`\`\`json
-{"items": [{"name": "", "local_name": null, "zone": null, "kind": "food", "reason": "", "price_min": null, "price_max": null, "currency": null, "warn": null}]}
+{"items": [{"name": "", "local_name": null, "zone": null, "kind": "food", "reason": "", "price_min": null, "price_max": null, "currency": null, "warn": null, "category": null}]}
 \`\`\``;
 }
 
@@ -235,6 +265,7 @@ async function run(req: Request, send: (o: unknown) => void) {
     dates: str(body.dates, 40),
     existing: Array.isArray(body.existing) ? body.existing.map((x: unknown) => str(x, 60)).filter(Boolean).slice(0, 150) as string[] : [],
     currency: str(body.currency, 3),
+    cats: readCategories(body.categories),
   };
   // 기준점은 이름 + 대략 좌표(약 1km 단위)로 구분 → "내 위치"처럼 이름이 같아도 위치가 다르면 새로 추천
   const anchorKey = anchor ? `${norm(anchor.name)}@${anchor.lat != null ? anchor.lat.toFixed(2) : ''},${anchor.lng != null ? anchor.lng.toFixed(2) : ''}` : '';
@@ -316,6 +347,7 @@ async function run(req: Request, send: (o: unknown) => void) {
       name, local_name: str(it.local_name, 60), zone: str(it.zone, 30), kind, kind_text: KIND_TEXT[kind],
       reason: str(it.reason, 200), price_min: pmin, price_max: pmax, currency: pmin || pmax ? (cur || ctx.currency) : null,
       warn: str(it.warn, 30),
+      category_id: pickCategory(ctx.cats, it.category),
     };
   }).filter((it: any) => {
     if (!it) return false;

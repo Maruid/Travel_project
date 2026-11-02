@@ -727,7 +727,7 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
         const catSel = form.elements.category_id;
         if (g.kind && !catSel.value) {
           const c = store.globalCategories.find((x) => x.kind === g.kind);
-          if (c) catSel.value = c.id;
+          if (c) { catSel.value = c.id; catSel.dataset.auto = '1'; }   // 종류만 보고 고른 값 → AI 결과로 바뀔 수 있음
         }
         // 새 장소이고 숙소·역이면 거리 계산 기준점으로 미리 체크 (해제 가능)
         if (!id && (g.kind === 'lodging' || g.kind === 'transit') && !form.elements.is_anchor.dataset.touched) {
@@ -838,6 +838,8 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
               priceMin: google.priceMin ?? null, priceMax: google.priceMax ?? null, priceCurrency: google.priceCurrency ?? null,
               closed: google.warnBadge || null,
             } : null,
+            // AI 가 이 중에서 카테고리를 고름 (커스텀 먼저)
+            categories: store.categories().map((c) => ({ id: c.id, name: c.name, kind: c.kind })).slice(0, 40),
           }, ticker.onEvent);
           const f = r.fields || {};
           // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
@@ -848,11 +850,12 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
             if (fill('price_max', f.price_max, 'ai')) filled.push('price_max');
             if (f.price_currency) fill('price_currency', f.price_currency, 'ai');
           }
-          // 카테고리가 비어 있으면 같은 종류의 기본 카테고리를 선택
+          // 카테고리: 비어 있거나 자동으로 고른 값이면 AI 가 고른 것으로 (없으면 같은 종류의 기본 카테고리)
           const catSel = form.elements.category_id;
-          if (f.kind && !catSel.value) {
-            const c = store.globalCategories.find((x) => x.kind === f.kind);
-            if (c) { catSel.value = c.id; filled.push('category'); }
+          if (!catSel.value || catSel.dataset.auto === '1') {
+            const pick = (f.category_id && store.category(f.category_id) ? f.category_id : null)
+              || (!catSel.value && f.kind ? store.globalCategories.find((x) => x.kind === f.kind)?.id : null);
+            if (pick && pick !== catSel.value) { catSel.value = pick; catSel.dataset.auto = '1'; filled.push('category'); }
           }
           renderAiResult(r, filled.length);
           toast(filled.length ? `${filled.length}개 항목을 채웠어요. 확인 후 저장하세요.` : '새로 채울 수 있는 정보가 없었어요.');
@@ -874,6 +877,8 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));
     // 사용자가 기준점 체크를 직접 바꿨으면 자동 체크하지 않음
     form.elements.is_anchor.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
+    // 사용자가 카테고리를 직접 고르면 자동 선택이 덮어쓰지 않음
+    form.elements.category_id.addEventListener('change', (e) => { delete e.target.dataset.auto; });
 
     // AI 추천에서 [추가]로 온 경우: 추천 내용을 초안으로 넣고 구글 지도에서 실제 장소를 확인
     if (prefill && !id) {
@@ -886,8 +891,9 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
         fill('price_max', prefill.price_max, 'ai');
         fill('price_currency', prefill.currency, 'ai');
       }
-      const c = prefill.kind && store.globalCategories.find((x) => x.kind === prefill.kind);
-      if (c && !form.elements.category_id.value) form.elements.category_id.value = c.id;
+      const catId = (prefill.category_id && store.category(prefill.category_id) ? prefill.category_id : null)
+        || (prefill.kind && store.globalCategories.find((x) => x.kind === prefill.kind)?.id);
+      if (catId && !form.elements.category_id.value) form.elements.category_id.value = catId;
       // 현지 이름이 있으면 그걸로 찾는 게 더 정확함. 실패하면 상태 줄에 "찾지 못함"이 표시됨
       loadGoogle({ name: prefill.local_name || prefill.name, auto: true });
     }
