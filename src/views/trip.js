@@ -91,9 +91,10 @@ export async function render(app, params) {
     window.scrollTo(0, 0);
   }
 
-  const unsub = store.subscribe(() => {
+  // 동기화 상태만 바뀐 알림(status)은 헤더만 갱신. 내용이 바뀐 경우에만 탭을 다시 그림
+  const unsub = store.subscribe((_, kind) => {
     renderHeader();
-    active?.instance?.update?.();
+    if (kind !== 'status') active?.instance?.update?.();
   });
   renderHeader();
   await showTab(params.tab || 'places');

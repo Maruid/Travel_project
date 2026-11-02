@@ -29,10 +29,10 @@
   scrollbar-width: none;
   &::-webkit-scrollbar { display: none; }
 }
+/* 카드에는 배경 흐림(backdrop-filter)을 쓰지 않음: 카드 수십 장을 스크롤할 때 휴대폰 그래픽 부담이 큼.
+   대신 불투명도를 높여 비슷한 느낌 유지. (헤더·하단 탭바처럼 한두 개뿐인 곳은 glass-nav 에서 흐림 유지) */
 @utility glass-card {
-  background: rgba(21, 32, 59, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(21, 32, 59, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }

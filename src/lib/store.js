@@ -20,6 +20,17 @@ export const CONTENT_TABLES = [
 const LOCAL_ONLY = ['created_at', 'updated_at', 'updated_by', 'created_by'];
 const stripMeta = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !LOCAL_ONLY.includes(k)));
 
+const INSERT_CHUNK = 100;     // 한 번에 보내는 추가 행 수
+const UPDATE_PARALLEL = 6;    // 수정 요청 동시 전송 수
+const CACHE_SAVE_DELAY = 400; // 기기 캐시 저장을 모아서 하는 간격(ms)
+
+// 작업 목록을 동시에 n개씩 실행
+async function runLimited(items, n, fn) {
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const it = items[i++]; await fn(it); } };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+}
+
 const isNetworkError = (err) =>
   !navigator.onLine || /fetch|network|Failed to|Load failed|timeout/i.test(err?.message || '');
 
@@ -78,6 +89,9 @@ export class TripStore {
     this.flushing = false;
     this.status = 'idle';     // idle | syncing | offline | error
     this._emitTimer = null;
+    this._emitKind = null;
+    this._cacheTimer = null;
+    this._flushTimer = null;
 
     this._onOnline = () => this.sync();
     window.addEventListener('online', this._onOnline);
@@ -85,8 +99,13 @@ export class TripStore {
 
     // navigator.onLine 은 "와이파이는 연결됐지만 인터넷은 안 되는" 상태를 못 잡으므로
     // 화면에 다시 보일 때 + 보낼 게 남아 있으면 30초마다 재시도
-    this._onVisible = () => { if (document.visibilityState === 'visible') this.sync(); };
+    this._onVisible = () => {
+      if (document.visibilityState === 'visible') this.sync();
+      else this.saveCacheNow();   // 앱을 내리기 전에 모아둔 캐시 저장
+    };
     document.addEventListener('visibilitychange', this._onVisible);
+    this._onPageHide = () => this.saveCacheNow();
+    window.addEventListener('pagehide', this._onPageHide);
     this._retryTimer = setInterval(() => {
       if (this.outbox.length && !this.flushing && document.visibilityState === 'visible') this.sync();
     }, 30000);
@@ -94,9 +113,16 @@ export class TripStore {
 
   // ---------------------------------------------------------- 구독/알림
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
-  emit() {
+  // kind: 'data'(내용이 바뀜 → 화면 다시 그림) | 'status'(동기화 상태·대기 건수만 → 헤더만)
+  //  30ms 안에 여러 번 불리면 하나로 묶고, 하나라도 data 면 data
+  emit(kind = 'data') {
+    if (kind === 'data' || !this._emitKind) this._emitKind = kind;
     clearTimeout(this._emitTimer);
-    this._emitTimer = setTimeout(() => this.listeners.forEach((fn) => fn(this)), 30);
+    this._emitTimer = setTimeout(() => {
+      const k = this._emitKind || 'data';
+      this._emitKind = null;
+      this.listeners.forEach((fn) => fn(this, k));
+    }, 30);
   }
 
   // ---------------------------------------------------------- 캐시
@@ -117,7 +143,16 @@ export class TripStore {
     return !!this.trip;
   }
 
+  // 변경이 몰릴 때 매번 전체를 저장하지 않도록 잠깐 모았다가 한 번에 저장
   saveCache() {
+    clearTimeout(this._cacheTimer);
+    this._cacheTimer = setTimeout(() => this.saveCacheNow(), CACHE_SAVE_DELAY);
+  }
+
+  saveCacheNow() {
+    clearTimeout(this._cacheTimer);
+    this._cacheTimer = null;
+    if (!this.trip) return;
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify({
         trip: this.trip, budget: this.budget, members: this.members, devices: this.devices, invite: this.invite,
@@ -144,7 +179,10 @@ export class TripStore {
     window.removeEventListener('online', this._onOnline);
     window.removeEventListener('offline', this._onOnline);
     document.removeEventListener('visibilitychange', this._onVisible);
+    window.removeEventListener('pagehide', this._onPageHide);
     clearInterval(this._retryTimer);
+    clearTimeout(this._flushTimer);
+    if (this._cacheTimer) this.saveCacheNow();
     if (this.channel) supabase.removeChannel(this.channel);
     this.listeners.clear();
   }
@@ -156,63 +194,77 @@ export class TripStore {
   }
 
   async _sync() {
-    if (!navigator.onLine) { this.status = 'offline'; this.emit(); return; }
-    this.status = 'syncing'; this.emit();
+    if (!navigator.onLine) { this.status = 'offline'; this.emit('status'); return; }
+    this.status = 'syncing'; this.emit('status');
+    let changed = false;
     try {
       await this.flush();
-      await this.pull();
+      changed = await this.pull();
       this.status = this.outbox.length ? 'offline' : 'idle';
     } catch (e) {
       this.status = isNetworkError(e) ? 'offline' : 'error';
       if (!isNetworkError(e)) console.error(e);
     }
-    this.saveCache();
-    this.emit();
+    if (changed) this.saveCache();
+    this.emit(changed ? 'data' : 'status');   // 받은 게 없으면 헤더만 갱신
   }
 
   // ---------------------------------------------------------- 서버 → 로컬
+  // 반환: 화면에 보이는 내용이 바뀌었는지
   async pull() {
     const id = this.tripId;
-    const [trip, budget, members, invite, globals] = await Promise.all([
+    const before = this.headSignature();
+    // 기본 정보 · 기기 목록 · 콘텐츠 8개 표를 한 번에 병렬로 요청 (서버 왕복 1번)
+    const contentQ = CONTENT_TABLES.map((t) => {
+      let q = supabase.from(t).select('*').eq('trip_id', id).order('updated_at').limit(5000);
+      if (this.cursors[t]) q = q.gt('updated_at', this.cursors[t]);
+      return q;
+    });
+    const [trip, budget, members, invite, globals, devices, ...contents] = await Promise.all([
       supabase.from('trips').select('*').eq('id', id).maybeSingle(),
       supabase.from('trip_budgets').select('*').eq('trip_id', id).maybeSingle(),
       supabase.from('trip_members').select('*').eq('trip_id', id).order('created_at'),
       supabase.from('trip_invites').select('*').eq('trip_id', id).maybeSingle(),
       supabase.from('categories').select('*').is('trip_id', null).is('deleted_at', null).order('sort_order'),
+      // 추가 기기 목록 (migration_002 이전 DB 에서는 테이블이 없을 수 있으므로 실패해도 무시)
+      supabase.from('trip_member_devices').select('id, member_id, user_id, created_at, last_seen_at').eq('trip_id', id),
+      ...contentQ,
     ]);
-    for (const r of [trip, budget, members, invite, globals]) if (r.error) throw r.error;
+    for (const r of [trip, budget, members, invite, globals, ...contents]) if (r.error) throw r.error;
     if (!trip.data) throw new Error('FORBIDDEN');
 
     // 받아오는 사이 저장된 더 새 값(저장 응답·실시간 알림)을 옛날 응답으로 덮어쓰지 않도록 수정 시각 비교
     this.trip = newer(this.trip, trip.data);
     this.budget = newer(this.budget, budget.data);
     this.members = members.data;
-    // 추가 기기 목록 (migration_002 이전 DB 에서는 테이블이 없을 수 있으므로 실패해도 무시)
-    const devices = await supabase.from('trip_member_devices').select('id, member_id, user_id, created_at, last_seen_at').eq('trip_id', id);
     this.devices = devices.error ? [] : devices.data;
     this.invite = invite.data;
     this.globalCategories = globals.data;
 
-    await Promise.all(CONTENT_TABLES.map(async (t) => {
-      let q = supabase.from(t).select('*').eq('trip_id', id).order('updated_at').limit(5000);
-      if (this.cursors[t]) q = q.gt('updated_at', this.cursors[t]);
-      const { data, error } = await q;
-      if (error) throw error;
-      data.forEach((row) => this.applyRemote(t, row, false));
-    }));
+    let applied = 0;
+    contents.forEach((r, i) => r.data.forEach((row) => { if (this.applyRemote(CONTENT_TABLES[i], row, false)) applied++; }));
     this.applyOutboxLocally();
+    return applied > 0 || this.headSignature() !== before;
+  }
+
+  // 여행 정보 · 예산 · 멤버 등 작은 데이터의 비교용 문자열
+  headSignature() {
+    return JSON.stringify([this.trip, this.budget, this.members, this.devices, this.invite, this.globalCategories?.length]);
   }
 
   applyRemote(table, row, notify = true) {
     if (!row?.id) return;
     const cur = this.tables[table].get(row.id);
-    if (newer(cur, row) !== row) return;   // 이미 더 새 버전이 있으면 무시
+    if (newer(cur, row) !== row) return false;   // 이미 더 새 버전이 있으면 무시
+    // 같은 버전이면 건너뜀 (내 저장이 실시간 알림으로 되돌아온 경우 등 → 화면을 다시 그리지 않음)
+    if (cur && cur.updated_at && ts(cur.updated_at) === ts(row.updated_at)) return false;
     row = keepValidCodes(row, cur);
     this.tables[table].set(row.id, row);
     if (row.updated_at && (!this.cursors[table] || row.updated_at > this.cursors[table])) {
       this.cursors[table] = row.updated_at;
     }
     if (notify) { this.applyOutboxLocally(); this.saveCache(); this.emit(); }
+    return true;
   }
 
   // 아직 서버에 못 보낸 변경을 로컬 데이터 위에 다시 적용
@@ -265,40 +317,26 @@ export class TripStore {
     this.saveOutbox();
   }
 
+  // 쓰기 직후 바로 보내지 않고 같은 순간의 변경을 모아서 보냄 (장소 61곳 가져오기 → 요청 1번)
+  scheduleFlush() {
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => { this._flushTimer = null; this.flush(); }, 0);
+  }
+
   async flush() {
     if (this.flushing || !navigator.onLine) return;
     this.flushing = true;
+    let dropped = false;
     try {
       while (this.outbox.length) {
-        const op = this.outbox[0];
-        op.sending = true;
-        let res;
-        if (op.table === 'trip_budgets') {
-          res = await supabase.from('trip_budgets').update(op.data).eq('trip_id', this.tripId).select().maybeSingle();
-        } else if (op.op === 'insert') {
-          res = await supabase.from(op.table)
-            .upsert(stripMeta(op.data), { onConflict: 'id', ignoreDuplicates: true }).select().maybeSingle();
-        } else {
-          res = await supabase.from(op.table).update(op.data).eq('id', op.id).select().maybeSingle();
-        }
-
-        if (res.error) {
-          op.sending = false;
-          if (isNetworkError(res.error)) break;          // 오프라인: 다음 기회에 재시도
-          // 권한/제약 위반 등은 재시도해도 실패 → 버리고 서버 상태로 되돌림
-          toast(`저장 실패: ${errorText(res.error)}`, 'error');
-          this.outbox.shift();
-          this.saveOutbox();
-          if (op.op === 'insert') this.tables[op.table]?.delete(op.id);
-          continue;
-        }
-
-        this.outbox.shift();
+        const batch = this.outbox.slice();          // 지금 쌓인 것 전부 (보내는 중에 쌓이는 건 다음 차례)
+        batch.forEach((o) => { o.sending = true; });
+        const r = await this.sendBatch(batch);
+        const finished = new Set([...r.done, ...r.dropped]);
+        this.outbox = this.outbox.filter((o) => !finished.has(o));
         this.saveOutbox();
-        if (res.data) {
-          if (op.table === 'trip_budgets') this.budget = newer(this.budget, res.data);
-          else this.applyRemote(op.table, res.data, false);
-        }
+        if (r.dropped.length) dropped = true;
+        if (r.offline) break;                        // 오프라인: 남은 건 다음 기회에 재시도
       }
     } catch (e) {
       if (!isNetworkError(e)) throw e;
@@ -307,8 +345,72 @@ export class TripStore {
       this.flushing = false;
       this.applyOutboxLocally();
       this.saveCache();
-      this.emit();
+      // 저장 실패로 되돌린 게 있으면 화면도 다시 그림, 아니면 헤더(대기 건수)만
+      this.emit(dropped ? 'data' : 'status');
     }
+  }
+
+  // 순서: 예산 → 추가(표별로 묶음, 처음 나온 표 순서대로: 카테고리가 장소보다 먼저) → 수정(동시 6개)
+  async sendBatch(batch) {
+    const done = []; const dropped = [];
+    const fail = (op, err) => {
+      // 권한/제약 위반 등은 재시도해도 실패 → 버리고 서버 상태로 되돌림
+      toast(`저장 실패: ${errorText(err)}`, 'error');
+      dropped.push(op);
+      if (op.op === 'insert') this.tables[op.table]?.delete(op.id);
+    };
+
+    for (const op of batch.filter((o) => o.table === 'trip_budgets')) {
+      const res = await supabase.from('trip_budgets').update(op.data).eq('trip_id', this.tripId).select().maybeSingle();
+      if (res.error) { if (isNetworkError(res.error)) return { done, dropped, offline: true }; fail(op, res.error); continue; }
+      done.push(op);
+      if (res.data) this.budget = newer(this.budget, res.data);
+    }
+
+    const inserts = batch.filter((o) => o.op === 'insert');
+    for (const t of [...new Set(inserts.map((o) => o.table))]) {
+      const ops = inserts.filter((o) => o.table === t);
+      for (let i = 0; i < ops.length; i += INSERT_CHUNK) {
+        const chunk = ops.slice(i, i + INSERT_CHUNK);
+        const res = await supabase.from(t)
+          .upsert(chunk.map((o) => stripMeta(o.data)), { onConflict: 'id', ignoreDuplicates: true, defaultToNull: false })
+          .select();
+        if (!res.error) {
+          done.push(...chunk);
+          (res.data || []).forEach((row) => this.applyRemote(t, row, false));
+          continue;
+        }
+        if (isNetworkError(res.error)) return { done, dropped, offline: true };
+        // 묶음 중 한 건 때문에 전체가 실패 → 한 건씩 다시 보내서 문제 있는 것만 버림
+        for (const op of chunk) {
+          const r1 = await supabase.from(t).upsert(stripMeta(op.data), { onConflict: 'id', ignoreDuplicates: true }).select().maybeSingle();
+          if (r1.error) { if (isNetworkError(r1.error)) return { done, dropped, offline: true }; fail(op, r1.error); continue; }
+          done.push(op);
+          if (r1.data) this.applyRemote(t, r1.data, false);
+        }
+      }
+    }
+
+    // 같은 행의 수정이 여러 개면 순서대로 합쳐서 한 번에 (동시에 보내도 순서가 꼬이지 않게)
+    const merged = new Map();
+    for (const op of batch.filter((o) => o.op === 'update' && o.table !== 'trip_budgets')) {
+      const key = `${op.table}:${op.id}`;
+      const m = merged.get(key);
+      if (m) { m.ops.push(op); Object.assign(m.data, op.data); } else merged.set(key, { table: op.table, id: op.id, data: { ...op.data }, ops: [op] });
+    }
+    let offline = false;
+    await runLimited([...merged.values()], UPDATE_PARALLEL, async (m) => {
+      if (offline) return;
+      const res = await supabase.from(m.table).update(m.data).eq('id', m.id).select().maybeSingle();
+      if (res.error) {
+        if (isNetworkError(res.error)) { offline = true; return; }
+        m.ops.forEach((op) => fail(op, res.error));
+        return;
+      }
+      done.push(...m.ops);
+      if (res.data) this.applyRemote(m.table, res.data, false);
+    });
+    return { done, dropped, offline };
   }
 
   // ---------------------------------------------------------- 쓰기 API
@@ -318,7 +420,7 @@ export class TripStore {
     this.tables[table].set(row.id, { ...row, created_at: now, updated_at: now, created_by: this.userId });
     this.enqueue({ op: 'insert', table, id: row.id, data: row });
     this.emit();
-    this.flush();
+    this.scheduleFlush();
     return row.id;
   }
 
@@ -327,7 +429,7 @@ export class TripStore {
     if (cur) this.tables[table].set(id, { ...cur, ...patch });
     this.enqueue({ op: 'update', table, id, data: patch });
     this.emit();
-    this.flush();
+    this.scheduleFlush();
   }
 
   remove(table, id) {
@@ -340,7 +442,7 @@ export class TripStore {
     if (prev) { prev.data = { ...prev.data, ...patch }; this.saveOutbox(); }
     else this.enqueue({ op: 'update', table: 'trip_budgets', id: this.tripId, data: patch });
     this.emit();
-    this.flush();
+    this.scheduleFlush();
   }
 
   // ---------------------------------------------------------- 읽기 API
