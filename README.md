@@ -23,7 +23,11 @@ src/
 supabase/
   schema.sql           테이블, RLS, RPC
   seed_osaka.sql       기존 오사카 데이터
-  functions/resolve-maps-link/   짧은 구글 맵 링크 → 최종 URL
+  migration_00N_*.sql  추가 기능 마이그레이션 (002~007, 번호 순서대로 실행)
+  functions/
+    resolve-maps-link/ 짧은 구글 맵 링크 → 최종 URL
+    enrich-place/      Gemini AI 정보 채우기
+    place-details/     구글 Places API 조회
 .github/workflows/
   deploy.yml           main push → 빌드 → Pages 배포
   keepalive.yml        3일마다 Supabase ping + 저장소 활동 유지
@@ -51,7 +55,7 @@ supabase/
 2. Edge Function `enrich-place` 생성 (이름 정확히) → `supabase/functions/enrich-place/index.ts` 붙여넣기 → **Verify JWT 끄기**
 3. Google AI Studio(aistudio.google.com)에서 API 키 발급 →
    Supabase **Edge Functions → Secrets** 에 `GEMINI_API_KEY` 등록
-   (모델을 바꾸고 싶으면 `GEMINI_MODEL` 도 등록. 기본 `gemini-flash-latest`)
+   (모델을 바꾸고 싶으면 `GEMINI_MODEL` 도 등록. 기본은 `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` 순서. Google 검색 그라운딩을 쓰므로 AI Studio 결제 설정 필요)
 
 ### 2. GitHub
 1. 저장소를 **public** 으로 만들고 이 폴더를 push (무료 계정 Pages 조건)
@@ -72,6 +76,13 @@ supabase/
 `https://<github-id>.github.io/<repo>/#/join/<token>` 접속 → **"준" 선택** → owner 가 됨.
 본인이 선택하기 전에는 링크를 공유하지 마세요 (비어 있는 owner 자리는 먼저 고른 사람이 가져감).
 이후 설정 탭에서 Google 계정 연결을 권장합니다.
+
+> 전체 구조·규칙·결정 사항은 `docs/PROJECT_GUIDE.md` 참고 (작업 전 먼저 읽기)
+
+### 1-3. 이후 마이그레이션
+SQL Editor 에서 `migration_003` → `004` → … → `009` 순서로 실행 (각 파일 상단에 내용 설명).
+
+Edge Function `recommend-places`(AI 장소 추천)도 같은 방식으로 만들고 **Verify JWT 끄기**. Secrets 는 `GEMINI_API_KEY` 를 같이 씀.
 
 ## 로컬 개발
 ```bash
@@ -94,12 +105,12 @@ npm test                     # 링크 파서 / escape / 라우터 테스트
 - **데이터**: 여행별로 localStorage 에 캐시 → 한 번 열어본 여행은 오프라인에서도 열람 가능
 - **변경**: outbox 에 쌓였다가 온라인 복귀 / 화면 복귀 / 30초마다 재전송 (헤더 배지에 대기 건수 표시)
 - **로그인**: 오프라인이라 토큰 갱신이 안 돼도 마지막으로 확인된 사용자로 동작
-- **지도**: 한 번 본 지역은 자동 캐시. 장소 탭 지도 오른쪽 위 ⬇ 버튼으로 이 여행 장소 주변 지도를 미리 저장
+- **지도**: 한 번 본 지역은 자동 캐시. 설정 탭 → 지도 · 오프라인 → 지도 저장으로 이 여행 장소 주변 지도를 미리 저장
   (z10~14, 최대 1,500장. 처음 보는 지명 글자는 오프라인에서 표시되지 않을 수 있으니 출발 전 지도를 한 번 둘러보기 권장)
 
 ### 출발 전 체크리스트
 1. 여행 화면을 한 번 열어서 데이터가 내려받아지게 하기
-2. 장소 탭 ⬇ 버튼으로 지도 저장 (와이파이)
+2. 설정 탭 → 오프라인 지도 저장 (와이파이)
 3. **홈 화면에 추가** (아이폰: Safari 공유 → 홈 화면에 추가 / 안드로이드: 메뉴 → 앱 설치)
    - 아이폰 Safari 는 오래 방문하지 않은 사이트의 저장 데이터를 지울 수 있는데, 홈 화면 앱은 예외
 

@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js';
 import { parseMapsUrl, isShortMapsLink, isGoogleMapsUrl } from './maps-link.js';
+import { streamFunction } from './ai-stream.js';
 
 // 링크 → 좌표/이름. 짧은 링크는 Edge Function(resolve-maps-link)으로 펼친 뒤 파싱
 export async function lookupMapsLink(input) {
@@ -25,27 +26,15 @@ export async function lookupMapsLink(input) {
   return { ...best, resolvedUrl: data?.finalUrl || url };
 }
 
-// AI 정보 채우기 (Edge Function enrich-place → Gemini + Google 검색)
-const AI_ERRORS = {
-  AI_LIMIT: '오늘 이 여행의 AI 사용 한도(50회)를 모두 썼어요.',
-  AI_BUSY: 'AI 무료 사용량이 잠시 초과됐어요. 1분 뒤 다시 시도해 주세요.',
-  NO_API_KEY: 'AI 키가 아직 설정되지 않았어요. (관리자: Edge Function Secrets 에 GEMINI_API_KEY 등록)',
-  FORBIDDEN: '이 여행의 멤버만 사용할 수 있어요.',
-  AI_PARSE: 'AI 응답을 해석하지 못했어요. 다시 시도해 주세요.',
-};
-
-export async function enrichPlace(params) {
-  if (!navigator.onLine) throw new Error('온라인 상태에서만 사용할 수 있어요.');
-  const { data, error } = await supabase.functions.invoke('enrich-place', { body: params });
-  if (error) {
-    let body = null;
-    try { body = await error.context?.json(); } catch {}
-    const e = new Error(AI_ERRORS[body?.error] || 'AI 정보를 가져오지 못했어요. 잠시 후 다시 시도해 주세요.');
-    e.attempts = body?.attempts || [];   // 어떤 모델이 어떤 한도에 걸렸는지 (진단용)
-    if (e.attempts.length) console.warn('enrich-place attempts', e.attempts);
+// AI 정보 채우기 (Edge Function enrich-place → Gemini + Google 검색, 스트리밍으로 진행 단계 수신)
+//  onEvent: 진행 단계 이벤트 (progressTicker().onEvent 를 넘기면 됨)
+export async function enrichPlace(params, onEvent) {
+  try {
+    return await streamFunction('enrich-place', params, onEvent);
+  } catch (e) {
+    if (e.code === 'AI_LIMIT') e.message = '오늘 이 여행의 AI 정보 채우기 한도(50회)를 모두 썼어요.';
     throw e;
   }
-  return data;
 }
 
 // 무료 지오코딩 (OpenStreetMap Nominatim)

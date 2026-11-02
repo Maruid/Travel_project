@@ -9,6 +9,11 @@
 //   - 검색 그라운딩이 모든 모델에서 막히면(무료 티어 한도 0 등) 검색 없이 한 번 더 시도하고
 //     grounded:false 로 표시 → 클라이언트는 가격·휴무처럼 틀리기 쉬운 값은 자동으로 채우지 않음
 //   - 결과는 "초안": 클라이언트가 빈 칸만 채우고 사용자가 확인 후 저장
+//   - 응답은 스트리밍(NDJSON, 한 줄에 JSON 하나): 단계 진행 → 마지막에 결과
+//       {"t":"stage","stage":"check|search|extract","state":"start|done","ms":1234}
+//       {"t":"result", fields, sources, queries, grounded, searched, remaining, model, timings, attempts}
+//       {"t":"error","error":"AI_LIMIT", attempts}
+//   - 호출마다 ai_calls 에 토큰 수·걸린 시간 기록 (migration_009, 없으면 기록만 건너뜀)
 // =====================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -218,35 +223,80 @@ function factsText(f: any): string | null {
   return lines.length ? lines.join('\n') : null;
 }
 
-Deno.serve(async (req) => {
+// 사용량 합산 (Gemini usageMetadata)
+type Usage = { prompt: number; output: number; tool: number; thoughts: number; total: number };
+function addUsage(u: Usage, data: any) {
+  const m = data?.usageMetadata || {};
+  u.prompt += Number(m.promptTokenCount || 0);
+  u.output += Number(m.candidatesTokenCount || 0);
+  u.tool += Number(m.toolUsePromptTokenCount || 0);
+  u.thoughts += Number(m.thoughtsTokenCount || 0);
+  u.total += Number(m.totalTokenCount || 0);
+}
+
+Deno.serve((req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'METHOD_NOT_ALLOWED' }, 405);
 
+  const stream = new ReadableStream({
+    async start(ctrl) {
+      const enc = new TextEncoder();
+      const send = (o: unknown) => { try { ctrl.enqueue(enc.encode(JSON.stringify(o) + '\n')); } catch { /* 연결 끊김 */ } };
+      try { await run(req, send); } catch (e) { console.error('enrich failed', e); send({ t: 'error', error: 'AI_FAILED' }); }
+      try { ctrl.close(); } catch { /* 이미 닫힘 */ }
+    },
+  });
+  return new Response(stream, { headers: { ...CORS, 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache' } });
+});
+
+async function run(req: Request, send: (o: unknown) => void) {
+  const t0 = Date.now();
+  const timings: Record<string, number> = {};
+  const stage = (name: string, state: 'start' | 'done', since?: number) => {
+    const ms = since != null ? Date.now() - since : undefined;
+    if (ms != null) timings[name] = ms;
+    send({ t: 'stage', stage: name, state, ms });
+  };
+  const fail = (error: string, extra: Record<string, unknown> = {}) => send({ t: 'error', error, ...extra });
+
   // ---- 인증 + 사용량 (사용자 권한으로 RPC 호출 → 여행 멤버인지도 함께 확인) ----
+  const tCheck = Date.now();
+  stage('check', 'start');
   const auth = req.headers.get('Authorization') || '';
   const jwt = auth.replace(/^Bearer\s+/i, '');
-  if (!jwt) return json({ error: 'AUTH_REQUIRED' }, 401);
+  if (!jwt) return fail('AUTH_REQUIRED');
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!,
     { global: { headers: { Authorization: `Bearer ${jwt}` } } },
   );
-  const { data: { user } } = await supabase.auth.getUser(jwt);
-  if (!user) return json({ error: 'AUTH_REQUIRED' }, 401);
-
   let body: Record<string, unknown>;
-  try { body = await req.json(); } catch { return json({ error: 'BAD_REQUEST' }, 400); }
+  try { body = await req.json(); } catch { return fail('BAD_REQUEST'); }
   const name = str(body.name, 100);
-  if (!name || typeof body.tripId !== 'string') return json({ error: 'BAD_REQUEST' }, 400);
-
+  if (!name || typeof body.tripId !== 'string') return fail('BAD_REQUEST');
   const key = Deno.env.get('GEMINI_API_KEY');
-  if (!key) return json({ error: 'NO_API_KEY' }, 500);
+  if (!key) return fail('NO_API_KEY');
 
-  const { data: remaining, error: quotaError } = await supabase.rpc('consume_ai_quota', { p_trip: body.tripId });
-  if (quotaError) {
-    const code = /AI_LIMIT/.test(quotaError.message) ? 'AI_LIMIT' : 'FORBIDDEN';
-    return json({ error: code }, code === 'AI_LIMIT' ? 429 : 403);
+  // 로그인 확인 · 여행당 하루 한도 · 사용 기록 시작을 동시에
+  const [{ data: { user } }, quota, call] = await Promise.all([
+    supabase.auth.getUser(jwt),
+    supabase.rpc('consume_ai_quota', { p_trip: body.tripId }),
+    supabase.rpc('begin_ai_call', { p_trip: body.tripId, p_kind: 'enrich' }),
+  ]);
+  const callId: number | null = call.error ? null : call.data?.id ?? null;   // migration_009 전이면 null (기록만 생략)
+  const finish = (ok: boolean, model: string | null, u?: Usage) => callId == null ? Promise.resolve() :
+    supabase.rpc('finish_ai_call', {
+      p_id: callId, p_ok: ok, p_model: model,
+      p_prompt: u?.prompt ?? null, p_output: u?.output ?? null, p_tool: u?.tool ?? null,
+      p_thoughts: u?.thoughts ?? null, p_total: u?.total ?? null, p_ms: Date.now() - t0,
+    }).then(() => {}, () => {});
+  if (!user) { await finish(false, null); return fail('AUTH_REQUIRED'); }
+  if (quota.error) {
+    await finish(false, null);
+    return fail(/AI_LIMIT/.test(quota.error.message) ? 'AI_LIMIT' : 'FORBIDDEN');
   }
+  const remaining = quota.data;
+  stage('check', 'done', tCheck);
 
   // ---- Gemini 호출: 검색 그라운딩 → (전부 한도 초과면) 검색 없이 ----
   const info = {
@@ -260,6 +310,7 @@ Deno.serve(async (req) => {
     facts: factsText(body.facts),
   };
   const attempts: Attempt[] = [];
+  const usage: Usage = { prompt: 0, output: 0, tool: 0, thoughts: 0, total: 0 };
   const searched = (r: { data: any } | null) => !!r && diagnose(r.data).searched;
   const textOf = (r: { data: any } | null) =>
     (r?.data?.candidates?.[0]?.content?.parts || []).map((p: { text?: string }) => p.text || '').join('').trim();
@@ -269,23 +320,32 @@ Deno.serve(async (req) => {
   let grounded = true;
   try {
     // 1단계: 검색 조사
+    const tSearch = Date.now();
+    stage('search', 'start');
     research = await callGemini(key, researchPrompt(info), true, attempts);
+    if (research) addUsage(usage, research.data);
+    stage('search', 'done', tSearch);
+    const tExtract = Date.now();
     if (research && textOf(research)) {
       // 2단계: 메모 → JSON (검색 없이)
+      stage('extract', 'start');
       result = await callGemini(key, extractPrompt(info, textOf(research)), false, attempts);
       grounded = searched(research);
     } else if (!research && attempts.length && attempts.every((a) => a.status === 404 || a.status === 429)) {
       // 검색을 쓸 수 없는 경우(무료 티어 등): 검색 없이 보수적으로
+      stage('extract', 'start');
       grounded = false;
       result = await callGemini(key, buildPrompt(info, false), false, attempts);
     }
+    if (result) { addUsage(usage, result.data); stage('extract', 'done', tExtract); }
   } catch (e) {
     console.error('gemini fetch failed', e);
-    return json({ error: 'AI_FAILED', attempts }, 502);
+    await finish(false, null, usage);
+    return fail('AI_FAILED', { attempts });
   }
   if (!result) {
-    const busy = attempts.some((a) => a.status === 429);
-    return json({ error: busy ? 'AI_BUSY' : 'AI_FAILED', attempts }, busy ? 429 : 502);
+    await finish(false, null, usage);
+    return fail(attempts.some((a) => a.status === 429) ? 'AI_BUSY' : 'AI_FAILED', { attempts });
   }
 
   const { model } = result;
@@ -294,7 +354,8 @@ Deno.serve(async (req) => {
   let raw: Record<string, unknown> = {};
   try { raw = JSON.parse(match?.[1] || '{}'); } catch {
     console.error('parse failed', text.slice(0, 500));
-    return json({ error: 'AI_PARSE', attempts }, 502);
+    await finish(false, model, usage);
+    return fail('AI_PARSE', { attempts });
   }
 
   let priceMin = num(raw.price_min), priceMax = num(raw.price_max);
@@ -314,23 +375,29 @@ Deno.serve(async (req) => {
     kind,
   };
 
-  // 근거 링크 + Google 검색 제안(그라운딩 사용 시 표시 권장)
+  // 근거 링크 + AI 가 검색한 말
   const meta = research?.data?.candidates?.[0]?.groundingMetadata || {};
   const sources = (meta.groundingChunks || [])
-    .map((c: { web?: { uri?: string; title?: string } }) => c.web)
+    .map((c: { web?: { uri?: string; title?: string; domain?: string } }) => c.web)
     .filter((w: { uri?: string } | undefined) => w?.uri && /^https:\/\//.test(w.uri))
     .slice(0, 5)
-    .map((w: { uri: string; title?: string }) => ({ uri: w.uri, title: (w.title || w.uri).slice(0, 100) }));
+    .map((w: { uri: string; title?: string; domain?: string }) => ({ uri: w.uri, title: (w.title || w.domain || '').slice(0, 100) }));
+  const queries = (meta.webSearchQueries || []).filter((q: unknown) => typeof q === 'string').slice(0, 6).map((q: string) => q.slice(0, 80));
 
-  return json({
+  timings.total = Date.now() - t0;
+  await finish(true, model, usage);
+  send({
+    t: 'result',
     fields,
     sources,
-    searchSuggestions: meta.searchEntryPoint?.renderedContent || null,
+    queries,
     // 근거 링크가 빠져도 검색 실행 신호가 있으면 검색 기반 결과로 취급
     grounded: grounded && (sources.length > 0 || searched(research)),
     searched: grounded && searched(research),
     remaining,
     model,
+    timings,
+    usage,
     attempts,
   });
-});
+}

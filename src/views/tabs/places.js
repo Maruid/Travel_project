@@ -15,6 +15,7 @@ import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../co
 import { walkInfo, priceRange, priceInHome, distanceKm } from '../../lib/format.js';
 import { isCurrencyCode } from '../../lib/currency.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
+import { progressTicker, timingText, sourceLabel } from '../../lib/ai-stream.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { color, icon } from '../../lib/safe.js';
 import {
@@ -31,6 +32,21 @@ export function googleMapsHref(p) {
   if (direct) return direct;
   const q = p.map_query || (p.lat != null ? `${p.lat},${p.lng}` : p.name);
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+// AI 결과의 근거: 읽은 페이지 목록 · AI 가 검색한 말 · 단계별 시간 (정보 채우기와 추천에서 같이 씀)
+export function aiEvidence(r) {
+  const t = timingText(r.timings);
+  return html`
+    ${r.queries?.length ? html`<p class="text-slate-300"><span class="text-slate-400">AI가 검색한 말:</span> ${r.queries.join(' · ')}</p>` : ''}
+    ${r.sources?.length ? html`
+      <div class="space-y-0.5">
+        <p class="text-slate-400">참고한 페이지</p>
+        ${r.sources.map((s) => html`
+          <a href="${s.uri}" target="_blank" rel="noopener" class="flex items-center justify-between gap-2 px-2 py-1 rounded bg-night-950/60 text-purple-200">
+            <span class="truncate">${sourceLabel(s)}</span><span class="flex-shrink-0 text-[9px] text-slate-400">열기 <i class="fa-solid fa-arrow-up-right-from-square"></i></span></a>`)}
+      </div>` : ''}
+    ${t ? html`<p class="text-slate-500">${t}</p>` : ''}`;
 }
 
 // 뱃지: 이모지가 들어가도 높이가 같도록 고정 높이 + 가운데 정렬
@@ -89,6 +105,7 @@ export function mount(root, store) {
         <span id="count-text" class="text-slate-400 text-[11px] truncate min-w-0"></span>
         <div class="flex items-center gap-1.5 flex-shrink-0">
           <div id="sort-chips" class="flex items-center gap-1"></div>
+          <button data-action="recommend" title="AI 추천" class="text-[11px] px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-400/40 font-bold"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
           <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
         </div>
       </div>
@@ -388,6 +405,7 @@ export function mount(root, store) {
     },
     add: () => openPlaceEditor(store, null, { near: anchorPoint() }),
     'geo-review': () => openGeoReview(store, 'review'),
+    recommend: async () => (await import('../recommend.js')).openRecommend(store, { anchor: anchorPoint() }),
     'import-places': async () => (await import('../place-import.js')).openPlaceImport(store),
     // 카드 탭: 지도에서 위치 확인 + 버튼 줄 펼침. 선택된 카드를 다시 누르거나 위치가 없으면 상세
     select: (el, e) => {
@@ -515,7 +533,7 @@ export function openPlaceDetail(store, id, from) {
 // =====================================================================
 // 추가/수정 시트: 링크 붙여넣기 → 좌표 자동 추출 → 미니 지도에서 핀 확인
 // =====================================================================
-export async function openPlaceEditor(store, id, { near } = {}) {
+export async function openPlaceEditor(store, id, { near, prefill = null } = {}) {
   await loadMapLib();   // 위치 선택 미니 지도용
   const p = id ? store.get('places', id) : {};
   const cats = store.categories();
@@ -627,11 +645,7 @@ export async function openPlaceEditor(store, id, { near } = {}) {
             ${r.fields.visit_tip ? html`<p>팁: ${r.fields.visit_tip}</p>` : ''}
             <button type="button" data-action="ai-apply-estimate" class="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 font-bold">그래도 빈 칸에 넣기</button>
           </div>` : ''}
-        ${r.sources?.length ? html`<div class="flex flex-wrap gap-1">${r.sources.map((s) => html`
-          <a href="${s.uri}" target="_blank" rel="noopener" class="px-1.5 py-0.5 rounded bg-night-950/60 text-purple-200 underline truncate max-w-full">${s.title}</a>`)}</div>` : ''}
-        ${r.searchSuggestions ? html`<iframe data-suggest sandbox="allow-popups allow-popups-to-escape-sandbox" class="w-full h-12 rounded-lg bg-white/5" title="Google 검색 제안"></iframe>` : ''}`);
-      const frame = box.querySelector('[data-suggest]');
-      if (frame) frame.srcdoc = r.searchSuggestions;   // Google 이 제공한 검색 제안 위젯 (스크립트 실행 불가한 샌드박스)
+        ${aiEvidence(r)}`);
       box._estimate = r.grounded ? null : r.fields;
       box.classList.remove('hidden');
     }
@@ -810,7 +824,7 @@ export async function openPlaceEditor(store, id, { near } = {}) {
         if (b.dataset.busy) return;
         b.dataset.busy = '1';
         const label = b.innerHTML;
-        b.textContent = '검색 중... (10~20초)';
+        const ticker = progressTicker((text) => { b.textContent = text; });
         try {
           const r = await enrichPlace({
             tripId: store.tripId, name,
@@ -824,7 +838,7 @@ export async function openPlaceEditor(store, id, { near } = {}) {
               priceMin: google.priceMin ?? null, priceMax: google.priceMax ?? null, priceCurrency: google.priceCurrency ?? null,
               closed: google.warnBadge || null,
             } : null,
-          });
+          }, ticker.onEvent);
           const f = r.fields || {};
           // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
           const textKeys = r.grounded ? ['signature', 'description', 'visit_tip', 'warn_badge', 'zone'] : ['signature', 'description', 'zone'];
@@ -846,6 +860,7 @@ export async function openPlaceEditor(store, id, { near } = {}) {
           toast(e.message, 'error');
           renderAiError(e);
         } finally {
+          ticker.stop();
           delete b.dataset.busy;
           b.innerHTML = label;
         }
@@ -859,6 +874,23 @@ export async function openPlaceEditor(store, id, { near } = {}) {
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));
     // 사용자가 기준점 체크를 직접 바꿨으면 자동 체크하지 않음
     form.elements.is_anchor.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
+
+    // AI 추천에서 [추가]로 온 경우: 추천 내용을 초안으로 넣고 구글 지도에서 실제 장소를 확인
+    if (prefill && !id) {
+      fill('name', prefill.name, 'ai');
+      fill('zone', prefill.zone, 'ai');
+      fill('description', prefill.reason, 'ai');
+      fill('warn_badge', prefill.warn, 'ai');
+      if (prefill.price_min != null || prefill.price_max != null) {
+        fill('price_min', prefill.price_min, 'ai');
+        fill('price_max', prefill.price_max, 'ai');
+        fill('price_currency', prefill.currency, 'ai');
+      }
+      const c = prefill.kind && store.globalCategories.find((x) => x.kind === prefill.kind);
+      if (c && !form.elements.category_id.value) form.elements.category_id.value = c.id;
+      // 현지 이름이 있으면 그걸로 찾는 게 더 정확함. 실패하면 상태 줄에 "찾지 못함"이 표시됨
+      loadGoogle({ name: prefill.local_name || prefill.name, auto: true });
+    }
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();

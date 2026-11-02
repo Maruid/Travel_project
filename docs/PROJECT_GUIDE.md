@@ -1,0 +1,473 @@
+# 여행앱 (Trip Guide) 작업 가이드
+
+> 이 문서는 **다음 작업을 시작하기 전에 가장 먼저 읽는 문서**입니다.
+> 구조, 규칙, 결정된 정책, 숫자 기준, 남은 일을 한곳에 모았습니다.
+> 기능을 바꾸면 이 문서의 해당 부분도 같이 고쳐 주세요.
+> 마지막 정리: 2026-11-02
+
+---
+
+## 0. 작업 방식 (사용자 홍준의 선호)
+
+- **코드는 바뀐 부분만** 제시합니다. 파일 전체를 다시 쓰지 않습니다.
+- **디버깅은 분석 먼저.** 원인을 설명하고 합의한 뒤에 코딩합니다.
+- 사용자가 "아직 코딩 시작하지 말고" / "논의해보자"라고 하면 **설계 논의만** 합니다.
+- 전달 방식: 바뀐 파일만 담은 zip + 적용 순서(SQL 먼저 → 덮어쓰기 → push).
+- DB 변경은 `supabase/migration_00N_*.sql` 새 파일로 만듭니다. `schema.sql`은 최초 설치본으로 두고 고치지 않습니다.
+- 작업 후 확인: `npm test`(node --test) + `npx vite build`.
+  가능하면 SQL은 로컬 Postgres에 schema → migration 순서로 적용해 검증합니다(§12).
+- 화면 문구는 한국어 해요체입니다. 사용자에게 보이는 이름은 "멤버 탭"이 아니라 **설정 탭**, "투두"가 아니라 **할 일**입니다.
+
+### 보안 원칙 (절대 규칙)
+
+- 브라우저와 GitHub Variables에는 **publishable(anon) key만** 넣습니다. service_role / secret key는 절대 넣지 않습니다.
+- Gemini, Google Places API 키는 **Supabase Edge Function Secrets에만** 둡니다. 코드나 대화에 실제 키 값(`AIza...`)을 붙이지 않습니다.
+- 권한은 화면에서 숨기는 것이 아니라 **RLS + SECURITY DEFINER RPC**로 막습니다.
+
+---
+
+## 1. 한눈에 보기
+
+| 항목 | 값 |
+|---|---|
+| 호스팅 | GitHub Pages (`Maruid/Travel_project`, https://maruid.github.io/Travel_project/) |
+| 백엔드 | Supabase **서울(ap-northeast-2)** · project ref `gorucaeatxgeycliusyg` (https://gorucaeatxgeycliusyg.supabase.co): Postgres, Auth, Realtime, Edge Functions |
+| 이전 기록 | 2026-11-02 아일랜드(`axlacbmreoxloxnnlqsq`) → 서울로 이전 (한국에서 요청당 약 0.3초 지연 해소). 절차는 `docs/REGION_MIGRATION.md` |
+| 프론트 | Vanilla JS + Vite 8 + Tailwind v4, 해시 라우팅, PWA |
+| 지도 | Leaflet + `@maplibre/maplibre-gl-leaflet` + OpenFreeMap(dark, 실패 시 liberty) |
+| 외부 API | Gemini(AI 정보 채우기), Google Places API (New), Nominatim(주소 검색), 무료 환율 API |
+| 배포 | `main` push → `.github/workflows/deploy.yml` → Pages |
+| 유지 | `.github/workflows/keepalive.yml`이 3일마다 `ping()` 호출 + `.keepalive` 커밋 |
+
+### 프로젝트 문서 경로 주의
+
+- 프로젝트 루트의 `index.html`은 **리뉴얼 전 원래 오사카 앱(하드코딩)**입니다. 데이터 출처로만 참고합니다.
+- 지금 앱의 HTML 셸은 `app-shell/index.html`입니다(저장소에서는 루트 `index.html`).
+- 저장소 루트에 있는 단일 파일(`README.md`, `package.json`, `vite.config.js`, `.env.example`, `.gitignore`)은 프로젝트 문서에서 **`claude/`** 아래에 있습니다(프로젝트 규칙상 루트 파일명은 `claude/`로 들어감).
+- 그 외 경로(`src/`, `supabase/`, `tests/`, `.github/`, `public/`, `docs/`)는 GitHub 저장소와 같습니다.
+- 프로젝트 문서는 **스냅샷**입니다. 원본은 GitHub 저장소이고, 코드를 바꾸면 바뀐 파일을 프로젝트에도 다시 올려야 최신 상태가 유지됩니다.
+
+---
+
+## 2. 폴더 구조
+
+```
+index.html                 앱 셸 (#app, #sheet, #toast). 프로젝트 문서에서는 app-shell/index.html
+vite.config.js             VITE_BASE, PWA(registerType: prompt), 지도 타일 런타임 캐시
+src/
+  main.js                  라우트 등록, OAuth 복귀 처리, PWA 업데이트 배너
+  router.js                해시 라우터: / · /create · /join/:token · /trip/:id/:tab? · /admin
+  config.js                공개 설정 (VITE_SUPABASE_URL/KEY, MAP_STYLE, APP_URL)
+  styles.css               Tailwind v4 @theme(색: night-950/900, neon-cyan …) + @utility(glass-card, btn-*, input …)
+  components/
+    ui.js                  openSheet/closeSheet(바텀시트), toast, copyText, confirmAction, emptyCard, spinner
+    map.js                 createMap, pinIcon, draggablePin, L (MapLibre 포함 → 무거움)
+    account.js             계정 칩/메뉴, Google 로그인, 기기 코드 발급·입력
+  lib/
+    dom.js                 html`` 자동 escape, raw, esc, setHTML, delegate(data-action), formValues, $
+    store.js               TripStore: 캐시 + outbox + Realtime + newer() 충돌 방지
+    supabase.js            클라이언트, rpc(), ERROR_TEXT(서버 에러 코드 → 문구)
+    auth.js                익명 로그인, Google 로그인/연결, 오프라인 마지막 사용자
+    maps-link.js           구글 맵 URL 파서, splitPlaceText (순수 함수)
+    place-lookup.js        짧은 링크 펼치기, enrichPlace(AI), Nominatim geocode, GPS
+    google-place.js        place-details 호출, mergeIntoExisting, 위치 검토 helper
+    place-sort.js          거리·별점·가격 정렬 (순수 함수)
+    place-copy.js          장소 복사: 중복 판정, 카테고리 대응 (순수 함수)
+    currency.js            통화 목록 + "일본 - 엔 (JPY)" 라벨
+    fx.js                  무료 환율 조회 (fawazahmed0 → open.er-api)
+    format.js              distanceKm, walkInfo, money, priceRange, 날짜
+    prefs.js               기기별 화면 설정 (localStorage, 실패해도 기본값)
+    offline-map.js / tile-plan.js   오프라인 지도 타일 미리 받기
+    markdown.js            가이드 카드 (marked + DOMPurify)
+    pwa.js, safe.js(color/icon 화이트리스트)
+  views/
+    home.js, create.js, join.js, admin.js
+    trip.js                하단 탭 + 헤더, store.subscribe → 탭 update()
+    place-import.js        다른 여행/공유 코드에서 장소 가져오기, 공유 코드 발급
+    tabs/places.js         지도 + 리스트, 상세, 편집기, 위치 검토, 구글 반영 (가장 큼)
+    tabs/schedule.js, guides.js, budget.js, todos.js
+    tabs/more.js           설정 탭
+supabase/
+  schema.sql, seed_osaka.sql, migration_002 ~ 007, config.toml
+  functions/resolve-maps-link | enrich-place | place-details  (Deno, Verify JWT OFF)
+tests/                     node --test (maps-link, dom-router, tile-plan, place-sort, place-copy, store-newer, currency)
+public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 자리표시 아직 채워야 함
+```
+
+---
+
+## 3. 코딩 규칙
+
+1. **HTML은 반드시 `html```로 만듭니다.** `${값}`은 자동 escape됩니다. 이미 안전한 조각은 `raw()`를 쓰거나 다른 `html``` 결과를 그대로 넣습니다.
+   - Leaflet `bindTooltip` 등 외부 API에 문자열을 넘길 때는 `esc()`로 직접 escape합니다.
+2. **이벤트는 `data-action` + `delegate(root, {...})`**로 처리합니다. inline onclick은 쓰지 않습니다.
+   - `delegate`는 `preventDefault`를 합니다. 단, action 영역 안의 `<a href>`를 누르면 링크가 그대로 열립니다.
+   - 체크박스, 검색 입력은 `change` / `input` 이벤트를 따로 답니다(click 위임은 체크 토글을 막음).
+3. **색과 아이콘은 `safe.js`의 `color()` / `icon()`**을 거칩니다(사용자 입력 CSS 주입 방지).
+4. **데이터 변경은 TripStore로** 합니다: `store.insert` / `update` / `remove`(soft delete) / `updateBudget`.
+   로컬에 바로 반영 → outbox → 서버 순서입니다. 직접 `supabase.from(...).update`는 여행 밖 데이터(다른 여행 읽기, 생성 직후 설정)에만 씁니다.
+5. **무거운 모듈(MapLibre)을 정적 import하지 않습니다.**
+   `places.js`도 지도 라이브러리를 `loadMapLib()`로 나중에 불러옵니다(리스트 먼저, 지도는 준비되면 붙임). 지도 관련 코드는 `map`이 null일 수 있다고 가정합니다. 편집기와 위치 검토는 시작할 때 `await loadMapLib()`을 합니다.
+   지도 CSS(leaflet, maplibre)는 `components/map.js`에서 import합니다.
+   아이콘은 Font Awesome **solid만** 씁니다. 브랜드 아이콘은 Google·YouTube 2개뿐이고 `styles.css`의 SVG 마스크로 그립니다. 새 브랜드 아이콘이 필요하면 같은 방식으로 추가합니다(regular·brands 글꼴은 받지 않음).
+   글꼴: Noto Sans KR 400·700·900, Outfit(숫자) 400·800만 받습니다.
+   `more.js`, `place-import.js`는 `places.js`를 정적 import하면 안 됩니다. 필요하면 `await import('./places.js')`를 씁니다.
+   공용 설정은 `lib/prefs.js` 같은 작은 모듈로 뺍니다.
+6. 바텀시트는 `openSheet(content, onMount)`로 엽니다. `onMount`가 cleanup 함수를 반환하면 닫힐 때 호출됩니다. 다른 시트를 열면 이전 시트의 cleanup이 먼저 실행됩니다.
+7. 서버 에러는 `raise exception 'CODE'`로 던지고, `supabase.js`의 `ERROR_TEXT`에 사용자 문구를 추가합니다.
+8. Tailwind v4: 사용자 정의 클래스는 `@utility`로 만듭니다(`@apply` 안에 사용자 클래스 쓰면 오류).
+
+---
+
+## 4. 데이터 모델 요약
+
+모든 콘텐츠 테이블에는 `id`(클라이언트 UUID), `trip_id`, `created_*`, `updated_*`, `deleted_at`(soft delete)이 있습니다.
+`tg_row_meta`가 `updated_at`과 불변 컬럼을 관리합니다.
+
+| 테이블 | 핵심 |
+|---|---|
+| trips | title, destination, dates, timezone(IANA), cover_emoji, allow_custom_categories, creation_code_id |
+| trip_members | display_name, role(owner/member), user_id null = 자리표시 멤버, removed_at |
+| trip_member_devices | 한 멤버의 추가 기기(user_id) — 기기 연결 코드로 생성 |
+| trip_invites | 초대 토큰 (owner가 재발급) |
+| trip_budgets | home/local_currency, rate(현지 1 = 내 통화 rate), base_amount |
+| categories | trip_id null = 전역 기본 8종, 값 있음 = 여행 커스텀 |
+| places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb |
+| itinerary_days / itinerary_items | 날짜 헤더 / 시간 항목(place_id 연결) |
+| guides | 마크다운 카드 (day_date 지정 시 일정에도 노출) |
+| budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
+| todos | kind todo/place/shop |
+| creation_codes | 여행 생성 코드 (one_time/permanent, ended_at) |
+| device_link_codes | 기기 연결 코드 (10분, 1회) |
+| place_share_codes | 장소 공유 코드 (7일, place_ids[]) |
+| ai_usage / places_api_usage | 사용량 카운터 |
+| admins | 사이트 관리자 |
+
+**여행당 행 수 제한**: categories 50, places 500, itinerary_days 60, itinerary_items 1000, guides 200, budget_topups 200, expenses 3000, todos 1000. 넘으면 `ROW_LIMIT` 에러가 납니다.
+
+### 마이그레이션 순서
+
+| 파일 | 내용 |
+|---|---|
+| schema.sql | 전체 기본 구조, RLS, RPC, GRANT(12-2), Realtime, 기본 카테고리 |
+| seed_osaka.sql | 오사카 여행(고정 id `b1e4c6d2-5a7f-4c3e-9d81-2f6a0c9e7b13`), 장소 61곳, 멤버 자리 준(owner)·현 |
+| 002_devices_ai | 기기 연결, `my_member_id()`, AI 하루 50회 |
+| 003_google_places | places 구글 칸, places_api_usage, 월 900건 한도 |
+| 004_places_refund | 구글 실패 시 한도 환불 |
+| 005_geo_review | places.geo_review |
+| 006_place_share | 장소 공유 코드 + RPC 4개 |
+| 007_cleanup | 자동 정리(ping 안에서), creation_codes.ended_at, admin_delete_codes |
+| 008_currency_text | 통화 칸 4개 char(3) → text + `^[A-Z]{3}$` 검사, 잘린 값(J/K) 복구 |
+| 009_ai_recommend | AI 추천 권한(ai_grants)·요청(ai_grant_requests)·AI 사용 기록(ai_calls, 토큰)·추천 결과(recommend_cache), 관련 RPC, 자동 정리 추가 |
+
+Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 새 테이블과 함수에는 **GRANT를 명시**해야 합니다. 함수는 `revoke all ... from public, anon` 후 `grant execute ... to authenticated`로 엽니다.
+
+---
+
+## 5. 권한 구조
+
+- **admin**: `admins` 테이블. `#/admin` 화면(Google 로그인 필요)에서 여행 목록·삭제, 활성 사용자, 생성 코드, 구글 사용량을 봅니다.
+- **owner**: 여행을 만든 사람(한 명). 할 수 있는 일:
+  - 초대 링크 재발급, 강퇴, 연결 해제, owner 넘기기
+  - 여행 정보 수정·삭제, 구글 일괄 가져오기, 장소 공유 코드 발급
+- **member**: 링크로 참여한 사람. 콘텐츠 전부 편집 가능, 커스텀 카테고리 편집 가능(여행 설정이 허용할 때).
+- 판정: `is_trip_member` / `is_trip_owner`는 본 계정과 추가 기기 계정을 모두 봅니다(`my_member_id`).
+- 로그인:
+  - 기본은 **익명 로그인**이고, 초대 링크로 들어와 이름을 고르면 참여됩니다.
+  - 여러 기기에서 쓰려면 **Google 계정 연결**(linkIdentity)이나 **기기 연결 코드**(8자리, 10분)를 씁니다.
+- 여행 생성: **생성 코드**가 필요합니다(관리자가 발급, 500MB 보호 목적).
+
+---
+
+## 6. 동기화 (store.js)
+
+- 여행마다 localStorage에 캐시하고, 오프라인 변경은 **outbox**에 쌓습니다.
+- 다시 보내는 때: 온라인 복귀, 화면 복귀(visibilitychange), outbox가 남아 있으면 30초마다.
+- 같은 행의 아직 안 보낸 update는 하나로 합칩니다.
+- `sync()` = `flush()`(보내기) → `pull()`(커서 `updated_at` 이후 받기). 동시에 여러 번 불려도 한 번만 실행됩니다.
+- **pull은 서버 왕복 1번**: 여행 정보, 예산, 멤버, 초대, 기본 카테고리, 기기 목록, 콘텐츠 8개 표를 모두 한 번에 병렬로 요청합니다. 받은 게 없으면 `false`를 반환합니다.
+- **flush는 묶어서 보냄**
+  - 쓰기(`insert`/`update`/`updateBudget`)는 `scheduleFlush()`로 같은 순간의 변경을 모읍니다. 장소 61곳 가져오기도 요청 1번입니다.
+  - 순서: 예산 → 추가(표별 upsert 배열, 100건씩, 처음 나온 표 순서라 카테고리가 장소보다 먼저) → 수정(같은 행은 합치고 동시 6개).
+  - 묶음 추가가 실패하면 한 건씩 다시 보내서 문제 있는 것만 버립니다.
+- **기기 캐시 저장(`saveCache`)은 400ms 모아서** 한 번에 합니다. 앱을 내리거나(visibility hidden, pagehide) 종료할 때는 `saveCacheNow()`로 즉시 저장합니다. outbox는 유실 방지를 위해 항상 즉시 저장합니다.
+- **같은 버전은 무시**: `applyRemote`는 `updated_at`이 같은 행을 건너뜁니다. 내 저장이 실시간으로 되돌아와도 화면을 다시 그리지 않습니다.
+- Realtime: 콘텐츠 테이블, trip_members, trip_budgets, trips를 구독합니다.
+- **`newer(cur, incoming)`**: 서버에서 온 값은 `updated_at`(마이크로초, 시간대 없는 값은 UTC)으로 비교해서 더 새 것만 반영합니다.
+  - 목적: "받아오는 사이 저장한 값이 옛날 응답에 덮이는" 문제(통화 변경이 늦게 반영되던 버그) 방지.
+  - 아직 서버에 못 보낸 값은 `applyOutboxLocally()`가 다시 덮어 유지합니다.
+- `emit(kind)`은 30ms로 묶어서 `trip.js`에 알립니다. `'data'`면 헤더와 현재 탭의 `update()`(탭 전체 다시 그리기), **`'status'`면 헤더만** 갱신합니다. 동기화 시작·끝, 전송 완료처럼 내용이 바뀌지 않은 알림은 `'status'`로 보냅니다.
+
+---
+
+## 7. 기능별 정책과 숫자
+
+### 7-1. 장소 탭 (places.js)
+
+- **레이아웃**
+  - 위쪽은 지도(높이 38%), 아래쪽은 리스트입니다. 화면 높이에 맞춘 고정 레이아웃이고 리스트만 스크롤됩니다.
+  - **지도 접기**를 누르면 "지도 펼치기 · ○○ 기준" 바만 남습니다. 접은 상태는 `PREF_MAP_COLLAPSED`로 기억합니다.
+- **선택**
+  - 카드를 누르면 펼쳐지면서 [상세 보기] [길찾기] 버튼이 나옵니다. 지도가 접힌 상태면 [지도에서 보기]도 나옵니다.
+  - 펼쳐진 카드를 다시 누르거나, 위치가 없는 장소를 누르면 상세가 열립니다.
+  - 선택하면 펼쳐진 카드 전체가 보이도록 리스트를 스크롤합니다(위·아래에 걸친 카드 대응).
+  - 선택한 핀은 크게 깜빡이고 이름 라벨(`pin-label`)이 붙습니다. 지도 빈 곳을 누르면 선택이 풀립니다.
+  - 지도 아래 미니 카드는 **없앴습니다**.
+- **확대 규칙**
+  - 기준점 이동, 내 위치: **15**
+  - 카드·핀 선택: **max(현재, 16)**
+- **초기화 버튼**: 누를 때마다 **기준점 ↔ 전체 보기**를 오갑니다.
+  - 전체 보기는 **기준점(없으면 지도 중심)에서 50km 안의 장소만** 화면에 맞춥니다(`FIT_RADIUS_KM`).
+  - 빠진 장소가 있으면 몇 곳이 빠졌는지와 이름을 토스트로 알립니다.
+- **기준점(is_anchor)**
+  - 숙소·역 등 거리 계산의 기준이 되는 장소입니다. 지도 위 선택 목록에서 고릅니다.
+  - 링크로 추가할 때 구글 분류가 lodging/transit이면 자동으로 체크됩니다(사용자가 손대지 않았을 때만).
+  - 상세 화면에서 지정·해제할 수 있습니다.
+  - 선택 기능: 설정 탭에서 "지도 중심에서 가까운 순 정렬"을 켤 수 있습니다(`PREF_ANCHOR_NEAR_SORT`, 기기별).
+- **정렬**: `[거리] [별점] [가격]` 중 하나가 항상 켜져 있고, 기본은 거리 가까운 순입니다. "7분 이내" 필터는 없앴습니다.
+  - 칩을 누르면 그 기준의 기본 방향으로 정렬됩니다: 거리 asc, 별점 desc, 가격 asc. 켜진 칩을 다시 누르면 방향이 바뀝니다. `PREF_PLACE_SORT`(예: `"rating:desc"`)로 기억합니다.
+  - 정보가 없는 장소는 방향과 상관없이 맨 아래로 갑니다.
+  - 별점: 리뷰 **20개 미만**(`MIN_REVIEWS`)은 리뷰가 충분한 곳 아래에 둡니다. 별점이 같으면 리뷰가 많은 곳이 먼저입니다.
+  - 가격: 싼 순은 최저가, 비싼 순은 최고가로 비교합니다. 통화는 구분하지 않습니다.
+  - 카테고리 필터와 함께 동작합니다. 지도 핀은 정렬과 무관합니다.
+- **카드 4줄 구조**: 이름 / ★별점(리뷰 수)·가격·지역 / 뱃지 / 대표 메뉴·소개. 오른쪽에 도보 시간과 길찾기 버튼이 있습니다.
+  - 지금 정렬 기준인 값(도보 시간, 별점, 가격)은 테두리 칩으로 강조합니다.
+  - 뱃지는 높이 **18px로 고정**합니다(이모지 허용). 순서는 카테고리(아이콘) → ⚠️ 주의 → 기준점 → 📺 출처입니다.
+  - 접힌 카드는 뱃지 3개 + "+N", 펼치면 전부 보입니다.
+- **장소가 하나도 없으면** [직접 추가] [다른 여행에서] 버튼을 보여줍니다.
+
+### 7-2. 장소 추가·편집
+
+- 구글 맵 링크를 붙여넣으면 정보가 자동으로 채워집니다.
+  - 긴 URL은 브라우저에서 바로 파싱합니다(`!3d!4d` 우선 → 쿼리 → `@lat,lng`).
+  - 짧은 링크는 `resolve-maps-link`로 펼칩니다(구글 도메인만 허용).
+  - 좌표가 없으면 이름·주소를 나눠서(`splitPlaceText`) 구글 Places로 찾습니다.
+  - 그래도 없으면 Nominatim(번지를 빼고 재시도)을 씁니다.
+- 자동으로 채운 칸은 `autoFilled {value, source}`로 추적합니다. 링크를 다시 붙여넣으면 자동으로 채운 칸만 갱신하고, 직접 쓴 칸은 유지합니다.
+- 편집기에서 핀을 직접 옮겨 저장하면 그 장소의 위치 검토 기록이 지워집니다.
+
+### 7-3. 구글 Places (place-details, 옵션 B: 받아온 값을 편집 가능한 칸에 저장)
+
+- 호출은 2단계입니다.
+  - Text Search(IDs Only, field mask `places.id`, `languageCode:'ko'`, 좌표가 있으면 반경 1km 위치 편향)
+  - Place Details(Enterprise 필드)
+  - `google_place_id`가 이미 있으면 Details 1건만 호출합니다.
+- 받는 필드: id, displayName, location, googleMapsUri, addressComponents, primaryType, types, businessStatus, regularOpeningHours, priceRange, rating, userRatingCount, nationalPhoneNumber, websiteUri.
+  - 리뷰나 요약 같은 Atmosphere 필드는 요청하지 않습니다(과금 등급이 올라감).
+- 가공:
+  - `kindOf`: food/cafe/bar/lodging/transit/shop/spot
+  - 휴무 뱃지: "화요 휴무", "화·수 휴무", "주말 휴무"
+  - 폐업·임시휴업이면 기존 뱃지보다 우선합니다.
+- **한도**: 앱 자체 **월 900건**(kind별로 셉니다. 구글 무료량은 SKU별 월 1,000건). 달 기준은 태평양 시간입니다.
+  - 구글 오류가 나면 차감한 한도를 환불합니다(004).
+  - 구글 분당 쿼터는 사용자가 **30**으로 설정해 두었습니다.
+- 에러 코드: NO_API_KEY, PLACES_LIMIT(429), PLACES_RATE(429), NOT_FOUND(404), PLACES_FAILED, FORBIDDEN.
+- **등록된 장소에 합치기**(`mergeIntoExisting`)
+  - 구글 전용 칸은 항상 갱신하고, 빈 칸(지역, 가격, 뱃지, 길찾기 링크)만 채웁니다.
+  - 이름, 소개, 메뉴는 건드리지 않습니다.
+- **좌표 처리**
+  - 기존 좌표가 없으면 구글 좌표를 넣습니다.
+  - **300m 이내**(`REVIEW_DISTANCE_M`)면 구글 좌표로 교체하고, **15m 이상** 움직였을 때만 `geo_review {type:'auto', prevLat, prevLng, distance, at}`를 남깁니다.
+  - 300m를 넘으면 좌표를 바꾸지 않고 `geo_review {type:'review', lat, lng, name, distance, at}`를 남깁니다.
+- **일괄 가져오기**(owner, 설정 탭)
+  - 구글 정보가 없는 장소만 처리합니다. 장소당 3초 간격입니다.
+  - PLACES_RATE가 나면 60초 기다렸다가 최대 3번까지 다시 시도합니다.
+
+### 7-4. 위치 검토 (geo_review)
+
+- **확인 필요(review)**: 장소 탭 리스트 위 배너, 설정 탭, 상세 화면 경고 카드에서 열립니다.
+  - 검토 화면은 지도에 **빨강(지금 핀)**과 **파랑(구글 위치)**을 점선으로 잇습니다.
+  - 버튼: [구글 위치로 바꾸기] [지금 위치 유지] [직접 수정]. 처리하면 다음 장소로 넘어갑니다.
+- **자동으로 바뀜(auto)**: 배너에는 띄우지 않고 조용히 모아둡니다. 설정 탭이나 상세 화면의 작은 줄에서 [이대로 두기] [되돌리기]를 고릅니다.
+- 결정하면 `geo_review = null`이 됩니다. 기록이 DB에 있어서 편집기에 갔다 와도 사라지지 않습니다.
+
+### 7-5. AI 정보 채우기 (enrich-place, Gemini)
+
+- **2단계 구조**입니다.
+  1. 조사: Google 검색 그라운딩(`tools:[{googleSearch:{}}]`, `thinkingLevel: MINIMAL`)
+  2. 추출: 그라운딩 없이 JSON만 뽑기. 구글 Places에서 받은 사실(영업시간, 가격, 휴무)을 함께 주고, 그 값을 우선합니다.
+- 모델 순서: `GEMINI_MODEL` → `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite`(404/429면 다음). 2.5 계열은 종료되어 뺐습니다.
+- 그라운딩은 무료 등급에서 쓸 수 없어서 **결제를 붙여 사용 중**입니다.
+- 여행당 **하루 50회**(`consume_ai_quota`).
+- 비어 있거나 자동으로 채운 칸만 덮어씁니다.
+- 검색이 실제로 수행됐는지는 `diagnose()`로 판정합니다(groundingChunks, webSearchQueries, toolUsePromptTokenCount).
+
+### 7-6. 장소 가져오기 · 공유 (place-import.js, 006)
+
+- **가져오기**(멤버 누구나): 내 다른 여행(멤버로 들어가 있는 여행) 또는 공유 코드에서 가져옵니다.
+  - 고르는 화면: 카테고리별 묶음 체크, 검색, 전체 선택/해제.
+- **중복**: `google_place_id`가 같거나, 이름이 같으면(공백·기호 무시) "이미 있음"으로 표시하고 기본으로 체크를 꺼둡니다.
+- **카테고리**
+  - 기본 카테고리는 같은 id를 씁니다.
+  - 커스텀은 같은 이름이 있으면 그걸 쓰고, 없으면 새로 만듭니다.
+  - 커스텀이 꺼진 여행이면 같은 kind의 기본 카테고리로 넣습니다.
+- **복사하는 칸**: 구글 정보와 설명·팁·기준점을 포함한 전부를 복사합니다. id, 작성 기록, geo_review는 제외합니다.
+- **공유 코드**(owner만)
+  - 장소를 골라 8자리 코드를 만들고, **7일 뒤 만료**됩니다. 언제든 끌 수 있고, 여행당 동시에 10개까지입니다.
+  - 받는 사람은 멤버가 아니어도 코드로 고른 장소만 읽습니다(`read_place_share`). 다른 정보는 볼 수 없습니다.
+  - 장소 내용은 가져가는 시점의 최신 내용입니다.
+- **공개 장소(커뮤니티 DB)**는 검토 끝에 **하지 않기로** 했습니다. 이유: 관리 부담, 개인 메모 노출, 구글 데이터 재배포 문제.
+
+### 7-7. 가계부 · 환율
+
+- 환율은 여행 전체에 하나입니다(`rate` = 현지 1단위가 내 통화 얼마). 환율을 바꾸면 **이미 적은 지출의 환산액도 다시 계산**됩니다.
+- **자동 채우기만 하고, 자동 갱신은 하지 않습니다.**
+  - 여행을 만들 때: 만드는 동안 조회하고, 4초 안에 받으면 넣습니다.
+  - 예산 관리에서 통화를 바꾸거나 [최신 환율로]를 누를 때: 조회해서 칸을 채우고, 저장해야 적용됩니다.
+- 출처는 fawazahmed0 exchange-api(jsDelivr, 실패 시 `latest.currency-api.pages.dev`)가 기본이고, 실패하면 open.er-api.com을 씁니다(이 경우 출처 링크 표시가 필수). 유효숫자 4자리로 표시합니다.
+- AI로 환율을 묻는 방식은 쓰지 않습니다(학습 시점의 오래된 값, 비용).
+- **통화 표시**
+  - 선택 화면은 "일본 - 엔 (JPY)"로 보여줍니다.
+  - 금액은 한국어 단위로 보여줍니다: `93,000엔`, `809,100원`, `12.5달러`. 모르는 코드는 `5 XYZ`.
+  - 환율은 "100엔 = 870원"처럼, 환산 결과가 100 이상이 되는 단위로 보여줍니다(`rateText`).
+  - 장소 가격이 현지 통화이면 내 통화 환산을 같이 보여줍니다: `7,000~12,000엔 (약 6.1~10.4만원)`(`priceInHome`). 원화는 1만 이상이면 `약 ○.○만원`.
+- **통화 코드 규칙**: DB 칸은 `text` + 영문 대문자 3글자 검사입니다. **`char(n)`을 쓰지 않습니다.**
+  - 이유: Supabase Realtime이 `char(3)` 값을 길이 없는 `character`(1글자)로 변환해 `JPY`가 `J`로 잘려 왔고, 그 값이 다시 저장되는 문제가 있었습니다(2026-11-02 수정).
+  - 앱 방어: `store.keepValidCodes`가 잘린 값이 들어오면 기존 값을 유지합니다. 통화 선택은 잘못된 값을 버리고 기본값을 고르고, 장소 편집기는 3글자가 아니면 저장을 막습니다.
+  - 지원 19종: KRW JPY USD EUR CNY TWD HKD MOP THB VND SGD PHP MYR IDR GBP CHF AUD NZD CAD.
+
+### 7-7-2. AI 장소 추천 (recommend.js, recommend-places, 009)
+
+- 장소 탭 리스트 위 ✨ 버튼 → 키워드(100자) + 범위(기준점 근처 / 여행지 전체) + 개수(5/10).
+- **구조 C**: Gemini가 검색해서 후보와 추천 이유를 만들고(2단계: 조사 → JSON), **[추가]를 누를 때만** 구글 Places로 실제 장소를 확인합니다(편집기 `prefill` → `loadGoogle`). 구글 월 한도를 아끼기 위해서입니다.
+- AI에게 주는 정보: 여행지, 날짜, 기준점 이름과 좌표, 이미 등록된 장소 이름(중복 제외).
+- **권한(사람 단위, Google 로그인 전제)**
+  - 관리자는 무제한(사용 기록만 남김).
+  - 그 외는 관리자가 허용한 사람만. 기간(7일/30일/날짜) 또는 영구이고, 관리자가 언제든 끌 수 있습니다.
+  - 권한 없는 Google 사용자에게는 [사용 요청하기]가 보이고, 관리자 화면에 "요청 n건"으로 표시됩니다. 익명 사용자에게는 Google 로그인 안내가 나옵니다.
+- **한도**: 사람별 하루 횟수(기본 10, 한국 시간 0시 기준). AI 정보 채우기(여행당 하루 50회)와는 별도입니다. 실패한 호출은 횟수에서 빠집니다.
+  - 사람별 수정: 관리자 화면 → AI 추천 권한 → "하루 한도" 칸
+  - 새로 허용할 때의 기본값: `alter table public.ai_grants alter column daily_limit set default 10;`
+- **결과 저장**: 같은 여행·키워드·범위(기준점은 이름+약 1km 좌표)·개수는 24시간 동안 저장된 결과를 보여주고 한도를 쓰지 않습니다. "새로 추천받기"를 누르면 새로 받습니다. 여행 멤버끼리 "최근 추천"(30일, 20개)을 공유합니다.
+- **Google 검색 제안 위젯은 표시하지 않기로** 했습니다(소규모 개인 사용). 대신 "AI가 검색한 말"과 "참고한 페이지" 목록, 단계별 시간을 보여줍니다(`aiEvidence`).
+- AI 정보 채우기도 같은 방식으로 진행 단계("확인 중 → 구글 검색 중 → 결과 정리 중")와 경과 시간을 보여줍니다.
+
+### 7-8. 설정 탭 (more.js) 구성
+
+1. **함께하기**: 초대 링크(복사, 공유, owner는 재발급), 멤버 목록(이름 변경, 멤버 메뉴), 동행자 추가
+2. **지도 · 오프라인**: 오프라인 지도 저장(z10–14, 최대 1,500장), 출발 전 체크리스트, 기준점 가까운 순 정렬 켜기/끄기
+3. **장소 데이터**:
+   - 커스텀 카테고리
+   - 장소 가져오기 · 공유 (공유 코드는 owner만)
+   - 위치 검토 (확인 필요 / 자동으로 바뀜)
+   - 구글 일괄 가져오기 (owner만)
+4. **여행 관리**(owner): 여행 정보 수정, 여행 삭제
+5. **내 계정**: Google 연결 / 기기 연결 코드 / 여행에서 나가기
+
+하단 탭: 장소 · 일정 · 가이드 · 가계부 · **할 일** · **설정(톱니바퀴)**
+
+### 7-9. 오프라인 · PWA
+
+- Service Worker가 빌드 파일을 미리 캐시하고, 지도 타일은 런타임에 캐시합니다.
+- 새 버전이 나오면 "새 버전이 있어요 · 새로고침" 배너를 띄웁니다(강제로 바꾸지 않음, 옵션 A).
+- 로그인 토큰을 갱신할 수 없는 오프라인 상태에서는 마지막으로 확인된 사용자로 동작합니다.
+
+### 7-10. 관리자 · 자동 정리 (007)
+
+- keepalive가 3일마다 `ping()`을 부르고, 그 안에서 `cleanup_expired()`를 실행합니다. 이 함수는 외부에서 직접 호출할 수 없습니다.
+
+| 기록 | 삭제 시점 |
+|---|---|
+| 기기 연결 코드 | 만료 1일 후 |
+| 장소 공유 코드 | 만료되거나 끈 지 7일 후 |
+| AI 사용량 | 90일 지난 날짜 |
+| 구글 사용량 | 12개월 지난 달 |
+| 여행 생성 코드 | 만료·소진·폐기 후 90일 (`ended_at`은 트리거가 기록) |
+
+- 관리자 화면의 생성 코드 목록은 "사용 가능"과 "지난 코드"(접힘, "○일 뒤 자동 삭제")로 나뉩니다.
+  - 지난 코드는 하나씩 또는 한 번에 완전 삭제(`admin_delete_codes`)할 수 있습니다. 사용 가능한 코드는 먼저 폐기해야 삭제됩니다(`CODE_IN_USE`).
+- 생성 코드를 삭제해도 여행은 남고, 여행의 `creation_code_id`만 null이 됩니다.
+
+---
+
+## 8. Edge Functions
+
+| 이름 | 역할 | Secrets |
+|---|---|---|
+| resolve-maps-link | 짧은 링크의 리다이렉트를 따라가서 `{finalUrl, chain}` 반환. 구글 호스트만 허용 | — |
+| enrich-place | AI 정보 채우기(2단계) | GEMINI_API_KEY, (GEMINI_MODEL) |
+| place-details | 구글 Places 조회 + 한도 차감·환불 | GOOGLE_PLACES_API_KEY |
+| recommend-places | 키워드 → 장소 후보 추천 (스트리밍) | GEMINI_API_KEY, (GEMINI_MODEL) |
+
+- `enrich-place`와 `recommend-places`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
+- 두 함수 모두 `begin_ai_call` → `finish_ai_call`로 호출마다 토큰 수와 걸린 시간을 기록합니다.
+- 대시보드에서 붙여넣어 배포하므로 각 함수는 **파일 하나로 완결**됩니다(공용 모듈 없이 helper를 복사해 둠). 한쪽 helper를 고치면 다른 쪽도 같이 고칩니다.
+
+- 세 함수 모두 **Verify JWT OFF**입니다. 함수 안에서 사용자 세션과 멤버 여부를 직접 검증합니다.
+- 대시보드에서 만들 때 **이름을 정확히** 지정합니다(자동 이름 `swift-function`으로 만들어져 404가 난 적이 있음).
+
+---
+
+## 9. 배포 · 환경 설정 체크리스트
+
+- GitHub Variables: `SUPABASE_URL`, `SUPABASE_KEY`(publishable). deploy.yml이 `VITE_BASE=/<repo>/`로 빌드합니다.
+- Pages Source: GitHub Actions. Actions가 돌지 않으면 workflow_dispatch로 수동 실행합니다.
+- Supabase Auth: Anonymous ON, Google ON, Manual linking ON. Site URL과 Redirect URL은 Pages 주소와 `localhost:5173`입니다.
+- Google Cloud: OAuth 클라이언트, Places API (New) 사용 설정 + 키 제한, 분당 쿼터 30.
+- AI Studio: 결제 설정(그라운딩에 필요).
+- 마이그레이션을 추가하면 **SQL을 먼저 실행하고 나서 프론트를 push**합니다. 새 컬럼을 쓰는 코드가 먼저 올라가면 저장이 실패합니다.
+
+---
+
+## 10. 기기별 설정 키 (localStorage)
+
+| 키 | 의미 |
+|---|---|
+| `places:mapCollapsed` | 지도 접기 |
+| `places:anchorNearSort` | 기준점 가까운 순 정렬 |
+| `places:sort` | 장소 정렬 `"key:dir"` |
+| 여행별 cache / outbox 키 | store.js (`cacheKey`, `outboxKey`) |
+| 마지막 사용자 | auth.js (`LAST_USER_KEY`) |
+
+모든 localStorage 접근은 try/catch로 감쌉니다. 실패해도 기본값으로 동작해야 합니다.
+
+---
+
+## 11. 결정 기록 (왜 이렇게 했나)
+
+| 결정 | 이유 |
+|---|---|
+| Supabase + GitHub Pages | 무료, 정적 호스팅에서 브라우저가 DB에 직접 접근, RLS로 보안 |
+| Supabase 리전 서울 | 처음 만든 아일랜드 리전은 한국에서 요청마다 약 0.25~0.3초 왕복 지연 → 2026-11-02 새 프로젝트로 이전 |
+| 링크 참여 + 익명 로그인 | 동행자가 가입 없이 바로 참여. 여러 기기는 Google 연결 또는 코드 |
+| OpenFreeMap | 키 없음, 무료, 벡터 다크 스타일 |
+| Places 옵션 B (값을 칸에 저장) | 개인용이라 편집 가능성이 우선. 매번 조회하지 않아 비용 절약 |
+| 월 한도 900 (하루 한도 아님) | 구글 무료량이 월 단위. 일괄 작업을 하루에 몰아서 할 수 있게 |
+| AI 2단계 (조사 → 추출) | 단일 호출에서 JSON 강제 + 검색을 같이 하면 검색을 건너뜀 |
+| 300m 기준 위치 검토 + auto 기록 | 같은 체인 다른 지점(도톤보리 등)을 잘못 고르는 사례 대비 |
+| 전체 보기 50km | 간사이 당일치기 권역. 잘못 찍힌 핀(예: 후쿠시마구 → 후쿠시마현) 때문에 지도가 일본 전체로 커지는 것 방지 |
+| 정렬 끄기 없음 (항상 하나 켜짐) | 세 번째 누름에 꺼지는 토글은 헷갈림 |
+| 공유는 코드 방식, 공개 DB는 안 함 | §7-6 |
+| 환율 자동 갱신 없음 | 단일 환율이라 과거 지출 환산액이 같이 바뀜 |
+| 생성 코드 90일 자동 삭제 + 수동 삭제 | 관리자 목록 정리. 여행에는 영향 없음 |
+| AI 추천: AI 후보 + 추가할 때 구글 확인 | AI만 쓰면 없는 가게를 말할 위험, 구글만 쓰면 추천 이유가 없고 월 한도를 많이 씀 |
+| AI 추천 권한은 사람 단위 + Google 로그인 | 토큰 비용 관리. 익명 계정은 기기마다 달라 권한이 따라가지 않음 |
+| AI 진행 표시는 스트리밍 | 요청을 둘로 나누면 한도 없이 정리 단계만 부를 틈이 생김, 시간으로 흉내 내면 실제와 안 맞음 |
+
+---
+
+## 12. 검증 방법
+
+- `npm test`: 순수 함수 테스트. 새 순수 로직은 `src/lib/*`에 두고 `tests/*.test.js`를 추가합니다.
+- `npx vite build`: 청크 크기를 확인합니다. places 청크는 MapLibre 때문에 약 1.2MB이고, more/place-import 청크는 작게 유지되어야 합니다.
+- SQL 검증(작업 환경에 Postgres 16이 있을 때):
+  1. Supabase 흉내 객체 만들기: `anon` / `authenticated` 역할, `auth` 스키마(`auth.users`, `auth.uid()`는 `request.jwt.claim.sub`에서 읽기), `extensions` 스키마의 pgcrypto, `supabase_realtime` publication
+  2. `schema.sql` → `migration_002` ~ `007` 순서로 적용
+  3. `set request.jwt.claim.sub = '<uuid>'`로 사용자를 바꿔 가며 RPC를 호출해 확인
+
+---
+
+## 13. 남은 일 · 알려진 이슈
+
+- **성능 개선 완료(2026-11-02)**: 서울 리전 이전, 지도 지연 로딩, 아이콘·글꼴·CSS 경량화, pull 1회 왕복, 묶음 전송, 캐시 저장 모으기, 상태 알림 분리, 카드 흐림 제거.
+  남은 후보: 지도를 이미지 타일로 바꾸기(350KB → 40KB, 단 OpenFreeMap과 오프라인 저장 방식 변경 필요), 아이콘 80개만 SVG로 묶기(solid 글꼴 119KB 제거).
+- (참고: 처음 분석 당시 의심 순서)
+  1. `glass-card`의 `backdrop-filter: blur`가 카드마다 있어서 모바일 스크롤이 무거움 (가장 유력, 수정 간단)
+  2. store 변경마다 탭 전체 재렌더 + 지도 핀 전부 다시 만들기 (sync 시작·끝, realtime마다)
+  3. 변경마다 `saveCache()`가 전체 데이터를 localStorage에 동기 저장
+  4. MapLibre(약 1.2MB)와 WebGL 렌더링, 장소 탭 첫 진입
+  5. 글꼴: Noto Sans KR 6굵기 + 2종
+  - 사용자에게 증상 확인을 요청한 상태: 스크롤 버벅임 / 누를 때 멈칫 / 첫 진입 느림
+- `public/privacy.html`, `terms.html`의 `[운영자 이름]`, `[연락처 이메일]` 채우기 (Google OAuth 심사용)
+- 다른 탭(일정, 할 일 등)의 이모지 뱃지도 장소 카드처럼 높이 고정이 필요한지 확인
+- 지출을 쓸 때마다 환율을 기록하는 방식(지출별 환율)은 필요해지면 검토

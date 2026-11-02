@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.enrich-place]
 verify_jwt = false
+
+[functions.recommend-places]
+verify_jwt = false

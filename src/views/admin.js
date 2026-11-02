@@ -5,6 +5,60 @@ import { spinner, toast, copyText, confirmAction, emptyCard } from '../component
 import { navigate } from '../router.js';
 
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const kTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
+const day = (ts) => (ts ? String(ts).slice(0, 10) : '');
+
+// AI 추천 권한 섹션 (migration_009 이전이면 users 가 null → 섹션 숨김)
+function aiSection(users, summary) {
+  if (!users) return '';
+  const s = summary || {};
+  const line = (k, label) => (s[k] ? `${label} ${s[k].calls}회${s[k].failed ? `(실패 ${s[k].failed})` : ''} · 토큰 ${kTok(s[k].tokens)}${s[k].avg_ms ? ` · 평균 ${(s[k].avg_ms / 1000).toFixed(1)}초` : ''}` : `${label} 0회`);
+  const requests = users.filter((u) => u.requested_at && !u.active);
+  const status = (u) => {
+    if (u.is_admin) return html`<span class="text-amber-300">관리자 · 무제한</span>`;
+    if (u.active) return html`<span class="text-emerald-300">허용 · ${u.expires_at ? `${day(u.expires_at)}까지` : '영구'}</span>`;
+    if (u.revoked_at) return html`<span class="text-slate-500">꺼짐 (${day(u.revoked_at)})</span>`;
+    if (u.daily_limit != null && u.expires_at) return html`<span class="text-slate-500">만료 (${day(u.expires_at)})</span>`;
+    return html`<span class="text-slate-500">권한 없음</span>`;
+  };
+  const row = (u) => html`
+    <div class="p-2.5 rounded-xl bg-night-950/60 space-y-1.5 ${u.requested_at && !u.active ? 'border border-amber-400/40' : ''}">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <p class="text-xs font-bold text-white truncate">${u.email || '(이메일 없음)'}</p>
+          <p class="text-[10px] text-slate-400 truncate">${u.trips || '참여 여행 없음'} · 최근 ${ago(u.last_seen)}</p>
+        </div>
+        <span class="text-[10px] flex-shrink-0">${status(u)}</span>
+      </div>
+      ${u.requested_at && !u.active ? html`<p class="text-[10px] text-amber-200"><i class="fa-solid fa-hand mr-1"></i>사용 요청 · ${ago(u.requested_at)}${u.request_message ? ` · ${u.request_message}` : ''}</p>` : ''}
+      <p class="text-[10px] text-slate-400">오늘 추천 ${u.used_today}${u.active && !u.is_admin ? `/${u.daily_limit}` : ''}회 · 7일: 추천 ${u.recommend_7d}회(토큰 ${kTok(u.recommend_tokens_7d)}) · 정보 채우기 ${u.enrich_7d}회(토큰 ${kTok(u.enrich_tokens_7d)})</p>
+      ${u.is_admin ? '' : html`
+        <div class="flex flex-wrap items-center gap-1">
+          <button data-action="ai-grant" data-user="${u.user_id}" data-days="7" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-200">7일</button>
+          <button data-action="ai-grant" data-user="${u.user_id}" data-days="30" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-200">30일</button>
+          <input type="date" id="ai-date-${u.user_id}" class="text-[10px] px-1.5 py-1 rounded bg-slate-800 text-slate-200 border border-white/10">
+          <button data-action="ai-grant" data-user="${u.user_id}" data-days="date" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-200">날짜까지</button>
+          <button data-action="ai-grant" data-user="${u.user_id}" data-days="perm" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-200">영구</button>
+          ${u.active ? html`<button data-action="ai-off" data-user="${u.user_id}" class="text-[10px] px-2 py-1 rounded bg-rose-500/15 text-rose-300">끄기</button>` : ''}
+          ${u.requested_at && !u.active ? html`<button data-action="ai-dismiss" data-user="${u.user_id}" class="text-[10px] px-2 py-1 rounded text-slate-400">요청 지우기</button>` : ''}
+        </div>
+        ${u.daily_limit != null ? html`
+          <div class="flex items-center gap-1 text-[10px] text-slate-400">하루 한도
+            <input type="number" min="0" max="1000" id="ai-limit-${u.user_id}" value="${u.daily_limit}" class="w-16 px-1.5 py-0.5 rounded bg-slate-800 text-slate-100 border border-white/10">회
+            <button data-action="ai-limit" data-user="${u.user_id}" class="px-2 py-0.5 rounded bg-slate-800 text-slate-200">저장</button>
+          </div>` : ''}`}
+    </div>`;
+  return html`
+    <section class="glass-card p-4 rounded-2xl space-y-2">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-wand-magic-sparkles text-purple-300 mr-1"></i>AI 추천 권한</h3>
+        ${requests.length ? html`<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 font-bold">요청 ${requests.length}건</span>` : ''}
+      </div>
+      <p class="text-[10px] text-slate-400">최근 7일: ${line('recommend', '추천')} / ${line('enrich', '정보 채우기')}</p>
+      <p class="text-[10px] text-slate-500">Google 로그인 사용자만 표시돼요. 새로 허용하면 하루 10회로 시작하고, 아래 칸에서 사람마다 바꿀 수 있어요.</p>
+      ${users.length ? users.map(row) : emptyCard('Google 로그인 사용자가 없어요.')}
+    </section>`;
+}
 const ago = (ts) => {
   if (!ts) return '-';
   const d = (Date.now() - new Date(ts).getTime()) / 86400000;
@@ -56,13 +110,15 @@ export async function render(app) {
   }
 
   async function load() {
-    const [stats, trips, codes, places] = await Promise.all([
+    const [stats, trips, codes, places, aiUsers, aiSummary] = await Promise.all([
       rpc('admin_stats'),
       rpc('admin_list_trips'),
       supabase.from('creation_codes').select('*').order('created_at', { ascending: false }).then((r) => {
         if (r.error) throw r.error; return r.data;
       }),
       rpc('places_quota_status').catch(() => null),   // migration_003 이전이면 없음
+      rpc('admin_ai_users').catch(() => null),        // migration_009 이전이면 없음
+      rpc('admin_ai_summary').catch(() => null),
     ]);
 
     // 생성 코드: 사용 가능 / 지난 코드(만료·소진·폐기)
@@ -121,6 +177,8 @@ export async function render(app) {
           </details>` : ''}
         </section>
 
+        ${aiSection(aiUsers, aiSummary)}
+
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white">전체 여행 ${trips.length}개</h3>
           ${trips.map((t) => html`
@@ -170,6 +228,37 @@ export async function render(app) {
       'delete-ended': async () => {
         if (!confirmAction('지난 코드(만료·소진·폐기)를 모두 삭제할까요? 이 코드들로 만든 여행은 그대로 남아요.')) return;
         try { const n = await rpc('admin_delete_codes', { p_id: null }); toast(`${n}개를 삭제했습니다.`); load(); }
+        catch (e) { toast(errorText(e), 'error'); }
+      },
+      'ai-grant': async (el) => {
+        const id = el.dataset.user;
+        let expires = null;
+        if (el.dataset.days === 'date') {
+          const v = document.getElementById(`ai-date-${id}`)?.value;
+          if (!v) { toast('날짜를 먼저 골라주세요.', 'error'); return; }
+          expires = new Date(`${v}T23:59:59`).toISOString();
+        } else if (el.dataset.days !== 'perm') {
+          expires = new Date(Date.now() + Number(el.dataset.days) * 86400000).toISOString();
+        }
+        try {
+          await rpc('admin_set_ai_grant', { p_user: id, p_enabled: true, p_expires_at: expires, p_daily_limit: null });
+          toast(expires ? `${day(expires)}까지 허용했어요.` : '영구로 허용했어요.');
+          load();
+        } catch (e) { toast(errorText(e), 'error'); }
+      },
+      'ai-off': async (el) => {
+        if (!confirmAction('이 사람의 AI 추천 권한을 끌까요?')) return;
+        try { await rpc('admin_set_ai_grant', { p_user: el.dataset.user, p_enabled: false }); toast('껐어요.'); load(); }
+        catch (e) { toast(errorText(e), 'error'); }
+      },
+      'ai-limit': async (el) => {
+        const v = Number(document.getElementById(`ai-limit-${el.dataset.user}`)?.value);
+        if (!Number.isInteger(v) || v < 0 || v > 1000) { toast('0~1000 사이 숫자를 넣어주세요.', 'error'); return; }
+        try { await rpc('admin_set_ai_limit', { p_user: el.dataset.user, p_daily_limit: v }); toast(`하루 ${v}회로 바꿨어요.`); load(); }
+        catch (e) { toast(errorText(e), 'error'); }
+      },
+      'ai-dismiss': async (el) => {
+        try { await rpc('admin_dismiss_ai_request', { p_user: el.dataset.user }); load(); }
         catch (e) { toast(errorText(e), 'error'); }
       },
       'delete-trip': async (el) => {
