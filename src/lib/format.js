@@ -70,4 +70,4 @@ export function todayIn(timezone) {
 
 export const shortTime = (t) => (t ? t.slice(0, 5) : '');
 
-export const CURRENCIES = ['KRW', 'JPY', 'USD', 'EUR', 'CNY', 'TWD', 'HKD', 'THB', 'VND', 'SGD', 'PHP', 'GBP', 'AUD', 'CAD'];
+export { CURRENCIES } from './currency.js';

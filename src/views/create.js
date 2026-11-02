@@ -3,7 +3,8 @@ import { ensureUser } from '../lib/auth.js';
 import { rpc, errorText } from '../lib/supabase.js';
 import { toast } from '../components/ui.js';
 import { navigate } from '../router.js';
-import { CURRENCIES } from '../lib/format.js';
+import { currencyOptions } from '../lib/currency.js';
+import { fetchRate } from '../lib/fx.js';
 
 const TIMEZONES = (() => {
   try { return Intl.supportedValuesOf('timeZone'); } catch { return ['Asia/Seoul', 'Asia/Tokyo', 'UTC']; }
@@ -36,10 +37,11 @@ export async function render(app) {
           <select name="tz" class="input">${TIMEZONES.map((z) => html`<option ${z === localTz ? 'selected' : ''}>${z}</option>`)}</select></div>
         <div class="grid grid-cols-2 gap-2">
           <div><label class="label">내 통화</label>
-            <select name="home" class="input">${CURRENCIES.map((c) => html`<option ${c === 'KRW' ? 'selected' : ''}>${c}</option>`)}</select></div>
+            <select name="home" class="input">${currencyOptions('KRW').map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`)}</select></div>
           <div><label class="label">현지 통화</label>
-            <select name="local" class="input">${CURRENCIES.map((c) => html`<option ${c === 'JPY' ? 'selected' : ''}>${c}</option>`)}</select></div>
+            <select name="local" class="input">${currencyOptions('JPY').map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`)}</select></div>
         </div>
+        <p class="text-[10px] text-slate-500 -mt-1">환율은 만들 때 자동으로 채워져요. 가계부 → 예산 관리에서 바꿀 수 있어요.</p>
         <div><label class="label">내 이름 (이 여행에서 표시) *</label>
           <input name="owner" class="input" required maxlength="20" placeholder="예: 준"></div>
       </div>
@@ -52,16 +54,18 @@ export async function render(app) {
     const v = formValues(e.target);
     const btn = e.target.querySelector('button[type=submit]');
     btn.disabled = true;
+    const ratePromise = fetchRate(v.local, v.home).catch(() => null);   // 여행 만드는 동안 같이 조회
     try {
       const tripId = await rpc('create_trip', {
         p_code: v.code.toUpperCase(), p_title: v.title, p_owner_name: v.owner,
         p_destination: v.destination, p_start_date: v.start, p_end_date: v.end,
         p_timezone: v.tz, p_home_currency: v.home, p_local_currency: v.local,
       });
-      if (v.emoji) {
-        const { supabase } = await import('../lib/supabase.js');
-        await supabase.from('trips').update({ cover_emoji: v.emoji }).eq('id', tripId);
-      }
+      const { supabase } = await import('../lib/supabase.js');
+      if (v.emoji) await supabase.from('trips').update({ cover_emoji: v.emoji }).eq('id', tripId);
+      // 환율 자동 채우기 (실패해도 여행 만들기는 그대로 진행, 나중에 예산 관리에서 설정)
+      const r = await Promise.race([ratePromise, new Promise((ok) => setTimeout(() => ok(null), 4000))]);
+      if (r?.rate) await supabase.from('trip_budgets').update({ rate: r.rate }).eq('trip_id', tripId);
       toast('여행이 만들어졌습니다!');
       navigate(`/trip/${tripId}/more`, { replace: true });
     } catch (err) {

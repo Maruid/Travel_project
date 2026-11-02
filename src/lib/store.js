@@ -23,6 +23,24 @@ const stripMeta = (row) => Object.fromEntries(Object.entries(row).filter(([k]) =
 const isNetworkError = (err) =>
   !navigator.onLine || /fetch|network|Failed to|Load failed|timeout/i.test(err?.message || '');
 
+// 서버에서 온 두 버전 중 더 새 것 (updated_at 기준, 같으면 들어온 쪽)
+//  - 로컬에서만 바꾼 값은 updated_at 이 그대로라 들어온 값으로 바뀌지만, 보낼 변경(outbox)이 다시 덮어씀
+export function newer(cur, incoming) {
+  if (!incoming) return cur ?? incoming;
+  const a = ts(cur?.updated_at); const b = ts(incoming.updated_at);
+  if (a == null || b == null) return incoming;
+  return b >= a ? incoming : cur;
+}
+// 시각 문자열 → 숫자 (시간대 표시가 없는 값은 UTC 로 간주, 마이크로초까지 비교)
+function ts(s) {
+  if (!s) return null;
+  const m = /^(.*?T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})?$/.exec(String(s).replace(' ', 'T'));
+  if (!m) { const t = Date.parse(s); return Number.isNaN(t) ? null : t * 1000; }
+  const base = Date.parse(`${m[1]}${m[3] || 'Z'}`);
+  if (Number.isNaN(base)) return null;
+  return base * 1000 + Number(((m[2] || '') + '000000').slice(0, 6));
+}
+
 export class TripStore {
   constructor(tripId, userId) {
     this.tripId = tripId;
@@ -150,8 +168,9 @@ export class TripStore {
     for (const r of [trip, budget, members, invite, globals]) if (r.error) throw r.error;
     if (!trip.data) throw new Error('FORBIDDEN');
 
-    this.trip = trip.data;
-    this.budget = budget.data;
+    // 받아오는 사이 저장된 더 새 값(저장 응답·실시간 알림)을 옛날 응답으로 덮어쓰지 않도록 수정 시각 비교
+    this.trip = newer(this.trip, trip.data);
+    this.budget = newer(this.budget, budget.data);
     this.members = members.data;
     // 추가 기기 목록 (migration_002 이전 DB 에서는 테이블이 없을 수 있으므로 실패해도 무시)
     const devices = await supabase.from('trip_member_devices').select('id, member_id, user_id, created_at, last_seen_at').eq('trip_id', id);
@@ -171,6 +190,8 @@ export class TripStore {
 
   applyRemote(table, row, notify = true) {
     if (!row?.id) return;
+    const cur = this.tables[table].get(row.id);
+    if (newer(cur, row) !== row) return;   // 이미 더 새 버전이 있으면 무시
     this.tables[table].set(row.id, row);
     if (row.updated_at && (!this.cursors[table] || row.updated_at > this.cursors[table])) {
       this.cursors[table] = row.updated_at;
@@ -207,9 +228,9 @@ export class TripStore {
           this.saveCache(); this.emit();
         })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trip_budgets', filter: `trip_id=eq.${id}` },
-        (p) => { this.budget = p.new; this.applyOutboxLocally(); this.saveCache(); this.emit(); })
+        (p) => { this.budget = newer(this.budget, p.new); this.applyOutboxLocally(); this.saveCache(); this.emit(); })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'trips', filter: `id=eq.${id}` },
-        (p) => { this.trip = p.new; this.saveCache(); this.emit(); });
+        (p) => { this.trip = newer(this.trip, p.new); this.saveCache(); this.emit(); });
     this.channel = ch.subscribe((status) => {
       // 재연결되면 놓친 변경을 커서 기준으로 다시 받음
       if (status === 'SUBSCRIBED' && this._subscribedOnce) this.sync();
@@ -259,7 +280,7 @@ export class TripStore {
         this.outbox.shift();
         this.saveOutbox();
         if (res.data) {
-          if (op.table === 'trip_budgets') this.budget = res.data;
+          if (op.table === 'trip_budgets') this.budget = newer(this.budget, res.data);
           else this.applyRemote(op.table, res.data, false);
         }
       }

@@ -2,6 +2,10 @@ import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
 import { money, todayIn, shortTime, CURRENCIES } from '../../lib/format.js';
 import { color } from '../../lib/safe.js';
+import { currencyOptions } from '../../lib/currency.js';
+import { fetchRate } from '../../lib/fx.js';
+
+const curOpts = (selected, extra) => currencyOptions(selected, extra).map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`);
 
 const EXPENSE_CATS = ['음식', '교통', '쇼핑', '카페', '관광', '숙박', '기타'];
 const METHOD_TEXT = { cash: '현금', card: '카드', other: '기타' };
@@ -145,10 +149,10 @@ function openExpenseEditor(store, id) {
       <div><label class="label">사용처 *</label>
         <input name="place_name" class="input" required maxlength="100" list="place-names" value="${e.place_name || ''}">
         <datalist id="place-names">${places.map((p) => html`<option value="${p.name}">`)}</datalist></div>
-      <div class="grid grid-cols-[1fr_auto] gap-2">
+      <div class="grid grid-cols-2 gap-2">
         <div><label class="label">금액 *</label><input name="amount" type="number" min="0" step="any" class="input text-sm font-bold font-mono" required value="${e.amount ?? ''}"></div>
         <div><label class="label">통화</label><select name="currency" class="input">
-          ${[...new Set([b.local_currency, b.home_currency, ...CURRENCIES])].filter(Boolean).map((c) => html`<option ${c === e.currency ? 'selected' : ''}>${c}</option>`)}</select></div>
+          ${curOpts(e.currency, [b.local_currency, b.home_currency])}</select></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">항목</label><select name="category" class="input">
@@ -200,12 +204,17 @@ function openBudgetSettings(store) {
     <h3 class="text-base font-black text-white mb-3">예산 & 환율</h3>
     <form id="budget-form" class="glass-card p-3 rounded-2xl space-y-2.5 mb-3">
       <div class="grid grid-cols-2 gap-2">
-        <div><label class="label">현지 통화</label><select name="local_currency" class="input">
-          ${CURRENCIES.map((c) => html`<option ${c === b.local_currency ? 'selected' : ''}>${c}</option>`)}</select></div>
-        <div><label class="label">내 통화</label><select name="home_currency" class="input">
-          ${CURRENCIES.map((c) => html`<option ${c === b.home_currency ? 'selected' : ''}>${c}</option>`)}</select></div>
+        <div><label class="label">현지 통화</label><select name="local_currency" class="input">${curOpts(b.local_currency)}</select></div>
+        <div><label class="label">내 통화</label><select name="home_currency" class="input">${curOpts(b.home_currency)}</select></div>
       </div>
-      <div><label class="label">환율 (현지 1단위 = 내 통화 몇)</label><input name="rate" type="number" step="any" min="0" class="input font-mono" value="${b.rate}"></div>
+      <div>
+        <div class="flex items-center justify-between">
+          <label class="label">환율 (<span id="rate-unit">1 ${b.local_currency} = ? ${b.home_currency}</span>)</label>
+          <button type="button" data-action="fetch-rate" class="text-[10px] text-neon-cyan font-bold"><i class="fa-solid fa-rotate mr-0.5"></i>최신 환율로</button>
+        </div>
+        <input name="rate" type="number" step="any" min="0" class="input font-mono" value="${b.rate}">
+        <p id="rate-note" class="text-[10px] text-slate-500 mt-1">환율은 바꿀 때만 적용돼요. 이미 적은 지출의 환산액도 새 환율로 다시 계산돼요.</p>
+      </div>
       <div><label class="label">기본 환전금 (현지 통화)</label><input name="base_amount" type="number" step="any" min="0" class="input font-mono" value="${b.base_amount}"></div>
       <button class="btn-primary">저장</button>
     </form>
@@ -225,6 +234,38 @@ function openBudgetSettings(store) {
         <button class="btn-ghost">추가</button>
       </form>
     </div>`, (el) => {
+    // 환율 자동 채우기: 통화를 바꾸거나 [최신 환율로]를 누를 때만 (자동 갱신 없음)
+    const form = $('#budget-form', el);
+    let seq = 0;
+    async function fillRate() {
+      const from = form.elements.local_currency.value;
+      const to = form.elements.home_currency.value;
+      $('#rate-unit', el).textContent = `1 ${from} = ? ${to}`;
+      const note = $('#rate-note', el);
+      const my = ++seq;
+      note.className = 'text-[10px] text-slate-400 mt-1';
+      note.textContent = '환율 가져오는 중...';
+      try {
+        const r = await fetchRate(from, to);
+        if (my !== seq) return;   // 그 사이 통화를 또 바꿨으면 무시
+        form.elements.rate.value = r.rate;
+        note.className = 'text-[10px] text-emerald-300 mt-1';
+        setHTML(note, r.source === 'same' ? html`같은 통화예요.`
+          : html`자동 · ${r.date || '오늘'} 기준${r.attribution ? html` · <a href="${r.attribution}" target="_blank" rel="noopener" class="underline">Rates By Exchange Rate API</a>` : ''} (저장해야 적용돼요)`);
+      } catch (err) {
+        if (my !== seq) return;
+        note.className = 'text-[10px] text-amber-300 mt-1';
+        note.textContent = err.message;
+      }
+    }
+    form.addEventListener('change', (e) => { if (e.target.name === 'local_currency' || e.target.name === 'home_currency') fillRate(); });
+    form.elements.rate.addEventListener('input', () => {
+      seq++;
+      const note = $('#rate-note', el);
+      note.className = 'text-[10px] text-slate-400 mt-1';
+      note.textContent = '직접 입력 (저장해야 적용돼요)';
+    });
+
     $('#budget-form', el).addEventListener('submit', (e) => {
       e.preventDefault();
       const v = formValues(e.target);
@@ -241,6 +282,7 @@ function openBudgetSettings(store) {
       openBudgetSettings(store);
     });
     return delegate(el, {
+      'fetch-rate': () => fillRate(),
       'del-topup': (b2) => { store.remove('budget_topups', b2.dataset.id); openBudgetSettings(store); },
     });
   });
