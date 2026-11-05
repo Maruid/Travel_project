@@ -40,6 +40,7 @@ const ERROR_TEXT = {
   GOOGLE_REQUIRED: 'Google 로그인 후 사용할 수 있어요.',
   CODE_IN_USE: '아직 사용 가능한 코드예요. 먼저 폐기한 뒤 삭제할 수 있어요.',
   NO_PLACES: '공유할 장소를 하나 이상 골라주세요.',
+  VIEW_LINK_INVALID: '이 보기 전용 링크는 꺼졌거나 바뀌었어요.',
   SHARE_LIMIT: '이 여행의 공유 코드는 10개까지예요. 안 쓰는 코드를 끄고 다시 만들어 주세요.',
 };
 

@@ -12,6 +12,7 @@ route('/create', () => import('./views/create.js'));
 route('/join/:token', () => import('./views/join.js'));
 route('/trip/:id/:tab?', () => import('./views/trip.js'));
 route('/admin', () => import('./views/admin.js'));
+route('/view/:token', () => import('./views/view.js'));   // 보기 전용 공유 링크 (로그인 없음)
 
 async function boot() {
   // OAuth 복귀(?code=...) 처리: supabase-js 가 세션 교환을 끝낸 뒤 원래 경로로 이동

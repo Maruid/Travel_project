@@ -20,6 +20,7 @@ export function mount(root, store) {
   getUser().then((u) => { anonymous = isAnonymous(u); update(); });
 
   const inviteUrl = () => (store.invite ? `${APP_URL}#/join/${store.invite.token}` : null);
+  const viewUrl = () => (store.viewLink?.token ? `${APP_URL}#/view/${store.viewLink.token}` : null);
 
   function update() {
     const owner = store.isOwner;
@@ -45,6 +46,24 @@ export function mount(root, store) {
             ${navigator.share ? html`<button data-action="share-invite" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
           </div>
           ${owner ? html`<button data-action="regen" class="text-[10px] text-amber-300 underline">링크 재발급 (기존 링크는 더 이상 동작하지 않음)</button>` : ''}
+        </section>
+
+        <section class="glass-card p-4 rounded-2xl space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-eye text-neon-cyan mr-1"></i>보기 전용 링크</h3>
+            ${owner ? html`<label class="flex items-center gap-1.5 text-[11px] text-slate-300">
+              <input type="checkbox" data-action="view-toggle" ${store.viewLink?.enabled ? 'checked' : ''} class="accent-cyan-400"> 켜기</label>`
+              : html`<span class="text-[10px] ${store.viewLink?.enabled ? 'text-emerald-300' : 'text-slate-500'}">${store.viewLink?.enabled ? '켜짐' : '꺼짐'}</span>`}
+          </div>
+          <p class="text-[10px] text-slate-400">로그인 없이 일정 · 장소 · 가이드만 볼 수 있어요. 가계부 · 할 일 · 멤버는 보이지 않고, 고칠 수 없어요. 부모님께 일정 공유할 때 좋아요.</p>
+          ${store.viewLink?.enabled ? html`
+            <div class="flex gap-1.5">
+              <input readonly class="input font-mono text-[10px]" value="${viewUrl()}">
+              <button data-action="copy-view" class="btn-ghost flex-shrink-0">복사</button>
+              ${navigator.share ? html`<button data-action="share-view" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
+            </div>
+            ${owner ? html`<button data-action="view-regen" class="text-[10px] text-amber-300 underline">링크 다시 만들기 (기존 링크는 더 이상 열리지 않음)</button>` : ''}`
+          : owner ? '' : html`<p class="text-[10px] text-slate-500">여행 관리자(owner)가 켤 수 있어요.</p>`}
         </section>
 
         <section class="glass-card p-4 rounded-2xl space-y-2">
@@ -154,6 +173,19 @@ export function mount(root, store) {
       </div>`);
   }
 
+  // 보기 전용 링크 켜기 · 끄기 · 다시 만들기 (owner, migration_011)
+  async function setViewLink(enabled, regenerate, checkbox = null) {
+    try {
+      store.viewLink = await rpc('set_view_link', { p_trip: store.tripId, p_enabled: enabled, p_regenerate: regenerate });
+      store.saveCache();
+      toast(regenerate ? '새 링크를 만들었어요.' : enabled ? '보기 전용 링크를 켰어요.' : '보기 전용 링크를 껐어요. 이제 링크로 열 수 없어요.');
+      update();
+    } catch (e) {
+      if (checkbox) checkbox.checked = !enabled;
+      toast(errorText(e), 'error');
+    }
+  }
+
   async function run(fn, okMsg) {
     try { await fn(); if (okMsg) toast(okMsg); await store.sync(); }
     catch (e) { toast(errorText(e), 'error'); }
@@ -161,6 +193,10 @@ export function mount(root, store) {
 
   const off = delegate(root, {
     'copy-invite': () => inviteUrl() && copyText(inviteUrl(), '초대 링크'),
+    'copy-view': () => viewUrl() && copyText(viewUrl(), '보기 전용 링크'),
+    'share-view': () => navigator.share?.({ title: `${store.trip.title} 일정`, url: viewUrl() }).catch(() => {}),
+    'view-toggle': (el) => setViewLink(el.checked, false, el),
+    'view-regen': () => confirmAction('새 링크를 만들면 지금 링크로는 더 이상 볼 수 없어요. 계속할까요?') && setViewLink(true, true),
     'share-invite': () => navigator.share?.({ title: store.trip.title, url: inviteUrl() }).catch(() => {}),
     regen: () => confirmAction('링크를 재발급하면 기존 링크로는 더 이상 참여할 수 없습니다. 계속할까요?')
       && run(() => rpc('regenerate_invite', { p_trip: store.tripId }), '새 링크를 발급했습니다.'),

@@ -1,6 +1,7 @@
 import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
-import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { money, todayIn, shortTime, rateText } from '../../lib/format.js';
+import { openSheet, closeSheet, toast, emptyCard, confirmAction, copyText } from '../../components/ui.js';
+import { money, todayIn, shortTime, rateText, approxMoney } from '../../lib/format.js';
+import { balances, settleTransfers } from '../../lib/settle.js';
 import { color } from '../../lib/safe.js';
 import { currencyOptions, unitOf } from '../../lib/currency.js';
 const unitText = (c) => unitOf(c) ?? c;
@@ -19,6 +20,17 @@ function toLocal(store, amount, currency) {
   return Number(amount) || 0;   // 그 외 통화는 환산하지 않음
 }
 
+// 단톡방에 붙여넣을 정산 글
+function settleText(store) {
+  const b = store.budget || {};
+  const L = b.local_currency; const H = b.home_currency; const rate = Number(b.rate) || 1;
+  const expenses = store.list('expenses');
+  const members = store.activeMembers();
+  const bal = balances(expenses, members.map((m) => m.id), (e) => toLocal(store, e.amount, e.currency));
+  const lines = settleTransfers(bal, L).map((t) => `${store.member(t.from)?.display_name} → ${store.member(t.to)?.display_name}: ${money(t.amount, L)}${H !== L ? ` (${approxMoney(t.amount * rate, H)})` : ''}`);
+  return [`[${store.trip?.title || '여행'} 정산]`, ...lines].join('\n');
+}
+
 export function mount(root, store) {
   function update() {
     const b = store.budget || { local_currency: 'KRW', home_currency: 'KRW', rate: 1, base_amount: 0 };
@@ -34,14 +46,13 @@ export function mount(root, store) {
     const totalSpent = expenses.reduce((s, e) => s + toLocal(store, e.amount, e.currency), 0);
     const remain = totalBudget - totalSpent;
 
-    // 결제자별 합계 & 균등 분담 기준 정산
-    const paid = new Map(), owed = new Map();
-    for (const e of expenses) {
-      const amt = toLocal(store, e.amount, e.currency);
-      if (e.paid_by) paid.set(e.paid_by, (paid.get(e.paid_by) || 0) + amt);
-      const split = e.split_with?.length ? e.split_with : members.map((m) => m.id);
-      split.forEach((mid) => owed.set(mid, (owed.get(mid) || 0) + amt / split.length));
-    }
+    // 결제자별 합계 & 균등 분담 기준 정산 (현지 통화 기준) → 최소 송금 목록
+    const bal = balances(expenses, members.map((m) => m.id), (e) => toLocal(store, e.amount, e.currency));
+    const paid = new Map(bal.map((x) => [x.id, x.paid]));
+    const owed = new Map(bal.map((x) => [x.id, x.owed]));
+    const transfers = settleTransfers(bal, L);
+    const nameOf = (id) => store.member(id)?.display_name || '(알 수 없음)';
+    const colorOf = (id) => color(store.member(id)?.color, '#e2e8f0');
     const cash = expenses.filter((e) => e.method === 'cash').reduce((s, e) => s + toLocal(store, e.amount, e.currency), 0);
 
     setHTML(root, html`
@@ -87,6 +98,26 @@ export function mount(root, store) {
                 </div>`;
               })}
             </div>
+            ${transfers.length ? html`
+              <div class="mt-3 pt-2.5 border-t border-white/10">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-[11px] font-bold text-slate-300"><i class="fa-solid fa-right-left text-neon-cyan mr-1"></i>이렇게 보내면 끝나요</span>
+                  <button data-action="copy-settle" class="text-[10px] text-neon-cyan">복사</button>
+                </div>
+                <div class="space-y-1">
+                  ${transfers.map((t) => html`
+                    <div class="flex items-center gap-1.5 text-[11px] p-2 rounded-xl bg-night-950/60 border border-white/5">
+                      <span class="font-bold truncate" style="color:${colorOf(t.from)}">${nameOf(t.from)}</span>
+                      <i class="fa-solid fa-arrow-right text-[9px] text-slate-500 flex-shrink-0"></i>
+                      <span class="font-bold truncate" style="color:${colorOf(t.to)}">${nameOf(t.to)}</span>
+                      <span class="ml-auto text-right flex-shrink-0">
+                        <b class="font-mono text-white">${money(t.amount, L)}</b>
+                        ${H !== L ? html`<span class="block text-[9px] text-slate-400">${approxMoney(t.amount * rate, H)}</span>` : ''}
+                      </span>
+                    </div>`)}
+                </div>
+                <p class="text-[9px] text-slate-500 mt-1.5">나눌 사람을 고르지 않은 지출은 지금 멤버 전원이 똑같이 나눠요. 다른 통화로 쓴 지출은 ${rateText(b)} 로 환산했어요.</p>
+              </div>` : expenses.length ? html`<p class="mt-2 text-[10px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>주고받을 돈이 없어요.</p>` : ''}
           </div>` : ''}
 
         <div class="flex items-center justify-between">
@@ -122,6 +153,7 @@ export function mount(root, store) {
     add: () => openExpenseEditor(store, null),
     edit: (el) => openExpenseEditor(store, el.dataset.id),
     settings: () => openBudgetSettings(store),
+    'copy-settle': () => copyText(settleText(store), '정산 목록'),
   });
   update();
   return { update, destroy: off };

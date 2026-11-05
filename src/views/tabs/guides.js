@@ -15,14 +15,15 @@ const FORMAT_BUTTONS = [
 
 const COLORS = ['#00f2fe', '#f43f5e', '#f59e0b', '#10b981', '#38bdf8', '#c084fc', '#fbbf24', '#94a3b8'];
 
-export function mount(root, store) {
+// opts.readOnly: 읽기 전용 공유 화면 (추가·수정 버튼 없음)
+export function mount(root, store, { readOnly = false } = {}) {
   function update() {
     const guides = store.list('guides').sort((a, b) => (b.pinned - a.pinned) || (a.sort_order - b.sort_order));
     setHTML(root, html`
       <div class="p-4 space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="text-xs font-bold text-white"><i class="fa-solid fa-lightbulb text-neon-cyan mr-1"></i>가이드 카드</h2>
-          <button data-action="add" class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> 카드 추가</button>
+          ${readOnly ? '' : html`<button data-action="add" class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> 카드 추가</button>`}
         </div>
         ${guides.length ? guides.map((g) => html`
           <article class="glass-card p-4 rounded-2xl border-l-4" style="border-left-color:${color(g.color)}">
@@ -33,15 +34,15 @@ export function mount(root, store) {
               <div class="flex items-center gap-1 flex-shrink-0">
                 ${g.pinned ? html`<i class="fa-solid fa-thumbtack text-[10px] text-amber-300"></i>` : ''}
                 ${g.day_date ? html`<span class="text-[10px] font-mono text-slate-400">${dayLabel(g.day_date)}</span>` : ''}
-                <button data-action="edit" data-id="${g.id}" class="w-6 h-6 rounded-lg bg-slate-800 text-slate-400 text-[10px]"><i class="fa-solid fa-pen"></i></button>
+                ${readOnly ? '' : html`<button data-action="edit" data-id="${g.id}" class="w-6 h-6 rounded-lg bg-slate-800 text-slate-400 text-[10px]"><i class="fa-solid fa-pen"></i></button>`}
               </div>
             </div>
             <div class="md">${renderMarkdown(g.body_md)}</div>
-          </article>`) : emptyCard('가이드 카드가 없습니다. 날씨, 교통, 현지어 쇼잉 카드 등을 만들어 보세요.')}
+          </article>`) : emptyCard(readOnly ? '가이드 카드가 없습니다.' : '가이드 카드가 없습니다. 날씨, 교통, 현지어 쇼잉 카드 등을 만들어 보세요.')}
       </div>`);
   }
 
-  const off = delegate(root, {
+  const off = readOnly ? () => {} : delegate(root, {
     add: () => pickTemplate(store),
     edit: (el) => openGuideEditor(store, el.dataset.id),
   });

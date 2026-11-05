@@ -56,7 +56,7 @@ index.html                 앱 셸 (#app, #sheet, #toast). 프로젝트 문서�
 vite.config.js             VITE_BASE, PWA(registerType: prompt), 지도 타일 런타임 캐시
 src/
   main.js                  라우트 등록, OAuth 복귀 처리, PWA 업데이트 배너
-  router.js                해시 라우터: / · /create · /join/:token · /trip/:id/:tab? · /admin
+  router.js                해시 라우터: / · /create · /join/:token · /trip/:id/:tab? · /admin · /view/:token
   config.js                공개 설정 (VITE_SUPABASE_URL/KEY, MAP_STYLE, APP_URL)
   styles.css               Tailwind v4 @theme(색: night-950/900, neon-cyan …) + @utility(glass-card, btn-*, input …)
   components/
@@ -76,6 +76,8 @@ src/
     place-filter.js        장소 필터(카테고리 여러 개·안 간 곳만·찜) + 이름 검색 (순수 함수)
     route-plan.js          하루 동선: 구간 도보 어림, 길찾기 링크, 숙소 출발·복귀 (순수 함수)
     md-edit.js             가이드 편집기 서식 버튼 (굵게·목록·번호·제목·쇼잉 카드, 순수 함수)
+    likes.js               찜: (장소, 멤버) 고정 id, 장소별 찜한 멤버 묶기 (순수 함수)
+    settle.js              정산: 멤버별 낸 돈·몫, 최소 송금 목록 (순수 함수)
     currency.js            통화 목록 + "일본 - 엔 (JPY)" 라벨
     fx.js                  무료 환율 조회 (fawazahmed0 → open.er-api)
     format.js              distanceKm, walkInfo, money, priceRange, 날짜
@@ -85,6 +87,7 @@ src/
     pwa.js, safe.js(color/icon 화이트리스트)
   views/
     home.js, create.js, join.js, admin.js
+    view.js                보기 전용 공유 화면(#/view/:token, 로그인 없음). ViewStore 로 일정·가이드 탭을 readOnly 로 재사용
     trip.js                하단 탭 + 헤더, store.subscribe → 탭 update()
     place-import.js        다른 여행/공유 코드에서 장소 가져오기, 공유 코드 발급
     tabs/places.js         지도 + 리스트, 상세, 편집기, 위치 검토, 구글 반영 (가장 큼)
@@ -95,7 +98,7 @@ supabase/
   schema.sql, seed_osaka.sql, migration_002 ~ 007, config.toml
   functions/resolve-maps-link | enrich-place | place-details  (Deno, Verify JWT OFF)
 tests/                     node --test (maps-link, dom-router, tile-plan, place-sort, place-copy, store-newer, currency,
-                           name-match, hours, place-filter, route-plan, md-edit)
+                           name-match, hours, place-filter, route-plan, md-edit, settle-likes)
 public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 자리표시 아직 채워야 함
 ```
 
@@ -137,11 +140,13 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | trip_invites | 초대 토큰 (owner가 재발급) |
 | trip_budgets | home/local_currency, rate(현지 1 = 내 통화 rate), base_amount |
 | categories | trip_id null = 전역 기본 8종, 값 있음 = 여행 커스텀 |
-| places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb |
+| places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb + visited_at |
 | itinerary_days / itinerary_items | 날짜 헤더 / 시간 항목(place_id 연결) |
 | guides | 마크다운 카드 (day_date 지정 시 일정에도 노출) |
 | budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
 | todos | kind todo/place/shop |
+| place_likes | 찜: place_id, member_id, liked. id = (장소, 멤버)로 계산한 고정 UUID (011) |
+| trip_view_links | 보기 전용 링크: trip_id(1개), token, enabled (011) |
 | creation_codes | 여행 생성 코드 (one_time/permanent, ended_at) |
 | device_link_codes | 기기 연결 코드 (10분, 1회) |
 | place_share_codes | 장소 공유 코드 (7일, place_ids[]) |
@@ -165,6 +170,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 008_currency_text | 통화 칸 4개 char(3) → text + `^[A-Z]{3}$` 검사, 잘린 값(J/K) 복구 |
 | 010_visited | places.visited_at (다녀옴 체크) |
 | 009_ai_recommend | AI 추천 권한(ai_grants)·요청(ai_grant_requests)·AI 사용 기록(ai_calls, 토큰)·추천 결과(recommend_cache), 관련 RPC, 자동 정리 추가 |
+| 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
 Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 새 테이블과 함수에는 **GRANT를 명시**해야 합니다. 함수는 `revoke all ... from public, anon` 후 `grant execute ... to authenticated`로 엽니다.
 
@@ -175,9 +181,11 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **admin**: `admins` 테이블. `#/admin` 화면(Google 로그인 필요)에서 여행 목록·삭제, 활성 사용자, 생성 코드, 구글 사용량을 봅니다.
 - **owner**: 여행을 만든 사람(한 명). 할 수 있는 일:
   - 초대 링크 재발급, 강퇴, 연결 해제, owner 넘기기
-  - 여행 정보 수정·삭제, 구글 일괄 가져오기, 장소 공유 코드 발급
+  - 여행 정보 수정·삭제, 구글 일괄 가져오기, 장소 공유 코드 발급, 보기 전용 링크 켜기·끄기·다시 만들기
 - **member**: 링크로 참여한 사람. 콘텐츠 전부 편집 가능, 커스텀 카테고리 편집 가능(여행 설정이 허용할 때).
 - 판정: `is_trip_member` / `is_trip_owner`는 본 계정과 추가 기기 계정을 모두 봅니다(`my_member_id`).
+- **찜**은 예외적으로 "자기 멤버 것만" 추가·수정(`member_id = my_member_id(trip_id)`). 자리표시 멤버는 찜할 수 없습니다.
+- **보기 전용 링크**(anon): `view_trip(token)` 함수 하나만 anon 에게 열려 있습니다. 테이블 권한은 없습니다.
 - 로그인:
   - 기본은 **익명 로그인**이고, 초대 링크로 들어와 이름을 고르면 참여됩니다.
   - 여러 기기에서 쓰려면 **Google 계정 연결**(linkIdentity)이나 **기기 연결 코드**(8자리, 10분)를 씁니다.
@@ -402,6 +410,23 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   - 서식 버튼 [굵게][목록][번호][제목][쇼잉 카드]: 고른 글자를 감싸거나 줄 앞에 붙임. 같은 버튼을 다시 누르면 풀림, 목록 ↔ 번호 바꿔 끼움, 빈 선택이면 예시 글자를 넣고 선택.
   - [편집 | 미리보기] 전환: 입력 칸 자리에 미리보기를 보여주고, 누를 때만 한 번 그립니다(입력 중 렌더링 없음 → 폰에서도 가벼움).
 
+### 7-7-5. 2차 B (2026-11-06): 찜 · 정산 송금 목록 · 보기 전용 링크 (011)
+
+- **찜(❤️)**: `place_likes` 를 다른 콘텐츠처럼 동기화(`CONTENT_TABLES`, outbox, Realtime).
+  - 행 id = `likeId(장소, 멤버)` 고정 UUID → 같은 사람이 여러 기기에서 눌러도 한 줄. 끄면 `liked=false`(행 유지).
+  - 장소 카드 오른쪽 하트: 누르면 내 찜 켜고 끔, 토스트로 "찜했어요 · 민수, 홍준". 숫자 = 찜한 사람 수, 내가 찜했으면 빨강.
+  - 상세 시트 위쪽에 찜한 사람 이름 + [찜하기/찜 취소].
+  - 필터 창 [찜한 곳] = 한 명이라도 찜한 장소. 나간 멤버의 찜은 세지 않습니다.
+  - 이 기기가 멤버로 연결돼 있지 않으면(`store.me` 없음) 찜할 수 없다고 알립니다.
+- **정산 송금 목록**(가계부, `settle.js`): 기존 "받을 돈/보낼 돈" 아래 "이렇게 보내면 끝나요" — 가장 많이 보낼 사람 → 가장 많이 받을 사람 순으로 짝지어 송금 수를 줄임.
+  - 현지 통화 금액 + 내 통화 어림("약 3.2만원"). 엔·원 등은 1단위, 그 외는 0.01 단위로 반올림, 1단위 미만 차이는 무시.
+  - 자리표시 멤버 포함. 나눌 사람을 고르지 않은 지출은 지금 멤버 전원 균등. [복사]로 단톡방용 글.
+- **보기 전용 링크**(`#/view/:token`, `view.js`)
+  - 설정 탭 "보기 전용 링크": owner 가 [켜기] 체크로 만들고 끔, [링크 다시 만들기]로 옛 링크 무효화. 여행당 1개. 멤버는 켜져 있으면 링크를 보고 복사.
+  - 열면 익명 로그인 없이 `view_trip` 1번 호출 → 일정(동선 지도 포함) · 장소(지도 + 목록, 카테고리 칩) · 가이드. 수정 버튼 없음. 열 때마다 최신, 기기에 저장 안 함.
+  - 서버가 보내는 것: 여행 제목·목적지·날짜·시간대·이모지, 카테고리, 장소(작성자·위치 검토 등 내부 칸 제외), 일정, 가이드. 가계부·할 일·멤버·찜은 보내지 않습니다.
+  - 꺼졌거나 바뀐 링크: "이 링크는 꺼졌거나 바뀌었어요" 화면.
+
 ### 7-8. 설정 탭 (more.js) 구성
 
 1. **함께하기**: 초대 링크(복사, 공유, owner는 재발급), 멤버 목록(이름 변경, 멤버 메뉴), 동행자 추가
@@ -511,6 +536,9 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | 이름 검색 결과는 시트 안 목록 | 리스트를 거르는 대신 "찾아서 바로 가기". 필터에 숨겨진 곳도 찾을 수 있게 |
 | 동선 시간은 직선 × 1.3 어림 | 경로 API는 비용·키가 필요. 일정 짜기에는 대략이면 충분, 실제 길은 [길찾기]로 |
 | 가이드 미리보기는 전환 방식 | 입력할 때마다 마크다운을 그리면 폰에서 무거움 |
+| 찜 id 를 (장소, 멤버)로 계산 | 여러 기기·오프라인에서 눌러도 중복 행이 생기지 않음. 끄기는 행 삭제 대신 liked=false (오프라인 기기가 바뀐 사실을 받도록) |
+| 보기 전용은 함수 1개(view_trip)로 | anon 에게 테이블을 열지 않고 보낼 칸을 서버가 고름. 링크를 끄면 바로 막힘 |
+| 찜 많은 순 정렬은 아직 없음 | 정렬 칩 줄 폭(모바일 390px)이 꽉 참. 필터 [찜한 곳] 으로 대신. 3차 자동 일정에서 찜 수를 씀 |
 | AI 진행 표시는 스트리밍 | 요청을 둘로 나누면 한도 없이 정리 단계만 부를 틈이 생김, 시간으로 흉내 내면 실제와 안 맞음 |
 
 ---
@@ -546,7 +574,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 ## 14. 다음 단계 (합의된 로드맵)
 
 - **2차 A (완료, 2026-11-06)**: 마커 정리 · 필터 창 + 이름 검색 · 하루 동선 지도 · 가이드 서식 버튼/미리보기 전환. DB 변경 없음. §7-7-4
-- **2차 B**: 찜(likes 테이블, 카드에 ❤️ 수, 누르면 누가 찜했는지, 각자 자기 것만 켜고 끔, 필터 창 [찜한 곳] 켜기) · 정산 송금 목록(최소 송금, 현지 통화 + 원화 어림, 자리표시 멤버 포함) · 읽기 전용 공유 링크(`#/view/…`, 일정·장소(목록+지도)·가이드만, 가계부·할 일·멤버 숨김, owner가 만들고 끄기, 여행당 1개, 로그인 없음, 열 때 최신). migration 011 필요
+- **2차 B (완료, 2026-11-06)**: §7-7-5. migration_011 적용 필요
+- (참고: 합의 내용) 찜(likes 테이블, 카드에 ❤️ 수, 누르면 누가 찜했는지, 각자 자기 것만 켜고 끔, 필터 창 [찜한 곳] 켜기) · 정산 송금 목록(최소 송금, 현지 통화 + 원화 어림, 자리표시 멤버 포함) · 읽기 전용 공유 링크(`#/view/…`, 일정·장소(목록+지도)·가이드만, 가계부·할 일·멤버 숨김, owner가 만들고 끄기, 여행당 1개, 로그인 없음, 열 때 최신). migration 011 필요
 - **3차: 일정 자동 짜기**(AI, 검색 없음)
   - 입력: 후보 장소(이름·카테고리·지역 묶음·숙소에서 도보 분·영업시간 요약·찜 수), 날짜·숙소·이미 있는 일정(고정), 자유 문구 200자("화요일은 USJ"), 시작·끝 시간, 페이스, 식사 자리, 후보 범위(찜 우선 / 카테고리 / 안 간 곳만)
   - 찜 반영: 필수 / 우선(기본) / 반영 안 함. 앱이 결과를 검사해 빠진 찜·영업시간 문제를 표시하고, 요청 전에 "너무 많음"을 미리 경고

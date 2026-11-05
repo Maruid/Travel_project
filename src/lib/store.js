@@ -1,5 +1,6 @@
 import { supabase, errorText } from './supabase.js';
 import { toast } from '../components/ui.js';
+import { likeId, likeMap } from './likes.js';
 
 // =====================================================================
 // TripStore: 여행 1개의 데이터 캐시 + 오프라인 동기화
@@ -15,6 +16,7 @@ import { toast } from '../components/ui.js';
 export const CONTENT_TABLES = [
   'categories', 'places', 'itinerary_days', 'itinerary_items',
   'guides', 'budget_topups', 'expenses', 'todos',
+  'place_likes',   // migration_011
 ];
 
 const LOCAL_ONLY = ['created_at', 'updated_at', 'updated_by', 'created_by'];
@@ -79,6 +81,7 @@ export class TripStore {
     this.members = [];
     this.invite = null;
     this.devices = [];        // 멤버별 추가 기기 (기기 추가 코드로 연결)
+    this.viewLink = null;     // 읽기 전용 공유 링크 { token, enabled } (migration_011)
     this.globalCategories = [];
     this.tables = Object.fromEntries(CONTENT_TABLES.map((t) => [t, new Map()]));
     this.cursors = {};
@@ -131,7 +134,7 @@ export class TripStore {
       const c = JSON.parse(localStorage.getItem(this.cacheKey) || 'null');
       if (c) {
         this.trip = c.trip; this.budget = c.budget; this.members = c.members || []; this.devices = c.devices || [];
-        this.invite = c.invite; this.globalCategories = c.globalCategories || [];
+        this.invite = c.invite; this.globalCategories = c.globalCategories || []; this.viewLink = c.viewLink || null;
         this.cursors = c.cursors || {};
         for (const t of CONTENT_TABLES) this.tables[t] = new Map((c.tables?.[t] || []).map((r) => [r.id, r]));
       }
@@ -156,7 +159,7 @@ export class TripStore {
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify({
         trip: this.trip, budget: this.budget, members: this.members, devices: this.devices, invite: this.invite,
-        globalCategories: this.globalCategories, cursors: this.cursors,
+        viewLink: this.viewLink, globalCategories: this.globalCategories, cursors: this.cursors,
         tables: Object.fromEntries(CONTENT_TABLES.map((t) => [t, [...this.tables[t].values()]])),
       }));
     } catch (e) { console.warn('cache save failed', e); }
@@ -221,7 +224,7 @@ export class TripStore {
       if (this.cursors[t]) q = q.gt('updated_at', this.cursors[t]);
       return q;
     });
-    const [trip, budget, members, invite, globals, devices, ...contents] = await Promise.all([
+    const [trip, budget, members, invite, globals, devices, viewLink, ...contents] = await Promise.all([
       supabase.from('trips').select('*').eq('id', id).maybeSingle(),
       supabase.from('trip_budgets').select('*').eq('trip_id', id).maybeSingle(),
       supabase.from('trip_members').select('*').eq('trip_id', id).order('created_at'),
@@ -229,6 +232,7 @@ export class TripStore {
       supabase.from('categories').select('*').is('trip_id', null).is('deleted_at', null).order('sort_order'),
       // 추가 기기 목록 (migration_002 이전 DB 에서는 테이블이 없을 수 있으므로 실패해도 무시)
       supabase.from('trip_member_devices').select('id, member_id, user_id, created_at, last_seen_at').eq('trip_id', id),
+      supabase.from('trip_view_links').select('token, enabled').eq('trip_id', id).maybeSingle(),
       ...contentQ,
     ]);
     for (const r of [trip, budget, members, invite, globals, ...contents]) if (r.error) throw r.error;
@@ -239,6 +243,7 @@ export class TripStore {
     this.budget = newer(this.budget, budget.data);
     this.members = members.data;
     this.devices = devices.error ? [] : devices.data;
+    this.viewLink = viewLink.error ? null : viewLink.data;
     this.invite = invite.data;
     this.globalCategories = globals.data;
 
@@ -250,7 +255,7 @@ export class TripStore {
 
   // 여행 정보 · 예산 · 멤버 등 작은 데이터의 비교용 문자열
   headSignature() {
-    return JSON.stringify([this.trip, this.budget, this.members, this.devices, this.invite, this.globalCategories?.length]);
+    return JSON.stringify([this.trip, this.budget, this.members, this.devices, this.invite, this.viewLink, this.globalCategories?.length]);
   }
 
   applyRemote(table, row, notify = true) {
@@ -468,6 +473,27 @@ export class TripStore {
   }
 
   activeMembers() { return this.members.filter((m) => !m.removed_at); }
+
+  // ---------------------------------------------------------- 찜
+  // 장소 id → 찜한 멤버 id 목록 (지금 멤버만)
+  likeMap() {
+    return likeMap(this.list('place_likes'), new Set(this.activeMembers().map((m) => m.id)));
+  }
+  likedByMe(placeId) {
+    const me = this.me;
+    if (!me) return false;
+    return !!this.tables.place_likes.get(likeId(placeId, me.id))?.liked;
+  }
+  // 내 찜 켜고 끄기. 내 멤버를 모르면(참여 정보 없음) false
+  toggleLike(placeId) {
+    const me = this.me;
+    if (!me) return false;
+    const id = likeId(placeId, me.id);
+    const cur = this.tables.place_likes.get(id);
+    if (cur) this.update('place_likes', id, { liked: !cur.liked });
+    else this.insert('place_likes', { id, place_id: placeId, member_id: me.id, liked: true });
+    return true;
+  }
   member(id) { return this.members.find((m) => m.id === id) || null; }
   get me() {
     const active = this.members.filter((m) => !m.removed_at);

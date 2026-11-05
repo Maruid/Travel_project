@@ -68,7 +68,7 @@ const HOURS_CLS = {
   closed_today: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
 };
 
-function placeBadges(p, cat, tz) {
+export function placeBadges(p, cat, tz) {
   const out = [];
   // 영업 상태 (구글 영업시간이 있는 곳만, 여행지 시간 기준)
   const hs = tz ? hoursStatus(p.opening_hours, tz) : null;
@@ -219,7 +219,8 @@ export function mount(root, store) {
     const from = anchorPoint();
     let rows = store.list('places').map((p) => ({ p, walk: walkInfo(from, p), cat: store.category(p.category_id) }));
     // 선택한 장소는 필터에 걸려도 보여줌 (검색으로 찾아 간 경우)
-    rows = rows.filter((r) => r.p.id === state.selectedId || passesFilter(r.p, state.filter));
+    const likedIds = likedSet();
+    rows = rows.filter((r) => r.p.id === state.selectedId || passesFilter(r.p, state.filter, { likedIds }));
     return sortRows(rows, state.sort);
   }
 
@@ -240,6 +241,9 @@ export function mount(root, store) {
     const cur = state.anchorId === 'gps' ? '내 위치' : anchors.find((a) => a.id === state.anchorId)?.name;
     $('#anchor-label', root).textContent = cur || '기준점 없음';
   }
+
+  // 한 명이라도 찜한 장소 id
+  function likedSet() { return new Set(store.likeMap().keys()); }
 
   // 필터 버튼 + 켜진 조건 칩 줄 (조건이 있을 때만)
   function renderFilterBar() {
@@ -283,7 +287,8 @@ export function mount(root, store) {
       const draw = () => {
         const places = store.list('places');
         const f = state.filter;
-        const shown = places.filter((p) => passesFilter(p, f)).length;
+        const likedIds = likedSet();
+        const shown = places.filter((p) => passesFilter(p, f, { likedIds })).length;
         const { groups, uncategorized } = groupCategories(store.categories(), places);
         const hasVisited = places.some((p) => p.visited_at);
         const on = 'bg-neon-cyan text-night-950 border-neon-cyan font-bold';
@@ -297,8 +302,8 @@ export function mount(root, store) {
           <div class="grid grid-cols-2 gap-1.5 mb-3">
             <button data-fs="hideVisited" ${hasVisited || f.hideVisited ? '' : 'disabled'} class="h-9 rounded-xl border text-[11px] flex items-center justify-center gap-1.5 disabled:opacity-40 ${f.hideVisited ? on : off}">
               <i class="fa-solid fa-check text-[10px]"></i>안 간 곳만</button>
-            <button disabled title="곧 추가돼요" class="h-9 rounded-xl border text-[11px] flex items-center justify-center gap-1.5 opacity-40 ${off}">
-              <i class="fa-solid fa-heart text-[10px] text-rose-400"></i>찜한 곳 <span class="text-[9px] text-slate-400">준비 중</span></button>
+            <button data-fs="liked" ${likedIds.size || f.liked ? '' : 'disabled'} class="h-9 rounded-xl border text-[11px] flex items-center justify-center gap-1.5 disabled:opacity-40 ${f.liked ? on : off}">
+              <i class="fa-solid fa-heart text-[10px] ${f.liked ? '' : 'text-rose-400'}"></i>찜한 곳 <span class="text-[10px] ${f.liked ? 'text-night-950/70' : 'text-slate-500'}">${likedIds.size}</span></button>
           </div>
           ${groups.length ? html`<p class="text-[10px] text-slate-400 mb-1.5">카테고리 <span class="text-slate-500">· 여러 개 고를 수 있어요</span></p>` : ''}
           <div class="space-y-2.5">
@@ -320,7 +325,7 @@ export function mount(root, store) {
         const hits = searchPlaces(store.list('places'), q, 12);
         if (!q.trim()) { setHTML(box, html``); box.classList.add('hidden'); return; }
         box.classList.remove('hidden');
-        setHTML(box, hits.length ? html`${hits.map((p) => { const c = store.category(p.category_id); const hidden = !passesFilter(p, state.filter); return html`
+        setHTML(box, hits.length ? html`${hits.map((p) => { const c = store.category(p.category_id); const hidden = !passesFilter(p, state.filter, { likedIds: likedSet() }); return html`
           <button data-fs="jump" data-id="${p.id}" class="w-full text-left px-2.5 py-2 rounded-xl bg-slate-800/70 border border-white/10 flex items-center gap-2">
             <i class="fa-solid ${icon(c?.icon)} text-[11px] w-4 text-center" style="color:${color(c?.color)}"></i>
             <span class="flex-1 min-w-0">
@@ -359,6 +364,7 @@ export function mount(root, store) {
         }
         if (act === 'clear') setFilter({ ...EMPTY_FILTER, cats: [] });
         else if (act === 'hideVisited') setFilter({ ...f, hideVisited: !f.hideVisited });
+        else if (act === 'liked') setFilter({ ...f, liked: !f.liked });
         else if (act === 'cat') {
           const id = b.dataset.id;
           setFilter({ ...f, cats: f.cats.includes(id) ? f.cats.filter((x) => x !== id) : [...f.cats, id] });
@@ -401,6 +407,8 @@ export function mount(root, store) {
         ${on ? html`${def.dirLabel[state.sort.dir]} <i class="fa-solid ${state.sort.dir === 'asc' ? 'fa-arrow-up' : 'fa-arrow-down'} text-[9px]"></i>` : def.label}</button>`;
     })}`);
     const sk = state.sort.key;
+    const likes = store.likeMap();
+    const meId = store.me?.id;
 
     setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => {
       const selected = p.id === state.selectedId;
@@ -430,8 +438,11 @@ export function mount(root, store) {
           <div class="flex flex-col items-end justify-between gap-1 flex-shrink-0">
             ${walk.text ? html`<span class="${BADGE} ${sk === 'distance' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}">${walk.text}</span>`
               : p.lat == null ? html`<span class="text-[10px] text-slate-500">위치 없음</span>` : html`<span></span>`}
-            <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
-              <i class="fa-solid fa-diamond-turn-right"></i></a>
+            <div class="flex items-center gap-1">
+              ${likeButton(likes.get(p.id) || [], meId, p.id)}
+              <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" title="구글 맵 길찾기" class="w-8 h-8 rounded-lg bg-slate-800 text-neon-cyan border border-white/10 flex items-center justify-center text-xs">
+                <i class="fa-solid fa-diamond-turn-right"></i></a>
+            </div>
           </div>
         </div>
         ${selected ? html`
@@ -636,6 +647,7 @@ export function mount(root, store) {
       else select(id);
     },
     detail: (el) => openPlaceDetail(store, el.dataset.id, anchorPoint()),
+    like: (el) => toggleLikeWithToast(store, el.dataset.id),
     'show-on-map': (el) => {
       setCollapsed(false);
       const p = store.get('places', el.dataset.id);
@@ -668,6 +680,44 @@ export function mount(root, store) {
 }
 
 // =====================================================================
+// 찜 (❤️)
+// =====================================================================
+// 상세 시트: 찜한 사람 이름 + 내 찜 버튼
+function likeRow(store, placeId) {
+  const ids = store.likeMap().get(placeId) || [];
+  const mine = store.likedByMe(placeId);
+  const names = likeNames(store, ids);
+  return html`
+    <div class="flex items-center gap-2 mb-3 p-2.5 rounded-2xl bg-rose-500/5 border border-rose-500/20">
+      <i class="fa-solid fa-heart text-rose-400 text-xs"></i>
+      <span class="flex-1 min-w-0 text-[11px] ${names.length ? 'text-rose-100' : 'text-slate-500'} truncate">${names.length ? names.join(', ') : '아직 찜한 사람이 없어요'}</span>
+      <button data-action="like" class="flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${mine ? 'bg-rose-500/20 text-rose-200 border-rose-500/50' : 'bg-slate-800 text-slate-200 border-white/10'}">
+        ${mine ? '찜 취소' : '찜하기'}</button>
+    </div>`;
+}
+
+// 카드 오른쪽 작은 하트: 내가 찜했으면 빨강, 누가 찜했으면 숫자
+function likeButton(memberIds, meId, placeId) {
+  const mine = meId && memberIds.includes(meId);
+  const n = memberIds.length;
+  return html`<button data-action="like" data-id="${placeId}" title="찜" aria-pressed="${mine ? 'true' : 'false'}"
+    class="h-8 min-w-8 px-1.5 rounded-lg border flex items-center justify-center gap-1 text-[11px] font-bold ${mine ? 'bg-rose-500/20 text-rose-300 border-rose-500/50' : 'bg-slate-800 border-white/10 ' + (n ? 'text-rose-300/80' : 'text-slate-500')}">
+    <i class="fa-solid fa-heart text-[11px]"></i>${n ? html`<span>${n}</span>` : ''}</button>`;
+}
+
+export function likeNames(store, memberIds) {
+  return memberIds.map((id) => store.member(id)?.display_name).filter(Boolean);
+}
+
+// 내 찜 켜고 끄기 + 누가 찜했는지 토스트
+export function toggleLikeWithToast(store, placeId) {
+  if (!store.toggleLike(placeId)) { toast('이 기기는 멤버로 연결되어 있지 않아 찜할 수 없어요.', 'error'); return; }
+  const names = likeNames(store, store.likeMap().get(placeId) || []);
+  const mine = store.likedByMe(placeId);
+  toast(mine ? `❤️ 찜했어요 · ${names.join(', ')}` : names.length ? `찜을 취소했어요 · 남은 찜: ${names.join(', ')}` : '찜을 취소했어요.');
+}
+
+// =====================================================================
 // 상세 시트
 // =====================================================================
 export function openPlaceDetail(store, id, from) {
@@ -689,6 +739,7 @@ export function openPlaceDetail(store, id, from) {
       <span>${p.zone || ''}</span>
       <span class="text-right"><span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="block text-[10px] text-slate-400">${priceInHome(p, store.budget)}</span>` : ''}</span>
     </div>
+    ${likeRow(store, id)}
     ${geoReviewCard(p)}
     ${googleBlock(p, store.trip.timezone)}
     <div class="space-y-2 text-xs">
@@ -717,6 +768,7 @@ export function openPlaceDetail(store, id, from) {
       <button data-action="delete" class="btn-ghost py-2.5 text-rose-300"><i class="fa-solid fa-trash-can mr-1"></i>삭제</button>
     </div>
   `, (el) => delegate(el, {
+    like: () => { toggleLikeWithToast(store, id); openPlaceDetail(store, id, from); },
     edit: () => openPlaceEditor(store, id, { near: from }),
     'geo-open': () => openGeoReview(store, geoReviewOf(p).type, { startId: id, onDone: () => openPlaceDetail(store, id, from) }),
     'geo-keep': () => {
@@ -1173,7 +1225,7 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
 // =====================================================================
 // 구글 지도 정보 표시 (영업시간 · 평점 · 폐업 · 연락처)
 // =====================================================================
-function googleBlock(p, timezone) {
+export function googleBlock(p, timezone) {
   const hours = p.opening_hours?.weekday || [];
   if (!p.google_place_id && !hours.length && !p.rating) return '';
   const today = todayIndexMondayFirst(timezone);

@@ -4,6 +4,7 @@
 //   #/join/:token          초대 링크 참여
 //   #/trip/:id/:tab?       여행 화면 (places | schedule | guides | budget | todos | more)
 //   #/admin                관리자
+//   #/view/:token          보기 전용 공유 (일정·장소·가이드)
 
 const routes = [];
 let current = { cleanup: null, key: null };

@@ -13,7 +13,8 @@ const ICONS = ['fa-location-dot', 'fa-utensils', 'fa-mug-saucer', 'fa-train-subw
   'fa-plane-arrival', 'fa-hotel', 'fa-bed', 'fa-hot-tub-person', 'fa-camera', 'fa-bag-shopping', 'fa-tree', 'fa-landmark',
   'fa-person-walking', 'fa-ticket', 'fa-gamepad', 'fa-beer-mug-empty', 'fa-sun', 'fa-moon'];
 
-export function mount(root, store) {
+// opts.readOnly: 읽기 전용 공유 화면 (추가·수정 없음), opts.onPlace(id): 장소 버튼을 눌렀을 때
+export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   const tz = () => store.trip.timezone;
   let selected = null;
 
@@ -57,19 +58,19 @@ export function mount(root, store) {
           ${all.map((d, i) => html`
             <button data-action="day" data-day="${d}" class="flex-shrink-0 text-xs px-3 py-1.5 rounded-xl font-bold ${d === selected ? 'bg-rose-500 text-white shadow-lg' : 'glass-card text-slate-400'}">
               ${i + 1}일 (${dayLabel(d)})</button>`)}
-          <button data-action="add-day" class="flex-shrink-0 text-xs px-2.5 py-1.5 rounded-xl glass-card text-slate-400" title="날짜 추가"><i class="fa-solid fa-plus"></i></button>
+          ${readOnly ? '' : html`<button data-action="add-day" class="flex-shrink-0 text-xs px-2.5 py-1.5 rounded-xl glass-card text-slate-400" title="날짜 추가"><i class="fa-solid fa-plus"></i></button>`}
         </div>`);
     renderRoute(plan);
 
     setHTML($('#sched-body', root), html`
         ${selected ? html`
-          <div data-action="edit-day" class="glass-card p-3.5 rounded-2xl border-l-4 border-rose-500 cursor-pointer">
+          <div data-action="${readOnly ? 'none' : 'edit-day'}" class="glass-card p-3.5 rounded-2xl border-l-4 border-rose-500 ${readOnly ? '' : 'cursor-pointer'}">
             <div class="flex items-center gap-1.5 mb-0.5">
               <span class="text-xs font-bold text-white">${dayLabel(selected)}</span>
               ${header?.badge ? html`<span class="text-[10px] px-2 rounded-full bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30">${header.badge}</span>` : ''}
-              <i class="fa-solid fa-pen text-[9px] text-slate-500 ml-auto"></i>
+              ${readOnly ? '' : html`<i class="fa-solid fa-pen text-[9px] text-slate-500 ml-auto"></i>`}
             </div>
-            <h4 class="text-sm font-extrabold text-white">${header?.title || '이 날의 제목을 정해보세요'}</h4>
+            <h4 class="text-sm font-extrabold text-white">${header?.title || (readOnly ? dayLabel(selected) : '이 날의 제목을 정해보세요')}</h4>
             ${header?.summary ? html`<p class="text-[11px] text-slate-400 mt-0.5">${header.summary}</p>` : ''}
           </div>
 
@@ -100,13 +101,13 @@ export function mount(root, store) {
                       <i class="fa-solid fa-clock mr-1"></i>${place.name}: ${hoursIssueAt(place.opening_hours, it.day_date, shortTime(it.start_time))}</div>` : ''}
                   <div class="mt-2 flex justify-end gap-1.5">
                     ${place ? html`<button data-action="place" data-id="${place.id}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-neon-cyan border border-neon-cyan/30 font-bold"><i class="fa-solid fa-location-dot text-[9px]"></i> ${place.name}</button>` : ''}
-                    <button data-action="edit" data-id="${it.id}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-slate-300"><i class="fa-solid fa-pen"></i></button>
+                    ${readOnly ? '' : html`<button data-action="edit" data-id="${it.id}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-slate-300"><i class="fa-solid fa-pen"></i></button>`}
                   </div>
                 </div>
               </div>`;
             }) : emptyCard('아직 일정이 없습니다.')}
           </div>
-          <button data-action="add" class="btn-primary"><i class="fa-solid fa-plus mr-1"></i>일정 추가</button>
+          ${readOnly ? '' : html`<button data-action="add" class="btn-primary"><i class="fa-solid fa-plus mr-1"></i>일정 추가</button>`}
         ` : emptyCard('여행 날짜가 없습니다. 설정 탭에서 여행 정보를 설정하거나 날짜를 추가하세요.')}
     `);
   }
@@ -186,7 +187,7 @@ export function mount(root, store) {
     plan.stops.forEach((st) => {
       L.marker([st.place.lat, st.place.lng], { icon: pinIcon({ color: '#f43f5e', size: 26, label: st.no }), zIndexOffset: 100 + st.no })
         .bindTooltip(esc(st.place.name), { direction: 'top', offset: [0, -14] })
-        .on('click', () => openPlaceDetail(store, st.place.id, null))
+        .on('click', () => (onPlace ? onPlace(st.place.id) : openPlaceDetail(store, st.place.id, null)))
         .addTo(route.layer);
     });
     // 날짜나 장소가 바뀐 때만 화면 맞춤 (같은 날 다시 그릴 때는 보던 위치 유지)
@@ -202,7 +203,7 @@ export function mount(root, store) {
     'route-toggle': () => { route.open = !route.open; setPref(PREF_ROUTE_OPEN, route.open); update(); },
     'route-hotel': () => { route.hotel = !route.hotel; setPref(PREF_ROUTE_HOTEL, route.hotel); update(); },
     day: (el) => { selected = el.dataset.day; update(); },
-    place: (el) => openPlaceDetail(store, el.dataset.id, null),
+    place: (el) => (onPlace ? onPlace(el.dataset.id) : openPlaceDetail(store, el.dataset.id, null)),
     add: () => openItemEditor(store, null, selected),
     edit: (el) => openItemEditor(store, el.dataset.id, selected),
     'edit-day': () => openDayEditor(store, selected),

@@ -40,3 +40,10 @@ test('카테고리를 종류별로 묶고 개수', () => {
   assert.equal(g.groups[0].cats[0].count, 2);
   assert.equal(g.uncategorized, 1);
 });
+
+test('찜한 곳 필터: 한 명이라도 찜한 장소만', () => {
+  const f = { cats: [], hideVisited: false, liked: true };
+  const likedIds = new Set(['p1']);
+  assert.equal(passesFilter({ id: 'p1' }, f, { likedIds }), true);
+  assert.equal(passesFilter({ id: 'p2' }, f, { likedIds }), false);
+});
