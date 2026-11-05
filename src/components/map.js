@@ -13,9 +13,18 @@ const ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeM
 
 // OpenFreeMap 벡터 타일을 쓰는 Leaflet 지도 (키 없음, 출처 표기 필수)
 export function createMap(el, { center = [37.5665, 126.978], zoom = 13 } = {}) {
-  const map = L.map(el, { zoomControl: false, attributionControl: true }).setView(center, zoom);
-  map.attributionControl.setPrefix(false);
-  L.control.zoom({ position: 'topleft' }).addTo(map);
+  const map = L.map(el, { zoomControl: false, attributionControl: false }).setView(center, zoom);
+  // 출처는 왼쪽 아래 작은 ⓘ 로 접어 두고, 누르면 펼침 (OpenFreeMap 출처 표기 의무)
+  const attr = L.control.attribution({ position: 'bottomleft', prefix: false }).addTo(map);
+  const attrEl = attr.getContainer();
+  attrEl.classList.add('attr-fold');
+  attrEl.title = '지도 출처';
+  L.DomEvent.on(attrEl, 'click', (e) => {
+    if (!attrEl.classList.contains('open')) { L.DomEvent.preventDefault(e); attrEl.classList.add('open'); }
+  });
+  map.on('click', () => attrEl.classList.remove('open'));
+  // 터치 화면은 두 손가락으로 확대·축소하므로 버튼을 두지 않음 (지도를 가리지 않게)
+  if (!window.matchMedia?.('(pointer: coarse)').matches) L.control.zoom({ position: 'topright' }).addTo(map);
 
   const gl = maplibreGL({ style: MAP_STYLE, attribution: ATTRIBUTION }).addTo(map);
   gl.getMaplibreMap().once('error', (e) => {

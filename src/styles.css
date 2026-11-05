@@ -71,6 +71,13 @@
 .leaflet-container { background: #090d16 !important; font-family: 'Noto Sans KR', sans-serif; }
 .leaflet-control-attribution { background: rgba(6, 9, 17, 0.7) !important; color: #94a3b8 !important; font-size: 9px !important; }
 .leaflet-control-attribution a { color: #cbd5e1 !important; }
+/* 접힌 출처: ⓘ 동그라미만 보임 */
+.leaflet-control-attribution.attr-fold:not(.open) {
+  width: 20px; height: 20px; padding: 0 !important; overflow: hidden; border-radius: 9999px;
+  font-size: 0 !important; display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.leaflet-control-attribution.attr-fold:not(.open)::before { content: "i"; font-size: 11px; font-weight: 800; color: #cbd5e1; font-style: italic; }
+.leaflet-control-attribution.attr-fold.open { max-width: 240px; border-radius: 8px; padding: 2px 6px !important; }
 
 /* 선택된 핀 위 이름 라벨 */
 .leaflet-tooltip.pin-label {

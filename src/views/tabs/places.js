@@ -22,7 +22,10 @@ import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
   geoReviewOf, geoReviewList, distanceText,
 } from '../../lib/google-place.js';
-import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT } from '../../lib/prefs.js';
+import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE } from '../../lib/prefs.js';
+
+// 지도 높이 세 단계 (장소 탭 높이 대비 %)
+const MAP_SIZES = { s: 30, m: 45, l: 70 };
 import { SORTS, sortRows, nextSort, parseSort, sortToString } from '../../lib/place-sort.js';
 
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
@@ -77,23 +80,35 @@ export function mount(root, store) {
     sort: parseSort(getPrefStr(PREF_PLACE_SORT)),   // { key: distance|rating|price, dir: asc|desc }
     selectedId: null,
     collapsed: getPref(PREF_MAP_COLLAPSED),
+    mapSize: MAP_SIZES[getPrefStr(PREF_MAP_SIZE)] ? getPrefStr(PREF_MAP_SIZE) : 'm',
     resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
 
   setHTML(root, html`
-    <div id="map-wrap" class="relative w-full h-[38%] min-h-[180px] border-b border-white/10 flex-shrink-0">
+    <div id="map-wrap" class="relative w-full min-h-[140px] flex-shrink-0 transition-[height] duration-200" style="height:${MAP_SIZES[state.mapSize]}%">
       <div id="map-loading" class="absolute inset-0 flex items-center justify-center text-[11px] text-slate-500">
         <i class="fa-solid fa-map mr-1.5"></i>지도 불러오는 중...</div>
       <div id="map" class="w-full h-full z-10"></div>
-      <div class="absolute top-3 right-3 z-20 flex items-center gap-1.5">
-        <select id="anchor-select" class="h-9 px-2 rounded-xl glass-card bg-night-950/80 text-[11px] text-slate-200 font-bold border border-white/20 max-w-40"></select>
-        <button data-action="gps" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-neon-cyan border border-neon-cyan/40" title="내 위치">
+      <!-- 기준점: 작은 버튼 하나 (투명한 select 를 위에 겹쳐 누르면 목록이 열림) -->
+      <label class="absolute top-2 left-2 z-20 max-w-[60%] h-8 pl-2.5 pr-2 rounded-full glass-card bg-night-950/85 border border-white/20 flex items-center gap-1 text-[11px] text-slate-100 font-bold">
+        <i class="fa-solid fa-location-dot text-neon-cyan text-[10px]"></i>
+        <span id="anchor-label" class="truncate">기준점</span>
+        <i class="fa-solid fa-caret-down text-slate-400 text-[10px]"></i>
+        <select id="anchor-select" class="absolute inset-0 opacity-0 w-full cursor-pointer" aria-label="거리 기준점"></select>
+      </label>
+      <!-- 내 위치 · 초기화: 오른쪽 아래 세로로 -->
+      <div class="absolute bottom-2 right-2 z-20 flex flex-col gap-1.5">
+        <button data-action="gps" class="w-9 h-9 rounded-full glass-card bg-night-950/85 flex items-center justify-center text-neon-cyan border border-neon-cyan/40" title="내 위치">
           <i class="fa-solid fa-location-crosshairs text-sm"></i>
         </button>
-        <button data-action="reset-view" id="btn-reset-view" class="w-9 h-9 rounded-xl glass-card flex items-center justify-center text-slate-200 border border-white/20"></button>
+        <button data-action="reset-view" id="btn-reset-view" class="w-9 h-9 rounded-full glass-card bg-night-950/85 flex items-center justify-center text-slate-200 border border-white/20"></button>
       </div>
-      <button data-action="toggle-map" class="absolute bottom-2 right-2 z-20 h-7 px-2.5 rounded-lg glass-card bg-night-950/80 text-[10px] text-slate-200 font-bold border border-white/20">
-        <i class="fa-solid fa-chevron-up mr-1"></i>지도 접기</button>
+    </div>
+    <!-- 높이 조절 손잡이: 끌거나 누르면 작게(30%) · 기본(45%) · 크게(70%) -->
+    <div id="map-handle" class="relative h-6 flex-shrink-0 flex items-center justify-center border-b border-white/10 bg-night-950/60 touch-none select-none cursor-row-resize">
+      <span class="w-10 h-1 rounded-full bg-slate-500"></span>
+      <span id="map-size-text" class="absolute left-3 text-[9px] text-slate-500"></span>
+      <button data-action="toggle-map" class="absolute right-2 h-5 px-2 rounded-md text-[10px] text-slate-400 font-bold"><i class="fa-solid fa-chevron-up mr-0.5"></i>접기</button>
     </div>
     <button data-action="toggle-map" id="map-bar" class="hidden w-full h-9 flex-shrink-0 flex items-center justify-center gap-2 border-b border-white/10 bg-night-950/60 text-[11px] text-slate-300 font-bold">
       <i class="fa-solid fa-map text-neon-cyan"></i><span id="map-bar-text">지도 펼치기</span><i class="fa-solid fa-chevron-down"></i>
@@ -195,6 +210,8 @@ export function mount(root, store) {
       ${anchors.length ? '' : html`<option value="">기준점 없음</option>`}
       ${anchors.map((a) => html`<option value="${a.id}" ${a.id === state.anchorId ? 'selected' : ''}>기준: ${a.name}</option>`)}
       <option value="gps" ${state.anchorId === 'gps' ? 'selected' : ''}>기준: 내 GPS</option>`);
+    const cur = state.anchorId === 'gps' ? '내 위치' : anchors.find((a) => a.id === state.anchorId)?.name;
+    $('#anchor-label', root).textContent = cur || '기준점 없음';
   }
 
   function renderChips() {
@@ -308,11 +325,59 @@ export function mount(root, store) {
   // ---------- 지도 접기 / 펼치기 ----------
   function applyCollapsed() {
     $('#map-wrap', root).classList.toggle('hidden', state.collapsed);
+    $('#map-handle', root).classList.toggle('hidden', state.collapsed);
     $('#map-bar', root).classList.toggle('hidden', !state.collapsed);
     const a = anchorPoint();
     $('#map-bar-text', root).textContent = `지도 펼치기${a?.name ? ` · ${a.name} 기준` : ''}`;
     if (!state.collapsed) setTimeout(() => map?.invalidateSize(), 50);
   }
+  // ---------- 지도 높이: 손잡이로 작게(30%) · 기본(45%) · 크게(70%) ----------
+  const SIZE_ORDER = ['s', 'm', 'l'];
+  const SIZE_TEXT = { s: '지도 작게', m: '기본', l: '지도 크게' };
+  function applyMapSize(animate = true) {
+    $('#map-wrap', root).style.height = `${MAP_SIZES[state.mapSize]}%`;
+    $('#map-size-text', root).textContent = SIZE_TEXT[state.mapSize];
+    setTimeout(() => map?.invalidateSize(), animate ? 220 : 0);
+  }
+  function setMapSize(size) {
+    state.mapSize = size;
+    setPrefStr(PREF_MAP_SIZE, size);
+    applyMapSize();
+  }
+  // 끌면 손가락을 따라 높이가 바뀌고, 놓으면 가장 가까운 단계로 맞춤. 거의 안 움직이고 놓으면(탭) 다음 단계로
+  const handle = $('#map-handle', root);
+  let drag = null;
+  const onHandleDown = (e) => {
+    if (e.target.closest('button')) return;
+    const wrap = $('#map-wrap', root);
+    drag = { y: e.clientY, h: wrap.getBoundingClientRect().height, total: root.getBoundingClientRect().height, moved: false, pct: null };
+    wrap.style.transition = 'none';
+    handle.setPointerCapture?.(e.pointerId);
+  };
+  const onHandleMove = (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (Math.abs(dy) > 5) drag.moved = true;
+    drag.pct = Math.min(80, Math.max(18, ((drag.h + dy) / drag.total) * 100));
+    $('#map-wrap', root).style.height = `${drag.pct}%`;
+  };
+  const onHandleUp = () => {
+    if (!drag) return;
+    $('#map-wrap', root).style.transition = '';
+    if (!drag.moved) {
+      setMapSize(SIZE_ORDER[(SIZE_ORDER.indexOf(state.mapSize) + 1) % SIZE_ORDER.length]);
+    } else {
+      const pct = drag.pct ?? MAP_SIZES[state.mapSize];
+      const nearest = Object.keys(MAP_SIZES).sort((a, b) => Math.abs(MAP_SIZES[a] - pct) - Math.abs(MAP_SIZES[b] - pct))[0];
+      setMapSize(nearest);
+    }
+    drag = null;
+  };
+  handle.addEventListener('pointerdown', onHandleDown);
+  handle.addEventListener('pointermove', onHandleMove);
+  handle.addEventListener('pointerup', onHandleUp);
+  handle.addEventListener('pointercancel', onHandleUp);
+
   function setCollapsed(on) {
     state.collapsed = on;
     setPref(PREF_MAP_COLLAPSED, on);
@@ -425,6 +490,7 @@ export function mount(root, store) {
   });
 
   applyCollapsed();
+  applyMapSize(false);
   renderResetButton();
   update();
   // 리스트를 먼저 그린 뒤 지도 라이브러리를 불러와 붙임
