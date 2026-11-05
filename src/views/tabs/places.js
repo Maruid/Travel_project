@@ -1,11 +1,11 @@
 import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
 // 지도 라이브러리(MapLibre, 약 1.2MB)는 따로 불러옴: 장소 리스트를 먼저 보여주고 지도는 준비되는 대로 붙임
-let L = null; let createMap = null; let pinIcon = null; let draggablePin = null;
+let L = null; let createMap = null; let pinIcon = null; let pinSize = null; let draggablePin = null;
 let mapLibPromise = null;
 export function loadMapLib() {
   if (!mapLibPromise) {
     mapLibPromise = import('../../components/map.js').then((m) => {
-      ({ L, createMap, pinIcon, draggablePin } = m);
+      ({ L, createMap, pinIcon, pinSize, draggablePin } = m);
       return m;
     }).catch((e) => { mapLibPromise = null; throw e; });
   }
@@ -22,7 +22,8 @@ import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
   geoReviewOf, geoReviewList, distanceText,
 } from '../../lib/google-place.js';
-import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE, PREF_HIDE_VISITED } from '../../lib/prefs.js';
+import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE, PREF_HIDE_VISITED, PREF_PLACE_FILTER } from '../../lib/prefs.js';
+import { parseFilter, filterToString, activeCount, pruneFilter, passesFilter, searchPlaces, groupCategories, EMPTY_FILTER } from '../../lib/place-filter.js';
 import { hoursStatus } from '../../lib/hours.js';
 import { todayIn, dateRange } from '../../lib/format.js';
 
@@ -86,16 +87,18 @@ const FIT_RADIUS_KM = 50;
 // 확대 규칙 (한 곳에서 관리)
 const ZOOM_ANCHOR = 15;   // 기준점 · 내 위치 · 기준점으로 초기화: 반경 약 1km
 const ZOOM_SELECT = 16;   // 카드·핀 선택: 이보다 멀면 16까지 확대, 이미 더 확대했으면 유지
+const DOT_ZOOM = 13;      // 이보다 멀리 보면 핀을 아이콘 없는 점으로
+// 핀 크기 단계: ≤13 점 · 14~15 중간 · 16+ 크게 (pinSize 와 같은 경계)
+const zoomBand = (z) => (z <= 13 ? 0 : z <= 15 ? 1 : 2);
 
 export function mount(root, store) {
   const state = {
-    cat: 'all',
+    filter: parseFilter(getPrefStr(PREF_PLACE_FILTER), { hideVisited: getPref(PREF_HIDE_VISITED) }),
     anchorId: null,        // 기준점 place id 또는 'gps'
     gps: null,
     sort: parseSort(getPrefStr(PREF_PLACE_SORT)),   // { key: distance|rating|price, dir: asc|desc }
     selectedId: null,
     collapsed: getPref(PREF_MAP_COLLAPSED),
-    hideVisited: getPref(PREF_HIDE_VISITED),
     mapSize: MAP_SIZES[getPrefStr(PREF_MAP_SIZE)] ? getPrefStr(PREF_MAP_SIZE) : 'm',
     resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
@@ -131,15 +134,15 @@ export function mount(root, store) {
     </button>
 
     <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
-      <div id="cat-chips" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>
-      <div class="flex items-center justify-between gap-2 text-xs px-1 py-1 mb-1 flex-shrink-0">
-        <span id="count-text" class="text-slate-400 text-[11px] truncate min-w-0"></span>
+      <div class="flex items-center justify-between gap-2 text-xs py-1 mb-1 flex-shrink-0">
+        <button data-action="filter" id="btn-filter" class="flex-shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold flex items-center gap-1"></button>
         <div class="flex items-center gap-1.5 flex-shrink-0">
           <div id="sort-chips" class="flex items-center gap-1"></div>
           <button data-action="recommend" title="AI 추천" class="text-[11px] px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-400/40 font-bold"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
           <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
         </div>
       </div>
+      <div id="filter-chips" class="hidden flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>
       <button data-action="geo-review" id="geo-banner" class="hidden w-full mb-1.5 px-3 h-8 flex-shrink-0 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 font-bold flex items-center justify-between">
         <span><i class="fa-solid fa-location-dot mr-1"></i><span id="geo-banner-text"></span></span><span class="text-amber-300">검토 <i class="fa-solid fa-chevron-right text-[9px]"></i></span>
       </button>
@@ -185,6 +188,12 @@ export function mount(root, store) {
     map.on('moveend', () => {
       if (getPref(PREF_ANCHOR_NEAR_SORT) && document.activeElement !== $('#anchor-select', root)) renderAnchorSelect();
     });
+    // 확대 단계가 바뀔 때만 핀 크기를 다시 그림 (점 ↔ 아이콘 핀)
+    let lastZoomBand = zoomBand(map.getZoom());
+    map.on('zoomend', () => {
+      const band = zoomBand(map.getZoom());
+      if (band !== lastZoomBand) { lastZoomBand = band; renderMarkers(filtered()); }
+    });
     drawGps();
     renderMarkers(filtered());
     const sel = state.selectedId && store.get('places', state.selectedId);
@@ -209,8 +218,8 @@ export function mount(root, store) {
   function filtered() {
     const from = anchorPoint();
     let rows = store.list('places').map((p) => ({ p, walk: walkInfo(from, p), cat: store.category(p.category_id) }));
-    if (state.cat !== 'all') rows = rows.filter((r) => r.p.category_id === state.cat);
-    if (state.hideVisited) rows = rows.filter((r) => !r.p.visited_at);
+    // 선택한 장소는 필터에 걸려도 보여줌 (검색으로 찾아 간 경우)
+    rows = rows.filter((r) => r.p.id === state.selectedId || passesFilter(r.p, state.filter));
     return sortRows(rows, state.sort);
   }
 
@@ -232,40 +241,159 @@ export function mount(root, store) {
     $('#anchor-label', root).textContent = cur || '기준점 없음';
   }
 
-  function renderChips() {
-    const places = store.list('places');
-    const used = new Map();
-    places.forEach((p) => used.set(p.category_id, (used.get(p.category_id) || 0) + 1));
-    const cats = store.categories().filter((c) => used.has(c.id));
-    setHTML($('#cat-chips', root), html`
-      <button data-action="cat" data-cat="all" class="${state.cat === 'all' ? 'chip-active' : 'chip'}">전체 (${places.length})</button>
-      ${cats.map((c) => html`
-        <button data-action="cat" data-cat="${c.id}" class="${state.cat === c.id ? 'chip-active' : 'chip'}">
-          <i class="fa-solid ${c.icon || 'fa-tag'} text-[10px]" style="color:${state.cat === c.id ? 'inherit' : color(c.color)}"></i> ${c.name} (${used.get(c.id)})
-        </button>`)}
-      ${places.some((p) => p.visited_at) ? html`
-        <button data-action="hide-visited" class="${state.hideVisited ? 'chip-active' : 'chip'}"><i class="fa-solid fa-check text-[10px]"></i> 안 간 곳만</button>` : ''}`);
+  // 필터 버튼 + 켜진 조건 칩 줄 (조건이 있을 때만)
+  function renderFilterBar() {
+    const valid = new Set(store.categories().map((c) => c.id));
+    const pruned = pruneFilter(state.filter, valid);
+    if (pruned !== state.filter) saveFilter(pruned);
+    const f = state.filter;
+    const n = activeCount(f);
+    const btn = $('#btn-filter', root);
+    btn.className = `flex-shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold flex items-center gap-1 ${n ? 'bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/50' : 'glass-card text-slate-300'}`;
+    setHTML(btn, html`<i class="fa-solid fa-sliders text-[10px]"></i>필터${n ? html` · ${n}` : ''}`);
+    const bar = $('#filter-chips', root);
+    bar.classList.toggle('hidden', !n);
+    if (!n) { setHTML(bar, html``); return; }
+    const chip = 'flex-shrink-0 h-6 pl-2 pr-1.5 rounded-full text-[10px] font-bold flex items-center gap-1 bg-slate-800 border border-white/15 text-slate-200';
+    setHTML(bar, html`
+      ${f.cats.map((id) => { const c = store.category(id); return c ? html`
+        <button data-action="filter-off" data-cat="${id}" class="${chip}"><i class="fa-solid ${icon(c.icon)} text-[9px]" style="color:${color(c.color)}"></i>${c.name}<i class="fa-solid fa-xmark text-[9px] text-slate-400 ml-0.5"></i></button>` : ''; })}
+      ${f.hideVisited ? html`<button data-action="filter-off" data-key="hideVisited" class="${chip}"><i class="fa-solid fa-check text-[9px] text-emerald-300"></i>안 간 곳만<i class="fa-solid fa-xmark text-[9px] text-slate-400 ml-0.5"></i></button>` : ''}
+      ${f.liked ? html`<button data-action="filter-off" data-key="liked" class="${chip}"><i class="fa-solid fa-heart text-[9px] text-rose-400"></i>찜한 곳<i class="fa-solid fa-xmark text-[9px] text-slate-400 ml-0.5"></i></button>` : ''}
+      <button data-action="filter-clear" class="flex-shrink-0 h-6 px-2 text-[10px] text-slate-400 underline underline-offset-2">모두 해제</button>`);
+  }
+
+  function saveFilter(f) {
+    state.filter = f;
+    setPrefStr(PREF_PLACE_FILTER, filterToString(f));
+    setPref(PREF_HIDE_VISITED, f.hideVisited);
+  }
+  function setFilter(f) {
+    saveFilter(f);
+    update();
+    $('#place-scroll', root).scrollTop = 0;
+  }
+
+  // 필터 창: 위에 이름 검색, 아래 종류별 카테고리 (여러 개 선택) · 안 간 곳만 · 찜
+  function openFilterSheet() {
+    openSheet(html`<div id="filter-sheet"></div>`, (el) => {
+      let q = '';
+      let timer = null;
+      const body = $('#filter-sheet', el);
+      const draw = () => {
+        const places = store.list('places');
+        const f = state.filter;
+        const shown = places.filter((p) => passesFilter(p, f)).length;
+        const { groups, uncategorized } = groupCategories(store.categories(), places);
+        const hasVisited = places.some((p) => p.visited_at);
+        const on = 'bg-neon-cyan text-night-950 border-neon-cyan font-bold';
+        const off = 'bg-slate-800/80 text-slate-200 border-white/10';
+        setHTML($('#fs-head', body), html`
+          <div class="flex items-center justify-between mb-2.5">
+            <h3 class="text-sm font-black text-white">필터 <span class="text-neon-cyan">${shown}</span><span class="text-slate-400 font-bold text-xs"> / ${places.length}곳</span></h3>
+            ${activeCount(f) ? html`<button data-fs="clear" class="text-[11px] text-slate-400 underline underline-offset-2">모두 해제</button>` : ''}
+          </div>`);
+        setHTML($('#fs-body', body), html`
+          <div class="grid grid-cols-2 gap-1.5 mb-3">
+            <button data-fs="hideVisited" ${hasVisited || f.hideVisited ? '' : 'disabled'} class="h-9 rounded-xl border text-[11px] flex items-center justify-center gap-1.5 disabled:opacity-40 ${f.hideVisited ? on : off}">
+              <i class="fa-solid fa-check text-[10px]"></i>안 간 곳만</button>
+            <button disabled title="곧 추가돼요" class="h-9 rounded-xl border text-[11px] flex items-center justify-center gap-1.5 opacity-40 ${off}">
+              <i class="fa-solid fa-heart text-[10px] text-rose-400"></i>찜한 곳 <span class="text-[9px] text-slate-400">준비 중</span></button>
+          </div>
+          ${groups.length ? html`<p class="text-[10px] text-slate-400 mb-1.5">카테고리 <span class="text-slate-500">· 여러 개 고를 수 있어요</span></p>` : ''}
+          <div class="space-y-2.5">
+            ${groups.map((g) => html`
+              <div>
+                <p class="text-[10px] font-bold text-slate-500 mb-1">${g.label}</p>
+                <div class="flex flex-wrap gap-1.5">
+                  ${g.cats.map((c) => { const sel = f.cats.includes(c.id); return html`
+                    <button data-fs="cat" data-id="${c.id}" class="h-8 px-2.5 rounded-full border text-[11px] flex items-center gap-1 ${sel ? on : off}">
+                      <i class="fa-solid ${icon(c.icon)} text-[10px]" style="color:${sel ? 'inherit' : color(c.color)}"></i>${c.name}
+                      <span class="${sel ? 'text-night-950/70' : 'text-slate-500'} text-[10px]">${c.count}</span></button>`; })}
+                </div>
+              </div>`)}
+            ${uncategorized ? html`<p class="text-[10px] text-slate-500">카테고리 없는 장소 ${uncategorized}곳은 카테고리를 고르면 숨겨져요.</p>` : ''}
+          </div>`);
+      };
+      const drawResults = () => {
+        const box = $('#fs-results', body);
+        const hits = searchPlaces(store.list('places'), q, 12);
+        if (!q.trim()) { setHTML(box, html``); box.classList.add('hidden'); return; }
+        box.classList.remove('hidden');
+        setHTML(box, hits.length ? html`${hits.map((p) => { const c = store.category(p.category_id); const hidden = !passesFilter(p, state.filter); return html`
+          <button data-fs="jump" data-id="${p.id}" class="w-full text-left px-2.5 py-2 rounded-xl bg-slate-800/70 border border-white/10 flex items-center gap-2">
+            <i class="fa-solid ${icon(c?.icon)} text-[11px] w-4 text-center" style="color:${color(c?.color)}"></i>
+            <span class="flex-1 min-w-0">
+              <span class="block text-xs font-bold text-white truncate">${p.name}</span>
+              <span class="block text-[10px] text-slate-400 truncate">${[p.zone, p.signature].filter(Boolean).join(' · ')}</span>
+            </span>
+            ${hidden ? html`<span class="text-[9px] text-amber-300 flex-shrink-0">필터로 숨김</span>` : ''}
+            ${p.visited_at ? html`<i class="fa-solid fa-check text-[10px] text-emerald-400 flex-shrink-0"></i>` : ''}
+          </button>`; })}` : html`<p class="text-[11px] text-slate-500 text-center py-2">'${q.trim()}' 에 맞는 장소가 없어요.</p>`);
+      };
+      setHTML(body, html`
+        <div id="fs-head"></div>
+        <div class="relative mb-2">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-500"></i>
+          <input id="fs-q" type="search" class="input pl-8" placeholder="이름 · 동네 · 대표 메뉴 검색" autocomplete="off" enterkeyhint="search">
+        </div>
+        <div id="fs-results" class="hidden space-y-1.5 mb-3 max-h-[40vh] overflow-y-auto no-scrollbar"></div>
+        <div id="fs-body"></div>`);
+      draw();
+      const input = $('#fs-q', body);
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { q = input.value; drawResults(); }, 150);
+      });
+      body.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-fs]');
+        if (!b || b.disabled) return;
+        const f = state.filter;
+        const act = b.dataset.fs;
+        if (act === 'jump') {
+          const id = b.dataset.id;
+          closeSheet();
+          if (state.collapsed && store.get('places', id)?.lat != null) setCollapsed(false);
+          select(id);
+          return;
+        }
+        if (act === 'clear') setFilter({ ...EMPTY_FILTER, cats: [] });
+        else if (act === 'hideVisited') setFilter({ ...f, hideVisited: !f.hideVisited });
+        else if (act === 'cat') {
+          const id = b.dataset.id;
+          setFilter({ ...f, cats: f.cats.includes(id) ? f.cats.filter((x) => x !== id) : [...f.cats, id] });
+        }
+        draw();
+        if (q) drawResults();
+      });
+      // 닫으면 검색어는 비움 (다음에 열 때 빈 칸)
+      return () => clearTimeout(timer);
+    });
   }
 
   function renderMarkers(rows) {
     if (!markerLayer) return;
     markerLayer.clearLayers();
+    const zoom = map.getZoom();
+    const dot = zoom <= DOT_ZOOM;
     for (const { p, cat } of rows) {
       if (p.lat == null) continue;
       const selected = p.id === state.selectedId;
+      const visited = !!p.visited_at && !selected;   // 다녀온 곳: 흐리고 작게, 다른 핀 아래로
+      const anchor = !!p.is_anchor;
+      const size = pinSize(zoom, { selected, anchor, visited });
       const m = L.marker([p.lat, p.lng], {
-        icon: pinIcon({ color: cat?.color, icon: cat?.icon, size: selected ? 38 : p.is_anchor ? 34 : 28, pulse: selected || p.is_anchor }),
-        zIndexOffset: selected ? 1000 : 0,
+        icon: pinIcon({ color: cat?.color, icon: cat?.icon, size, dot: dot && !selected, faded: visited, pulse: selected || (anchor && !dot) }),
+        zIndexOffset: selected ? 1000 : anchor ? 500 : visited ? -500 : 0,
+        keyboard: false,
       }).addTo(markerLayer);
       // 선택된 핀 위에 이름 라벨 (bindTooltip 은 텍스트를 escape 하지 않으므로 직접 escape)
-      if (selected) m.bindTooltip(esc(p.name), { permanent: true, direction: 'top', offset: [0, -20], className: 'pin-label' }).openTooltip();
+      if (selected) m.bindTooltip(esc(p.name), { permanent: true, direction: 'top', offset: [0, -size / 2 - 2], className: 'pin-label' }).openTooltip();
       m.on('click', () => select(p.id, { from: 'map' }));
     }
   }
 
   function renderList(rows) {
-    const from = anchorPoint();
-    $('#count-text', root).textContent = `${rows.length}곳${from ? ` · ${from.name || '내 위치'} 기준` : ''}`;
     // 정렬 칩: 켜진 칩은 방향 이름(예: 별점 높은 순)과 화살표, 다시 누르면 방향 반전
     setHTML($('#sort-chips', root), html`${Object.entries(SORTS).map(([key, def]) => {
       const on = state.sort.key === key;
@@ -441,7 +569,7 @@ export function mount(root, store) {
 
   function update() {
     renderAnchorSelect();
-    renderChips();
+    renderFilterBar();
     if (state.selectedId && !store.get('places', state.selectedId)) state.selectedId = null;
     const rows = filtered();
     renderMarkers(rows);
@@ -481,8 +609,13 @@ export function mount(root, store) {
     gps: locate,
     'reset-view': resetView,
     'toggle-map': () => setCollapsed(!state.collapsed),
-    cat: (el) => { state.cat = el.dataset.cat; update(); },
-    'hide-visited': () => { state.hideVisited = !state.hideVisited; setPref(PREF_HIDE_VISITED, state.hideVisited); update(); },
+    filter: openFilterSheet,
+    'filter-off': (el) => {
+      const f = state.filter;
+      if (el.dataset.cat) setFilter({ ...f, cats: f.cats.filter((x) => x !== el.dataset.cat) });
+      else setFilter({ ...f, [el.dataset.key]: false });
+    },
+    'filter-clear': () => setFilter({ ...EMPTY_FILTER, cats: [] }),
     sort: (el) => {
       state.sort = nextSort(state.sort, el.dataset.key);
       setPrefStr(PREF_PLACE_SORT, sortToString(state.sort));

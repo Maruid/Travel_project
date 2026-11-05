@@ -3,6 +3,15 @@ import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../co
 import { renderMarkdown, GUIDE_TEMPLATES } from '../../lib/markdown.js';
 import { dateRange, dayLabel } from '../../lib/format.js';
 import { color, icon } from '../../lib/safe.js';
+import { applyFormat } from '../../lib/md-edit.js';
+
+const FORMAT_BUTTONS = [
+  { kind: 'bold', icon: 'fa-bold', label: '굵게', title: '굵게 (**글자**)' },
+  { kind: 'bullet', icon: 'fa-list-ul', label: '목록', title: '목록 (- )' },
+  { kind: 'number', icon: 'fa-list-ol', label: '번호', title: '번호 목록 (1. )' },
+  { kind: 'heading', icon: 'fa-heading', label: '제목', title: '소제목 (### )' },
+  { kind: 'code', icon: 'fa-language', label: '쇼잉 카드', title: '복사 버튼이 붙은 쇼잉 카드 (```)' },
+];
 
 const COLORS = ['#00f2fe', '#f43f5e', '#f59e0b', '#10b981', '#38bdf8', '#c084fc', '#fbbf24', '#94a3b8'];
 
@@ -66,12 +75,22 @@ function openGuideEditor(store, id, tpl = null) {
       <div><label class="label">제목 *</label><input name="title" class="input" required maxlength="80" value="${g.title}"></div>
       <div>
         <div class="flex items-center justify-between mb-1">
-          <label class="label !mb-0">내용 (마크다운)</label>
-          <button type="button" data-action="preview" class="text-[10px] text-neon-cyan">미리보기</button>
+          <label class="label !mb-0">내용</label>
+          <div class="flex rounded-lg bg-slate-800 border border-white/10 p-0.5 text-[10px] font-bold">
+            <button type="button" data-action="mode" data-mode="edit" class="px-2.5 py-0.5 rounded-md bg-neon-cyan text-night-950">편집</button>
+            <button type="button" data-action="mode" data-mode="preview" class="px-2.5 py-0.5 rounded-md text-slate-400">미리보기</button>
+          </div>
         </div>
-        <textarea name="body_md" class="input font-mono" rows="9" maxlength="20000">${g.body_md}</textarea>
-        <p class="text-[10px] text-slate-500 mt-1">**굵게**, - 목록, 1. 번호, --- 구분선. 코드블록(\`\`\`)으로 감싸면 "복사" 버튼이 붙은 쇼잉 카드가 됩니다.</p>
-        <div id="md-preview" class="hidden md glass-card p-3 rounded-xl mt-2"></div>
+        <div id="md-edit">
+          <div class="flex gap-1 mb-1.5 overflow-x-auto no-scrollbar">
+            ${FORMAT_BUTTONS.map((b) => html`
+              <button type="button" data-fmt="${b.kind}" title="${b.title}" class="flex-shrink-0 h-8 px-2.5 rounded-lg bg-slate-800 border border-white/10 text-[11px] text-slate-200 font-bold flex items-center gap-1">
+                <i class="fa-solid ${b.icon} text-[10px]"></i>${b.label}</button>`)}
+          </div>
+          <textarea name="body_md" class="input font-mono" rows="9" maxlength="20000">${g.body_md}</textarea>
+          <p class="text-[10px] text-slate-500 mt-1">글자를 고른 뒤 버튼을 누르세요. 쇼잉 카드는 "복사" 버튼이 붙은 상자가 돼요.</p>
+        </div>
+        <div id="md-preview" class="hidden md glass-card p-3 rounded-xl min-h-[12rem] max-h-[50vh] overflow-y-auto"></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">일정 탭에도 표시할 날짜</label>
@@ -87,11 +106,31 @@ function openGuideEditor(store, id, tpl = null) {
       ${id ? html`<button type="button" data-action="delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">삭제</button>` : ''}
     </form>`, (el) => {
     const form = $('#guide-form', el);
+    const ta = form.elements.body_md;
+    // 서식 버튼: 누를 때 입력칸의 선택이 풀리지 않도록 mousedown 기본 동작을 막음
+    const toolbar = $('#md-edit', el);
+    const keepFocus = (e) => { if (e.target.closest('[data-fmt]')) e.preventDefault(); };
+    toolbar.addEventListener('mousedown', keepFocus);
+    toolbar.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fmt]');
+      if (!b) return;
+      const r = applyFormat(b.dataset.fmt, ta.value, ta.selectionStart, ta.selectionEnd);
+      if (r.value.length > 20000) { toast('내용이 너무 길어요.'); return; }
+      ta.value = r.value;
+      ta.focus();
+      ta.setSelectionRange(r.start, r.end);
+    });
     const off = delegate(el, {
-      preview: () => {
-        const box = $('#md-preview', el);
-        setHTML(box, renderMarkdown(form.elements.body_md.value));
-        box.classList.toggle('hidden');
+      // 편집 ↔ 미리보기: 미리보기는 누를 때만 한 번 그림 (입력 중에는 그리지 않아 가벼움)
+      mode: (b) => {
+        const preview = b.dataset.mode === 'preview';
+        if (preview) setHTML($('#md-preview', el), ta.value.trim() ? renderMarkdown(ta.value) : html`<p class="text-slate-500">내용이 없어요.</p>`);
+        $('#md-preview', el).classList.toggle('hidden', !preview);
+        $('#md-edit', el).classList.toggle('hidden', preview);
+        el.querySelectorAll('[data-action="mode"]').forEach((x) => {
+          const on = x === b;
+          x.classList.toggle('bg-neon-cyan', on); x.classList.toggle('text-night-950', on); x.classList.toggle('text-slate-400', !on);
+        });
       },
       color: (b) => {
         form.elements.color.value = b.dataset.color;
