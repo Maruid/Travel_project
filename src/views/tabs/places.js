@@ -22,7 +22,9 @@ import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
   geoReviewOf, geoReviewList, distanceText,
 } from '../../lib/google-place.js';
-import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE } from '../../lib/prefs.js';
+import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE, PREF_HIDE_VISITED } from '../../lib/prefs.js';
+import { hoursStatus } from '../../lib/hours.js';
+import { todayIn, dateRange } from '../../lib/format.js';
 
 // 지도 높이 세 단계 (장소 탭 높이 대비 %)
 const MAP_SIZES = { s: 30, m: 45, l: 70 };
@@ -56,8 +58,21 @@ export function aiEvidence(r) {
 const BADGE = 'inline-flex items-center gap-0.5 h-[18px] px-1.5 rounded border text-[9px] font-bold leading-none whitespace-nowrap';
 const BADGE_COLLAPSED_MAX = 3;   // 접힌 카드에서 보이는 뱃지 수 (나머지는 +N, 펼치면 전부)
 
-function placeBadges(p, cat) {
+// 영업 상태 뱃지 색
+const HOURS_CLS = {
+  open: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  closing: 'bg-amber-500/20 text-amber-200 border-amber-500/50',
+  before: 'bg-slate-700/60 text-slate-300 border-white/10',
+  closed_now: 'bg-slate-700/60 text-slate-400 border-white/10',
+  closed_today: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+};
+
+function placeBadges(p, cat, tz) {
   const out = [];
+  // 영업 상태 (구글 영업시간이 있는 곳만, 여행지 시간 기준)
+  const hs = tz ? hoursStatus(p.opening_hours, tz) : null;
+  if (hs) out.push(html`<span class="${BADGE} ${HOURS_CLS[hs.state]}"><i class="fa-solid fa-clock text-[8px]"></i>${hs.text}</span>`);
+  if (p.visited_at) out.push(html`<span class="${BADGE} bg-emerald-500/20 text-emerald-200 border-emerald-500/40"><i class="fa-solid fa-check text-[8px]"></i>다녀옴</span>`);
   if (cat) out.push(html`<span class="${BADGE}" style="color:${color(cat.color)};border-color:${color(cat.color)}66"><i class="fa-solid ${icon(cat.icon)} text-[8px]"></i>${cat.name}</span>`);
   if (p.warn_badge) out.push(html`<span class="${BADGE} bg-rose-500/20 text-rose-300 border-rose-500/40">⚠️ ${p.warn_badge}</span>`);
   if (p.is_anchor) out.push(html`<span class="${BADGE} bg-amber-500/20 text-amber-300 border-amber-500/30">기준점</span>`);
@@ -80,6 +95,7 @@ export function mount(root, store) {
     sort: parseSort(getPrefStr(PREF_PLACE_SORT)),   // { key: distance|rating|price, dir: asc|desc }
     selectedId: null,
     collapsed: getPref(PREF_MAP_COLLAPSED),
+    hideVisited: getPref(PREF_HIDE_VISITED),
     mapSize: MAP_SIZES[getPrefStr(PREF_MAP_SIZE)] ? getPrefStr(PREF_MAP_SIZE) : 'm',
     resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
@@ -137,8 +153,9 @@ export function mount(root, store) {
   //  (헤더와 하단 탭바 높이를 빼서 꽉 채움)
   const prevStyle = { height: root.style.height, paddingBottom: root.style.paddingBottom, flex: root.style.flex };
   const fitHeight = () => {
-    const headerH = document.querySelector('header')?.offsetHeight || 56;
-    root.style.height = `calc(100dvh - ${headerH}px - 64px)`;
+    const headerH = document.querySelector('header')?.offsetHeight || 44;
+    const navH = document.querySelector('nav')?.offsetHeight || 56;   // 하단 탭바 (아이폰 홈 바 영역 포함)
+    root.style.height = `calc(100dvh - ${headerH}px - ${navH}px)`;
     root.style.paddingBottom = '0';
     root.style.flex = 'none';   // 부모의 flex-1 로 늘어나 하단 탭바 뒤로 리스트가 숨지 않도록
   };
@@ -193,6 +210,7 @@ export function mount(root, store) {
     const from = anchorPoint();
     let rows = store.list('places').map((p) => ({ p, walk: walkInfo(from, p), cat: store.category(p.category_id) }));
     if (state.cat !== 'all') rows = rows.filter((r) => r.p.category_id === state.cat);
+    if (state.hideVisited) rows = rows.filter((r) => !r.p.visited_at);
     return sortRows(rows, state.sort);
   }
 
@@ -224,7 +242,9 @@ export function mount(root, store) {
       ${cats.map((c) => html`
         <button data-action="cat" data-cat="${c.id}" class="${state.cat === c.id ? 'chip-active' : 'chip'}">
           <i class="fa-solid ${c.icon || 'fa-tag'} text-[10px]" style="color:${state.cat === c.id ? 'inherit' : color(c.color)}"></i> ${c.name} (${used.get(c.id)})
-        </button>`)}`);
+        </button>`)}
+      ${places.some((p) => p.visited_at) ? html`
+        <button data-action="hide-visited" class="${state.hideVisited ? 'chip-active' : 'chip'}"><i class="fa-solid fa-check text-[10px]"></i> 안 간 곳만</button>` : ''}`);
   }
 
   function renderMarkers(rows) {
@@ -256,7 +276,7 @@ export function mount(root, store) {
 
     setHTML($('#place-list', root), rows.length ? html`${rows.map(({ p, walk, cat }) => {
       const selected = p.id === state.selectedId;
-      const badges = placeBadges(p, cat);
+      const badges = placeBadges(p, cat, store.trip?.timezone);
       // 2줄: 별점(리뷰 수) · 가격 · 지역 — 지금 정렬 기준은 강조
       const hl = 'px-1 rounded border';
       const meta = [
@@ -265,7 +285,7 @@ export function mount(root, store) {
         p.zone ? html`<span class="truncate">${p.zone}</span>` : null,
       ].filter(Boolean);
       return html`
-      <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl cursor-pointer hover:border-slate-500 transition ${selected ? 'neon-border-cyan' : ''}">
+      <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl cursor-pointer hover:border-slate-500 transition ${selected ? 'neon-border-cyan' : ''} ${p.visited_at && !selected ? 'opacity-60' : ''}">
         <div class="flex gap-2">
           <div class="flex-1 min-w-0 space-y-1">
             <h4 class="font-bold text-[13px] text-white truncate leading-tight">${p.name}</h4>
@@ -462,6 +482,7 @@ export function mount(root, store) {
     'reset-view': resetView,
     'toggle-map': () => setCollapsed(!state.collapsed),
     cat: (el) => { state.cat = el.dataset.cat; update(); },
+    'hide-visited': () => { state.hideVisited = !state.hideVisited; setPref(PREF_HIDE_VISITED, state.hideVisited); update(); },
     sort: (el) => {
       state.sort = nextSort(state.sort, el.dataset.key);
       setPrefStr(PREF_PLACE_SORT, sortToString(state.sort));
@@ -526,7 +547,7 @@ export function openPlaceDetail(store, id, from) {
   openSheet(html`
     <div class="flex items-center justify-between mb-1">
       <div class="flex items-center gap-1.5 flex-wrap">
-        ${placeBadges(p, cat)}
+        ${placeBadges(p, cat, store.trip?.timezone)}
       </div>
       <span class="text-xs font-bold text-emerald-400">${walk.text}</span>
     </div>
@@ -554,6 +575,11 @@ export function openPlaceDetail(store, id, from) {
       <button data-action="toggle-anchor" class="w-full mt-2 py-2.5 rounded-xl text-xs font-bold border ${p.is_anchor ? 'bg-amber-500/15 text-amber-200 border-amber-500/40' : 'bg-slate-800 text-slate-200 border-white/10'}">
         <i class="fa-solid fa-house-flag mr-1"></i>${p.is_anchor ? '기준점 해제' : '거리 계산 기준점으로 지정'}</button>` : ''}
     <div class="grid grid-cols-2 gap-2 mt-2">
+      <button data-action="to-schedule" class="btn-ghost py-2.5"><i class="fa-solid fa-calendar-plus mr-1"></i>일정에 넣기</button>
+      <button data-action="toggle-visited" class="py-2.5 rounded-xl text-[11px] font-bold border ${p.visited_at ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/40' : 'bg-slate-800 text-slate-200 border-white/10'}">
+        <i class="fa-solid fa-check mr-1"></i>${p.visited_at ? '다녀옴 취소' : '다녀옴'}</button>
+    </div>
+    <div class="grid grid-cols-2 gap-2 mt-2">
       <button data-action="edit" class="btn-ghost py-2.5"><i class="fa-solid fa-pen mr-1"></i>수정</button>
       <button data-action="delete" class="btn-ghost py-2.5 text-rose-300"><i class="fa-solid fa-trash-can mr-1"></i>삭제</button>
     </div>
@@ -563,6 +589,16 @@ export function openPlaceDetail(store, id, from) {
     'geo-keep': () => {
       store.update('places', id, { geo_review: null });
       toast('지금 위치를 그대로 두었어요.');
+      openPlaceDetail(store, id, from);
+    },
+    'to-schedule': async () => {
+      const { openItemEditor } = await import('./schedule.js');
+      openItemEditor(store, null, defaultScheduleDay(store), { place: p });
+    },
+    'toggle-visited': () => {
+      const on = !p.visited_at;
+      store.update('places', id, { visited_at: on ? new Date().toISOString() : null });
+      toast(on ? '다녀온 곳으로 표시했어요.' : '다녀옴 표시를 지웠어요.');
       openPlaceDetail(store, id, from);
     },
     'toggle-anchor': () => {
@@ -1025,6 +1061,13 @@ function googleBlock(p, timezone) {
         ${site ? html`<a href="${site}" target="_blank" rel="noopener" class="text-neon-cyan truncate"><i class="fa-solid fa-globe mr-1"></i>웹사이트</a>` : ''}
       </div>` : ''}
     </div>`;
+}
+
+// "일정에 넣기" 기본 날짜: 여행 중이면 오늘, 아니면 여행 첫날
+function defaultScheduleDay(store) {
+  const days = dateRange(store.trip.start_date, store.trip.end_date);
+  const today = todayIn(store.trip.timezone);
+  return days.includes(today) ? today : days[0] || today;
 }
 
 // 등록된 장소 1곳에 구글 정보 반영 (place_id 가 있으면 1건, 없으면 검색 포함 2건)

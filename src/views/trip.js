@@ -4,6 +4,7 @@ import { rpc, errorText } from '../lib/supabase.js';
 import { TripStore } from '../lib/store.js';
 import { spinner, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
+import { tripProgress } from '../lib/format.js';
 
 const TABS = [
   { key: 'places',   label: '장소',   icon: 'fa-map-location-dot', load: () => import('./tabs/places.js') },
@@ -36,18 +37,18 @@ export async function render(app, params) {
   rpc('touch_trip', { p_trip: params.id }).catch(() => {});
 
   setHTML(app, html`
-    <header class="px-4 py-3 flex items-center justify-between glass-nav sticky top-0 z-40">
-      <div class="flex items-center gap-2 min-w-0">
-        <button data-action="home" class="w-7 h-7 rounded-lg text-slate-400 hover:text-white flex-shrink-0"><i class="fa-solid fa-chevron-left"></i></button>
-        <div class="min-w-0">
-          <h1 id="trip-title" class="text-sm font-black tracking-wide text-white truncate"></h1>
-          <p id="trip-sub" class="text-[10px] text-slate-400 font-mono truncate"></p>
-        </div>
-      </div>
-      <span id="sync-badge" class="text-[10px] px-2 py-1 rounded-xl glass-card font-mono font-bold flex-shrink-0"></span>
+    <!-- 한 줄 헤더: ← 이름 · D-18      [환율] ● -->
+    <header class="px-2 h-11 flex items-center gap-1 glass-nav sticky top-0 z-40">
+      <button data-action="home" class="w-8 h-8 rounded-lg text-slate-400 hover:text-white flex-shrink-0"><i class="fa-solid fa-chevron-left"></i></button>
+      <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
+        <span id="trip-title"></span><span id="trip-sub" class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan"></span></h1>
+      <button data-action="fx" id="btn-fx" class="hidden w-8 h-8 rounded-lg text-emerald-300 flex-shrink-0" title="환율 계산"><i class="fa-solid fa-calculator text-sm"></i></button>
+      <button data-action="sync-info" id="sync-dot" class="h-8 min-w-8 px-1.5 rounded-lg flex items-center justify-center gap-1 flex-shrink-0" title="동기화 상태">
+        <span id="sync-dot-c" class="w-2.5 h-2.5 rounded-full"></span><span id="sync-count" class="text-[10px] font-mono font-bold text-amber-300"></span>
+      </button>
     </header>
-    <section id="tab-root" class="flex-1 flex flex-col pb-20"></section>
-    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto h-16 flex items-center justify-around px-1 z-40">
+    <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + env(safe-area-inset-bottom))"></section>
+    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + env(safe-area-inset-bottom)); padding-bottom:env(safe-area-inset-bottom)">
       ${TABS.map((t) => html`
         <button data-action="tab" data-tab="${t.key}" class="tab-btn flex flex-col items-center gap-0.5 py-1 text-slate-400 transition">
           <i class="fa-solid ${t.icon} text-base"></i><span class="text-[10px]">${t.label}</span>
@@ -60,19 +61,15 @@ export async function render(app, params) {
 
   function renderHeader() {
     $('#trip-title', app).textContent = `${store.trip.cover_emoji || ''} ${store.trip.title}`.trim();
-    $('#trip-sub', app).textContent = [store.trip.destination, store.trip.start_date && `${store.trip.start_date} ~ ${store.trip.end_date || ''}`]
-      .filter(Boolean).join(' · ');
-    const badge = $('#sync-badge', app);
+    const prog = tripProgress(store.trip, store.trip.timezone);
+    $('#trip-sub', app).textContent = prog ? `· ${prog}` : '';
+    const b = store.budget || {};
+    $('#btn-fx', app).classList.toggle('hidden', !(b.local_currency && b.home_currency && b.local_currency !== b.home_currency && Number(b.rate) > 0));
+    // 동기화: 점 하나 (초록 동기화됨 / 파랑 깜빡임 동기화 중 / 주황 오프라인 + 대기 건수 / 빨강 오류)
     const pending = store.pendingCount;
-    const map = {
-      idle: ['동기화됨', 'text-emerald-300'],
-      syncing: ['동기화 중', 'text-neon-cyan'],
-      offline: [pending ? `오프라인 · 대기 ${pending}` : '오프라인', 'text-amber-300'],
-      error: ['동기화 오류', 'text-rose-300'],
-    };
-    const [text, cls] = map[store.status] || map.idle;
-    badge.className = `text-[10px] px-2 py-1 rounded-xl glass-card font-mono font-bold flex-shrink-0 ${cls}`;
-    badge.textContent = text;
+    const dot = { idle: 'bg-emerald-400', syncing: 'bg-neon-cyan animate-pulse', offline: 'bg-amber-400', error: 'bg-rose-500' };
+    $('#sync-dot-c', app).className = `w-2.5 h-2.5 rounded-full ${dot[store.status] || dot.idle}`;
+    $('#sync-count', app).textContent = pending ? String(pending) : '';
   }
 
   async function showTab(key) {
@@ -101,6 +98,20 @@ export async function render(app, params) {
 
   const off = delegate(app, {
     home: () => navigate('/'),
+    fx: async () => { (await import('../components/fx-calc.js')).openFxCalc(store); },
+    'sync-info': () => {
+      const pending = store.pendingCount;
+      const ago = store.lastSyncedAt ? Math.round((Date.now() - store.lastSyncedAt) / 60000) : null;
+      const when = ago == null ? '' : ago < 1 ? ' · 방금' : ` · ${ago}분 전`;
+      const text = {
+        idle: `동기화됨${when}`,
+        syncing: '동기화 중이에요.',
+        offline: pending ? `오프라인 · 보낼 변경 ${pending}건. 온라인이 되면 자동으로 보내요.` : '오프라인이에요. 저장된 내용으로 볼 수 있어요.',
+        error: '동기화 오류가 있어요. 잠시 후 다시 시도해요.',
+      }[store.status] || '동기화됨';
+      toast(text, store.status === 'error' ? 'error' : 'info');
+      if (navigator.onLine) store.sync();
+    },
     tab: (el) => navigate(`/trip/${params.id}/${el.dataset.tab}`),
   });
 

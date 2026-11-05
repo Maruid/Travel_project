@@ -4,6 +4,7 @@ import { dateRange, dayLabel, shortTime, todayIn } from '../../lib/format.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail } from './places.js';
 import { color } from '../../lib/safe.js';
+import { hoursIssueAt } from '../../lib/hours.js';
 
 const ICONS = ['fa-location-dot', 'fa-utensils', 'fa-mug-saucer', 'fa-train-subway', 'fa-taxi', 'fa-plane-departure',
   'fa-plane-arrival', 'fa-hotel', 'fa-bed', 'fa-hot-tub-person', 'fa-camera', 'fa-bag-shopping', 'fa-tree', 'fa-landmark',
@@ -69,6 +70,9 @@ export function mount(root, store) {
                   </div>
                   ${it.description ? html`<p class="text-[11px] text-slate-300 leading-relaxed whitespace-pre-line">${it.description}</p>` : ''}
                   ${it.alert ? html`<div class="mt-1.5 p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-300">${it.alert}</div>` : ''}
+                  ${place && hoursIssueAt(place.opening_hours, it.day_date, shortTime(it.start_time)) ? html`
+                    <div class="mt-1.5 p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-[10px] text-rose-200">
+                      <i class="fa-solid fa-clock mr-1"></i>${place.name}: ${hoursIssueAt(place.opening_hours, it.day_date, shortTime(it.start_time))}</div>` : ''}
                   <div class="mt-2 flex justify-end gap-1.5">
                     ${place ? html`<button data-action="place" data-id="${place.id}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-neon-cyan border border-neon-cyan/30 font-bold"><i class="fa-solid fa-location-dot text-[9px]"></i> ${place.name}</button>` : ''}
                     <button data-action="edit" data-id="${it.id}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 text-slate-300"><i class="fa-solid fa-pen"></i></button>
@@ -121,8 +125,11 @@ function openDayEditor(store, day) {
   });
 }
 
-function openItemEditor(store, id, day) {
-  const it = id ? store.get('itinerary_items', id) : { day_date: day, icon: 'fa-location-dot' };
+// 장소 카드의 "일정에 넣기"에서도 씀: place 를 주면 제목·연결 장소·아이콘을 미리 채움
+const KIND_ICON = { food: 'fa-utensils', cafe: 'fa-mug-saucer', bar: 'fa-beer-mug-empty', spot: 'fa-camera', shop: 'fa-bag-shopping', lodging: 'fa-hotel', transit: 'fa-train-subway' };
+export function openItemEditor(store, id, day, { place = null } = {}) {
+  const it = id ? store.get('itinerary_items', id)
+    : { day_date: day, icon: KIND_ICON[store.category(place?.category_id)?.kind] || 'fa-location-dot', title: place?.name || '', place_id: place?.id || null };
   const places = store.list('places').sort((a, b) => a.name.localeCompare(b.name));
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${id ? '일정 수정' : '일정 추가'}</h3>
@@ -173,6 +180,11 @@ function openItemEditor(store, id, day) {
       const data = { ...v, sort_order: sort };
       if (id) store.update('itinerary_items', id, data); else store.insert('itinerary_items', data);
       closeSheet();
+      // 연결한 장소가 그날·그 시간에 닫혀 있으면 알려줌 (저장은 그대로)
+      const pl = v.place_id ? store.get('places', v.place_id) : null;
+      const issue = pl ? hoursIssueAt(pl.opening_hours, v.day_date, v.start_time) : null;
+      if (issue) toast(`저장했어요. 다만 ${pl.name}: ${issue}`, 'error');
+      else if (!id && place) toast(`${v.day_date.slice(5).replace('-', '/')} 일정에 넣었어요.`);
     });
     return off;
   });

@@ -106,5 +106,24 @@ export function todayIn(timezone) {
 
 export const shortTime = (t) => (t ? t.slice(0, 5) : '');
 
+// 짧은 기간 표시: "11.24–28", 달이 다르면 "11.30–12.2"
+export function shortDateRange(s, e) {
+  if (!s) return '';
+  const [, m1, d1] = s.split('-').map(Number);
+  if (!e || e === s) return `${m1}.${d1}`;
+  const [, m2, d2] = e.split('-').map(Number);
+  return m1 === m2 ? `${m1}.${d1}–${d2}` : `${m1}.${d1}–${m2}.${d2}`;
+}
+
+// 여행 진행: 출발 전 "D-18", 여행 중 "2일차", 끝난 뒤나 날짜만 있으면 "11.24–28"
+export function tripProgress(trip, tz, today = todayIn(tz)) {
+  const s = trip?.start_date; const e = trip?.end_date || s;
+  if (!s) return '';
+  const diff = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000);
+  if (today < s) return `D-${diff(s, today)}`;
+  if (today <= e) return `${diff(today, s) + 1}일차`;
+  return shortDateRange(s, e);
+}
+
 export { CURRENCIES } from './currency.js';
 export { CURRENCY_INFO };

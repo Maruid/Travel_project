@@ -201,6 +201,7 @@ export class TripStore {
       await this.flush();
       changed = await this.pull();
       this.status = this.outbox.length ? 'offline' : 'idle';
+      this.lastSyncedAt = Date.now();
     } catch (e) {
       this.status = isNetworkError(e) ? 'offline' : 'error';
       if (!isNetworkError(e)) console.error(e);

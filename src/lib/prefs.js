@@ -1,7 +1,8 @@
 // 이 기기에만 저장되는 화면 설정 (localStorage, 실패해도 기본값으로 동작)
 export const PREF_MAP_COLLAPSED = 'places:mapCollapsed';
 export const PREF_ANCHOR_NEAR_SORT = 'places:anchorNearSort';
-export const PREF_MAP_SIZE = 'places:mapSize';   // 's' | 'm' | 'l'
+export const PREF_MAP_SIZE = 'places:mapSize';
+export const PREF_HIDE_VISITED = 'places:hideVisited';   // 안 간 곳만 보기   // 's' | 'm' | 'l'
 
 export function getPref(key) {
   try { return localStorage.getItem(key) === '1'; } catch { return false; }

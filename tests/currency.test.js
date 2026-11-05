@@ -36,3 +36,14 @@ test('원화 환산과 환율 표시', () => {
   assert.equal(rateText(b), '100엔 = 870원');
   assert.equal(rateText({ local_currency: 'USD', home_currency: 'KRW', rate: 1400 }), '1달러 = 1,400원');
 });
+
+import { tripProgress, shortDateRange } from '../src/lib/format.js';
+test('여행 진행 표시', () => {
+  const trip = { start_date: '2026-11-24', end_date: '2026-11-28' };
+  assert.equal(tripProgress(trip, 'UTC', '2026-11-06'), 'D-18');
+  assert.equal(tripProgress(trip, 'UTC', '2026-11-24'), '1일차');
+  assert.equal(tripProgress(trip, 'UTC', '2026-11-25'), '2일차');
+  assert.equal(tripProgress(trip, 'UTC', '2026-12-01'), '11.24–28');
+  assert.equal(shortDateRange('2026-11-30', '2026-12-02'), '11.30–12.2');
+  assert.equal(tripProgress({}, 'UTC'), '');
+});
