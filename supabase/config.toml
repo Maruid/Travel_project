@@ -12,3 +12,6 @@ verify_jwt = false
 
 [functions.recommend-places]
 verify_jwt = false
+
+[functions.plan-itinerary]
+verify_jwt = false

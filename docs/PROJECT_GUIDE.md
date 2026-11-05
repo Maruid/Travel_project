@@ -76,6 +76,7 @@ src/
     place-filter.js        장소 필터(카테고리 여러 개·안 간 곳만·찜) + 이름 검색 (순수 함수)
     route-plan.js          하루 동선: 구간 도보 어림, 길찾기 링크, 숙소 출발·복귀 (순수 함수)
     md-edit.js             가이드 편집기 서식 버튼 (굵게·목록·번호·제목·쇼잉 카드, 순수 함수)
+    ai-plan.js             AI 일정 짜기: 요청 만들기(장소 번호·남길 일정 F번호) · 결과 검증 · 적용 · 되돌리기 (순수 함수)
     likes.js               찜: (장소, 멤버) 고정 id, 장소별 찜한 멤버 묶기 (순수 함수)
     settle.js              정산: 멤버별 낸 돈·몫, 최소 송금 목록 (순수 함수)
     currency.js            통화 목록 + "일본 - 엔 (JPY)" 라벨
@@ -87,6 +88,7 @@ src/
     pwa.js, safe.js(color/icon 화이트리스트)
   views/
     home.js, create.js, join.js, admin.js
+    ai-plan.js             AI 일정 짜기 시트 (조건 → 미리보기 → 날짜별/전체 적용)
     view.js                보기 전용 공유 화면(#/view/:token, 로그인 없음). ViewStore 로 일정·가이드 탭을 readOnly 로 재사용
     trip.js                하단 탭 + 헤더, store.subscribe → 탭 update()
     place-import.js        다른 여행/공유 코드에서 장소 가져오기, 공유 코드 발급
@@ -96,7 +98,7 @@ src/
     tabs/more.js           설정 탭
 supabase/
   schema.sql, seed_osaka.sql, migration_002 ~ 007, config.toml
-  functions/resolve-maps-link | enrich-place | place-details  (Deno, Verify JWT OFF)
+  functions/resolve-maps-link | enrich-place | place-details | recommend-places | plan-itinerary  (Deno, Verify JWT OFF)
 tests/                     node --test (maps-link, dom-router, tile-plan, place-sort, place-copy, store-newer, currency,
                            name-match, hours, place-filter, route-plan, md-edit, settle-likes)
 public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 자리표시 아직 채워야 함
@@ -141,7 +143,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | trip_budgets | home/local_currency, rate(현지 1 = 내 통화 rate), base_amount |
 | categories | trip_id null = 전역 기본 8종, 값 있음 = 여행 커스텀 |
 | places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb + visited_at |
-| itinerary_days / itinerary_items | 날짜 헤더 / 시간 항목(place_id 연결) |
+| itinerary_days / itinerary_items | 날짜 헤더 / 시간 항목(place_id 연결, ai_plan = AI 가 넣은 일정의 실행 id) |
 | guides | 마크다운 카드 (day_date 지정 시 일정에도 노출) |
 | budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
 | todos | kind todo/place/shop |
@@ -170,6 +172,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 008_currency_text | 통화 칸 4개 char(3) → text + `^[A-Z]{3}$` 검사, 잘린 값(J/K) 복구 |
 | 010_visited | places.visited_at (다녀옴 체크) |
 | 009_ai_recommend | AI 추천 권한(ai_grants)·요청(ai_grant_requests)·AI 사용 기록(ai_calls, 토큰)·추천 결과(recommend_cache), 관련 RPC, 자동 정리 추가 |
+| 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
 Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 새 테이블과 함수에는 **GRANT를 명시**해야 합니다. 함수는 `revoke all ... from public, anon` 후 `grant execute ... to authenticated`로 엽니다.
@@ -427,6 +430,27 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   - 서버가 보내는 것: 여행 제목·목적지·날짜·시간대·이모지, 카테고리, 장소(작성자·위치 검토 등 내부 칸 제외), 일정, 가이드. 가계부·할 일·멤버·찜은 보내지 않습니다.
   - 꺼졌거나 바뀐 링크: "이 링크는 꺼졌거나 바뀌었어요" 화면.
 
+### 7-7-6. 3차 (2026-11-06): AI 일정 짜기 (plan-itinerary, 012)
+
+- **권한·한도**
+  - 권한은 AI 추천과 같음(관리자 무제한 / 관리자가 허용한 Google 사용자).
+  - 하루 한도는 추천과 **같이 씀**: 일정 짜기 1번 = 추천 1번 (`ai_recommend_used_today` 가 recommend + plan 합산).
+  - **여행당 3번**(멤버 합산, 관리자 실행은 세지 않음). 숫자는 `ai_plan_trip_limit()` 함수의 `select 3` 만 바꿔 다시 실행.
+  - AI 오류·빈 결과·해석 실패는 `ok=false` → 세지 않음. 미리보기까지 나온 뒤 취소한 것은 셈.
+- **시작**: 일정 탭 아래 [AI로 짜기] → 시트
+  - 채울 날짜(일정 없는 날이 기본 선택, 칩에 기존 개수), 기존 일정 [유지하고 채우기 / 지우고 새로 짜기]
+  - 지우고 새로 짜기: 남길 일정 체크(장소 없는 일정은 미리 체크), 지울 개수 표시
+  - 하루 밀도 여유 3~4 / 보통 5~6 / 빡빡 7~9, 하루 시작·끝 시간(09:00~21:00), 찜 반영 꼭 넣기 / 우선 / 반영 안 함, 다녀온 곳 빼기(찜한 곳은 남김), 요청 200자
+  - 찜 꼭 넣기인데 찜한 곳 > 날짜 × 하루 최대면 미리 경고
+- **AI 에게 보내는 것**(`buildPlanRequest`): 장소 최대 150곳(찜 많은 순 → 안 간 곳 → 이름)을 번호로, 종류·동네·좌표(소수 4자리)·고른 요일의 영업시간 한 줄·찜 수·기준점·다녀옴·다른 날 일정에 있음. 남길 일정은 F번호. 검색 없음.
+- **AI 가 돌려주는 것**: 날짜별 하루 순서 `[{f}, {place, time, title, note}, {title, time}]` + 한 줄 설명.
+- **앱 검증**(`validatePlan`): 없는 번호·같은 장소 두 번·남길 일정과 같은 장소 제거, 장소 없는 일정은 하루 2개까지, AI 가 빠뜨린 남길 일정은 시간 순서 자리에 다시 넣음, 영업시간 문제 ⚠️(`hoursIssueAt`), 시간 역순 표시, 찜 꼭 넣기에서 빠진 찜 목록.
+- **미리보기**: 날짜별로 기존(회색) · 새 일정(AI 표시, 메모, ⚠️) · 지워질 일정(취소선). [이 날만 적용 · 1개 지우고 3개 추가] / [전체 적용]. 시트를 닫아도 미리보기는 이 접속 동안 유지.
+- **적용**(`applyPlan`): 지울 일정 soft delete → 새 일정 insert(`ai_plan` = 실행 id) → 그날 순서를 계획 순서대로 `sort_order` 10, 20, ….
+- **되돌리기**: 적용한 기기의 일정 탭 위에 "AI 일정 적용됨 · [되돌리기]" 띠(localStorage, 24시간, 다음 적용 전까지). 넣은 건 숨기고 지운 건 되살림. 그 사이 다른 멤버가 고친 일정은 건드리지 않음.
+- 일정 카드 제목 옆 작은 "AI" 표시.
+- 미리보기 안 동선 지도는 없음(적용 뒤 일정 탭 동선 지도로 확인). 식사 자리 지정 칸도 없음(프롬프트 규칙: 점심 11:30~13:30, 저녁 18:00~20:00).
+
 ### 7-8. 설정 탭 (more.js) 구성
 
 1. **함께하기**: 초대 링크(복사, 공유, owner는 재발급), 멤버 목록(이름 변경, 멤버 메뉴), 동행자 추가
@@ -473,12 +497,13 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | enrich-place | AI 정보 채우기(2단계) | GEMINI_API_KEY, (GEMINI_MODEL) |
 | place-details | 구글 Places 조회 + 한도 차감·환불 | GOOGLE_PLACES_API_KEY |
 | recommend-places | 키워드 → 장소 후보 추천 (스트리밍) | GEMINI_API_KEY, (GEMINI_MODEL) |
+| plan-itinerary | AI 일정 짜기: 장소 번호로 하루 순서 (스트리밍, 검색 없음, 생각 LOW) | GEMINI_API_KEY, (GEMINI_MODEL) |
 
-- `enrich-place`와 `recommend-places`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
-- 두 함수 모두 `begin_ai_call` → `finish_ai_call`로 호출마다 토큰 수와 걸린 시간을 기록합니다.
+- `enrich-place`, `recommend-places`, `plan-itinerary`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
+- 세 AI 함수 모두 `begin_ai_call` → `finish_ai_call`로 호출마다 토큰 수와 걸린 시간을 기록합니다.
 - 대시보드에서 붙여넣어 배포하므로 각 함수는 **파일 하나로 완결**됩니다(공용 모듈 없이 helper를 복사해 둠). 한쪽 helper를 고치면 다른 쪽도 같이 고칩니다.
 
-- 세 함수 모두 **Verify JWT OFF**입니다. 함수 안에서 사용자 세션과 멤버 여부를 직접 검증합니다.
+- 모든 함수가 **Verify JWT OFF**입니다(`supabase/config.toml`). 함수 안에서 사용자 세션과 멤버 여부를 직접 검증합니다.
 - 대시보드에서 만들 때 **이름을 정확히** 지정합니다(자동 이름 `swift-function`으로 만들어져 404가 난 적이 있음).
 
 ---
@@ -506,6 +531,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `places:filter` | 필터 창 `{cats, hideVisited, liked}` JSON |
 | `schedule:routeOpen` | 일정 탭 동선 지도 펼침 |
 | `schedule:routeHotel` | 동선에 숙소 출발·복귀 포함 |
+| `ai-plan-undo:v1:<tripId>` | AI 일정 되돌리기 기록 (24시간) |
 | 여행별 cache / outbox 키 | store.js (`cacheKey`, `outboxKey`) |
 | 마지막 사용자 | auth.js (`LAST_USER_KEY`) |
 
@@ -538,6 +564,9 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | 가이드 미리보기는 전환 방식 | 입력할 때마다 마크다운을 그리면 폰에서 무거움 |
 | 찜 id 를 (장소, 멤버)로 계산 | 여러 기기·오프라인에서 눌러도 중복 행이 생기지 않음. 끄기는 행 삭제 대신 liked=false (오프라인 기기가 바뀐 사실을 받도록) |
 | 보기 전용은 함수 1개(view_trip)로 | anon 에게 테이블을 열지 않고 보낼 칸을 서버가 고름. 링크를 끄면 바로 막힘 |
+| AI 일정은 장소 번호로만 + 앱이 다시 검증 | 없는 가게를 만들지 못하게, 영업시간·중복은 앱이 확실히 확인 |
+| AI 일정 한도는 추천과 합산 + 여행당 3번 | 한 번에 여러 날을 짜서 토큰이 큼(5천~1만 2천). 여행 단위로 몇 번이면 충분 |
+| 지우고 새로 짜기는 soft delete + 되돌리기 띠 | 실수해도 복구. 다른 멤버 수정은 덮지 않음 |
 | 찜 많은 순 정렬은 아직 없음 | 정렬 칩 줄 폭(모바일 390px)이 꽉 참. 필터 [찜한 곳] 으로 대신. 3차 자동 일정에서 찜 수를 씀 |
 | AI 진행 표시는 스트리밍 | 요청을 둘로 나누면 한도 없이 정리 단계만 부를 틈이 생김, 시간으로 흉내 내면 실제와 안 맞음 |
 
@@ -576,7 +605,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **2차 A (완료, 2026-11-06)**: 마커 정리 · 필터 창 + 이름 검색 · 하루 동선 지도 · 가이드 서식 버튼/미리보기 전환. DB 변경 없음. §7-7-4
 - **2차 B (완료, 2026-11-06)**: §7-7-5. migration_011 적용 필요
 - (참고: 합의 내용) 찜(likes 테이블, 카드에 ❤️ 수, 누르면 누가 찜했는지, 각자 자기 것만 켜고 끔, 필터 창 [찜한 곳] 켜기) · 정산 송금 목록(최소 송금, 현지 통화 + 원화 어림, 자리표시 멤버 포함) · 읽기 전용 공유 링크(`#/view/…`, 일정·장소(목록+지도)·가이드만, 가계부·할 일·멤버 숨김, owner가 만들고 끄기, 여행당 1개, 로그인 없음, 열 때 최신). migration 011 필요
-- **3차: 일정 자동 짜기**(AI, 검색 없음)
+- **3차 (완료, 2026-11-06)**: AI 일정 짜기 §7-7-6. migration_012 + plan-itinerary 함수 배포 필요
+- (참고: 처음 합의 메모) **3차: 일정 자동 짜기**(AI, 검색 없음)
   - 입력: 후보 장소(이름·카테고리·지역 묶음·숙소에서 도보 분·영업시간 요약·찜 수), 날짜·숙소·이미 있는 일정(고정), 자유 문구 200자("화요일은 USJ"), 시작·끝 시간, 페이스, 식사 자리, 후보 범위(찜 우선 / 카테고리 / 안 간 곳만)
   - 찜 반영: 필수 / 우선(기본) / 반영 안 함. 앱이 결과를 검사해 빠진 찜·영업시간 문제를 표시하고, 요청 전에 "너무 많음"을 미리 경고
   - 장소는 번호로만 고르게 함(없는 장소 방지). 미리보기(날짜 탭 + 동선 지도) → [적용]

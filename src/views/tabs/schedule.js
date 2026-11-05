@@ -4,6 +4,7 @@ import { dateRange, dayLabel, shortTime, todayIn } from '../../lib/format.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail, loadMapLib } from './places.js';
 import { buildRoute, directionsHref, nearestAnchor, totalText, circled } from '../../lib/route-plan.js';
+import { loadUndo, undoPlan, clearUndo } from '../../lib/ai-plan.js';
 import { getPref, setPref, PREF_ROUTE_OPEN, PREF_ROUTE_HOTEL } from '../../lib/prefs.js';
 import { esc } from '../../lib/dom.js';
 import { color } from '../../lib/safe.js';
@@ -62,7 +63,15 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
         </div>`);
     renderRoute(plan);
 
+    const undo = readOnly ? null : loadUndo(store.tripId);
     setHTML($('#sched-body', root), html`
+        ${undo ? html`
+          <div class="flex items-center gap-2 p-2.5 rounded-2xl bg-purple-500/10 border border-purple-400/30 text-[11px]">
+            <i class="fa-solid fa-wand-magic-sparkles text-purple-300"></i>
+            <span class="flex-1 min-w-0 text-purple-100 truncate">AI 일정 적용됨 · ${undo.inserted.length}개 추가${undo.removed.length ? `, ${undo.removed.length}개 지움` : ''}</span>
+            <button data-action="ai-undo" class="flex-shrink-0 px-2 py-1 rounded-lg bg-slate-800 border border-white/10 text-purple-200 font-bold">되돌리기</button>
+            <button data-action="ai-undo-close" class="flex-shrink-0 w-6 h-6 text-slate-400" title="닫기"><i class="fa-solid fa-xmark"></i></button>
+          </div>` : ''}
         ${selected ? html`
           <div data-action="${readOnly ? 'none' : 'edit-day'}" class="glass-card p-3.5 rounded-2xl border-l-4 border-rose-500 ${readOnly ? '' : 'cursor-pointer'}">
             <div class="flex items-center gap-1.5 mb-0.5">
@@ -91,7 +100,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
                   ${no ? html`<span class="absolute -top-1.5 -left-1.5 min-w-4 h-4 px-0.5 rounded-full bg-rose-500 text-white text-[9px] font-black leading-4 text-center">${no}</span>` : ''}</div>
                 <div class="flex-1 min-w-0">
                   <div class="flex items-baseline justify-between gap-1 mb-0.5">
-                    <h5 class="text-xs font-bold text-white">${it.title}</h5>
+                    <h5 class="text-xs font-bold text-white">${it.title}${it.ai_plan ? html` <span class="align-middle text-[8px] px-1 rounded bg-purple-500/25 text-purple-200 font-bold">AI</span>` : ''}</h5>
                     <span class="text-[10px] font-mono font-bold text-neon-cyan flex-shrink-0">${shortTime(it.start_time)}</span>
                   </div>
                   ${it.description ? html`<p class="text-[11px] text-slate-300 leading-relaxed whitespace-pre-line">${it.description}</p>` : ''}
@@ -107,7 +116,11 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
               </div>`;
             }) : emptyCard('아직 일정이 없습니다.')}
           </div>
-          ${readOnly ? '' : html`<button data-action="add" class="btn-primary"><i class="fa-solid fa-plus mr-1"></i>일정 추가</button>`}
+          ${readOnly ? '' : html`
+            <div class="grid grid-cols-[1fr_auto] gap-2">
+              <button data-action="add" class="btn-primary"><i class="fa-solid fa-plus mr-1"></i>일정 추가</button>
+              <button data-action="ai-plan" class="px-3 rounded-xl bg-purple-500/20 border border-purple-400/50 text-purple-100 text-xs font-bold"><i class="fa-solid fa-wand-magic-sparkles mr-1"></i>AI로 짜기</button>
+            </div>`}
         ` : emptyCard('여행 날짜가 없습니다. 설정 탭에서 여행 정보를 설정하거나 날짜를 추가하세요.')}
     `);
   }
@@ -200,6 +213,20 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   }
 
   const off = delegate(root, {
+    'ai-plan': async () => {
+      const { openAiPlan } = await import('../ai-plan.js');
+      openAiPlan(store, { dates: days(), day: selected, onApplied: (d) => { selected = d; update(); } });
+    },
+    'ai-undo': () => {
+      const rec = loadUndo(store.tripId);
+      if (!rec) { update(); return; }
+      if (!confirmAction(`AI 가 넣은 일정 ${rec.inserted.length}개를 지우${rec.removed.length ? `고, 지웠던 일정 ${rec.removed.length}개를 되살리` : ''}까요?`)) return;
+      const r = undoPlan(store, rec);
+      clearUndo(store.tripId);
+      toast(r.skipped ? `되돌렸어요. 다른 사람이 그 사이 고친 일정 ${r.skipped}개는 그대로 뒀어요.` : '되돌렸어요.');
+      update();
+    },
+    'ai-undo-close': () => { clearUndo(store.tripId); update(); },
     'route-toggle': () => { route.open = !route.open; setPref(PREF_ROUTE_OPEN, route.open); update(); },
     'route-hotel': () => { route.hotel = !route.hotel; setPref(PREF_ROUTE_HOTEL, route.hotel); update(); },
     day: (el) => { selected = el.dataset.day; update(); },
