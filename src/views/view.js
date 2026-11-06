@@ -58,7 +58,7 @@ export async function render(app, params) {
   document.title = `${store.trip.title} · 일정`;
 
   setHTML(app, html`
-    <header class="px-3 h-11 flex items-center gap-2 glass-nav sticky top-0 z-40">
+    <header class="px-3 flex items-center gap-2 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top)">
       <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
         ${`${store.trip.cover_emoji || ''} ${store.trip.title}`.trim()}${prog ? html`<span class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan">· ${prog}</span>` : ''}</h1>
       <span class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10"><i class="fa-solid fa-eye mr-1"></i>보기 전용</span>

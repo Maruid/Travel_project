@@ -106,3 +106,10 @@ test('시작·끝 시간, 다녀온 곳 빼기(찜은 남김), 찜 너무 많음
   assert.equal(tooManyLiked(13, 2, 'normal'), 12);
   assert.equal(tooManyLiked(12, 2, 'normal'), 0);
 });
+
+test('후보 카테고리: 고른 것만 + 기준점은 항상 + 찜 꼭 넣기면 찜한 곳 포함', () => {
+  const { body } = buildPlanRequest({ ...base, dates: ['2026-11-10'], cats: new Set(['c1']) });
+  assert.deepEqual(body.places.map((p) => p.name).sort(), ['이치란', '호텔']);
+  const must = buildPlanRequest({ ...base, dates: ['2026-11-10'], cats: new Set(['c1']), likeMode: 'must', likes: new Map([['pb', 1]]) }).body;
+  assert.ok(must.places.some((p) => p.name === '호젠지'));
+});

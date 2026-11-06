@@ -53,11 +53,15 @@ export function hoursBrief(oh, weekdays) {
  * @param o.likes       Map(placeId → 찜한 사람 수)
  * @returns { body(서버로 보낼 것), ctx(검증용) }
  */
-export function buildPlanRequest({ trip, places, items, dayHeaders = [], categoryOf, dates, mode = 'keep', keepIds = new Set(), density = 'normal', likeMode = 'prefer', likes = new Map(), text = '', start = '09:00', end = '21:00', skipVisited = false }) {
+export function buildPlanRequest({ trip, places, items, dayHeaders = [], categoryOf, dates, mode = 'keep', keepIds = new Set(), density = 'normal', likeMode = 'prefer', likes = new Map(), text = '', start = '09:00', end = '21:00', skipVisited = false, cats = null }) {
   const dateSet = new Set(dates);
   const weekdays = dates.map(weekdayOf);
   // 장소: 찜 많은 순 → 안 간 곳 → 이름. 너무 많으면 앞에서부터
-  const pool = skipVisited ? places.filter((p) => !p.visited_at || (likes.get(p.id) || 0) > 0) : places;
+  // 후보: 고른 카테고리(cats, null 이면 전체) + 다녀온 곳 빼기. 기준점(숙소)은 출발점으로 항상 보냄, 찜 꼭 넣기면 찜한 곳도
+  const liked = (p) => (likes.get(p.id) || 0) > 0;
+  const pool = places.filter((p) => p.is_anchor
+    || ((!cats || cats.has(p.category_id) || (likeMode === 'must' && liked(p)))
+      && (!skipVisited || !p.visited_at || liked(p))));
   const sorted = [...pool].sort((a, b) => (likes.get(b.id) || 0) - (likes.get(a.id) || 0)
     || (a.visited_at ? 1 : 0) - (b.visited_at ? 1 : 0) || String(a.name).localeCompare(String(b.name), 'ko'));
   const picked = sorted.slice(0, MAX_PLACES);

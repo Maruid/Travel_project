@@ -5,6 +5,7 @@ import { TripStore } from '../lib/store.js';
 import { spinner, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
 import { tripProgress } from '../lib/format.js';
+import { backToHome } from '../lib/back-nav.js';
 
 const TABS = [
   { key: 'places',   label: '장소',   icon: 'fa-map-location-dot', load: () => import('./tabs/places.js') },
@@ -38,7 +39,7 @@ export async function render(app, params) {
 
   setHTML(app, html`
     <!-- 한 줄 헤더: ← 이름 · D-18      [환율] ● -->
-    <header class="px-2 h-11 flex items-center gap-1 glass-nav sticky top-0 z-40">
+    <header class="px-2 flex items-center gap-1 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top)">
       <button data-action="home" class="w-8 h-8 rounded-lg text-slate-400 hover:text-white flex-shrink-0"><i class="fa-solid fa-chevron-left"></i></button>
       <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
         <span id="trip-title"></span><span id="trip-sub" class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan"></span></h1>
@@ -97,7 +98,7 @@ export async function render(app, params) {
   await showTab(params.tab || 'places');
 
   const off = delegate(app, {
-    home: () => navigate('/'),
+    home: () => backToHome(navigate),
     fx: async () => { (await import('../components/fx-calc.js')).openFxCalc(store); },
     'sync-info': () => {
       const pending = store.pendingCount;
@@ -112,7 +113,8 @@ export async function render(app, params) {
       toast(text, store.status === 'error' ? 'error' : 'info');
       if (navigator.onLine) store.sync();
     },
-    tab: (el) => navigate(`/trip/${params.id}/${el.dataset.tab}`),
+    // 탭 전환은 기록을 쌓지 않음 → 뒤로가기 한 번이면 홈
+    tab: (el) => navigate(`/trip/${params.id}/${el.dataset.tab}`, { replace: true }),
   });
 
   return {

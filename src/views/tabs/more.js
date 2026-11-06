@@ -9,6 +9,8 @@ import { openDeviceCodeIssue } from '../../components/account.js';
 import { downloadTripMap } from '../../lib/offline-map.js';
 import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 import { openPlaceImport, openShareCodes } from '../place-import.js';
+import { canInstall, promptInstall, isIOS, screenInfo, SCREEN_LABEL } from '../../lib/install.js';
+import { isStandalone } from '../../lib/back-nav.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -170,6 +172,16 @@ export function mount(root, store) {
             <button data-action="device-code" class="btn-ghost w-full py-2"><i class="fa-solid fa-key mr-1"></i>로그인 없이 다른 기기 연결 (코드)</button>`}
           ${!owner ? html`<button data-action="leave" class="w-full py-2 rounded-xl text-slate-400 text-[11px]">이 여행에서 나가기</button>` : ''}
         </section>
+
+        ${groupTitle('앱')}
+        <section class="glass-card p-4 rounded-2xl space-y-2">
+          ${isStandalone() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>설치된 앱으로 쓰고 있어요.</p>`
+            : canInstall() ? html`<button data-action="install" class="btn-primary w-full"><i class="fa-solid fa-mobile-screen-button mr-1"></i>앱으로 설치</button>
+                <p class="text-[10px] text-slate-500">주소창 없이 넓게 쓰고, 홈 화면 아이콘으로 바로 열려요.</p>`
+            : isIOS() ? html`<p class="text-[10px] text-slate-400">Safari 아래 공유 버튼 → "홈 화면에 추가"로 앱처럼 쓸 수 있어요.</p>`
+            : html`<p class="text-[10px] text-slate-400">크롬 오른쪽 위 ⋮ → "앱 설치" 또는 "홈 화면에 추가 → 설치"로 앱처럼 쓸 수 있어요.</p>`}
+          <button data-action="screen-info" class="btn-ghost w-full py-2"><i class="fa-solid fa-mobile-screen mr-1"></i>화면 정보 (문제 신고용)</button>
+        </section>
       </div>`);
   }
 
@@ -193,6 +205,23 @@ export function mount(root, store) {
 
   const off = delegate(root, {
     'copy-invite': () => inviteUrl() && copyText(inviteUrl(), '초대 링크'),
+    install: async () => {
+      const r = await promptInstall();
+      if (r === 'accepted') toast('설치했어요. 홈 화면의 앱 아이콘으로 열어 주세요.');
+      update();
+    },
+    'screen-info': () => {
+      const info = screenInfo();
+      const text = Object.entries(info).map(([k, v]) => `${SCREEN_LABEL[k]}: ${v}`).join('\n');
+      openSheet(html`
+        <h3 class="text-base font-black text-white mb-2"><i class="fa-solid fa-mobile-screen text-neon-cyan mr-1"></i>화면 정보</h3>
+        <div class="glass-card p-3 rounded-2xl space-y-1.5 text-[11px]">
+          ${Object.entries(info).map(([k, v]) => html`<div class="flex justify-between gap-3"><span class="text-slate-400 flex-shrink-0">${SCREEN_LABEL[k]}</span><span class="font-mono text-slate-100 text-right">${v}</span></div>`)}
+        </div>
+        <button data-action="copy-info" class="btn-ghost w-full mt-2"><i class="fa-solid fa-copy mr-1"></i>복사</button>
+        <p class="text-[10px] text-slate-500 mt-2">화면이 잘리거나 넘칠 때 이 화면을 캡처하거나 복사해서 보내 주세요.</p>`,
+      (el) => delegate(el, { 'copy-info': () => copyText(text, '화면 정보') }));
+    },
     'copy-view': () => viewUrl() && copyText(viewUrl(), '보기 전용 링크'),
     'share-view': () => navigator.share?.({ title: `${store.trip.title} 일정`, url: viewUrl() }).catch(() => {}),
     'view-toggle': (el) => setViewLink(el.checked, false, el),

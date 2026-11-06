@@ -4,8 +4,11 @@ import { supabase } from './lib/supabase.js';
 import { consumeReturn, readAuthError } from './lib/auth.js';
 import { setupPWA } from './lib/pwa.js';
 import { toast } from './components/ui.js';
+import { installBackNav } from './lib/back-nav.js';
+import { setupInstall } from './lib/install.js';
 
 setupPWA();
+setupInstall();   // 앱 설치 신호를 일찍 받아 둠 (홈 · 설정의 [설치] 버튼)
 
 route('/', () => import('./views/home.js'));
 route('/create', () => import('./views/create.js'));
@@ -33,6 +36,7 @@ async function boot() {
       : `로그인에 실패했습니다: ${authError.description || authError.code}`, 'error'), 300);
   }
   await startRouter();
+  installBackNav({ onExitHint: (text) => toast(text) });
 }
 
 boot().catch((e) => {

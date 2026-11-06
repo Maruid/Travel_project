@@ -1,4 +1,5 @@
 import { setHTML, html } from '../lib/dom.js';
+import { sheetOpened, sheetClosedByApp, sheetClosedByRoute, sheetIsOpen } from '../lib/back-nav.js';
 
 // ---------- 토스트 ----------
 let toastTimer;
@@ -17,6 +18,7 @@ let sheetCleanup = null;
 
 export function openSheet(content, onMount) {
   const sheet = document.getElementById('sheet');
+  sheetOpened(hideSheet);   // 뒤로가기 = 시트 닫기
   const backdrop = document.getElementById('sheet-backdrop');
   closeSheetSync();
   setHTML(document.getElementById('sheet-content'), html`
@@ -34,6 +36,12 @@ function closeSheetSync() {
 }
 
 export function closeSheet() {
+  sheetClosedByApp();
+  hideSheet();
+}
+
+// 기록은 건드리지 않고 닫기 (뒤로가기로 닫힌 경우 · 화면 이동)
+function hideSheet() {
   closeSheetSync();
   document.getElementById('sheet').classList.add('translate-y-full');
   setTimeout(() => {
@@ -44,6 +52,12 @@ export function closeSheet() {
 
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-sheet-close]') || e.target.id === 'sheet-backdrop') closeSheet();
+});
+// 다른 화면으로 이동하면 열려 있던 시트를 닫음 (router.js 가 보냄)
+window.addEventListener('app:route', () => {
+  if (!sheetIsOpen()) return;
+  sheetClosedByRoute();
+  hideSheet();
 });
 
 // ---------- 확인 ----------

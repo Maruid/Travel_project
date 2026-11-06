@@ -3,7 +3,7 @@ import { openSheet, closeSheet, toast, emptyCard, confirmAction, copyText } from
 import { money, todayIn, shortTime, rateText, approxMoney } from '../../lib/format.js';
 import { balances, settleTransfers } from '../../lib/settle.js';
 import { color } from '../../lib/safe.js';
-import { currencyOptions, unitOf } from '../../lib/currency.js';
+import { currencyOptions, unitOf, CURRENCY_MONEY } from '../../lib/currency.js';
 const unitText = (c) => unitOf(c) ?? c;
 import { fetchRate } from '../../lib/fx.js';
 
@@ -230,6 +230,15 @@ function openExpenseEditor(store, id) {
   });
 }
 
+// 환율은 통화의 기준 단위로 보여주고 입력받음 ("100엔 = 870원"). 저장은 지금처럼 1단위 기준
+//  표에 없는 통화는 1단위로 입력
+const baseOf = (code) => CURRENCY_MONEY[code]?.base || 1;
+function baseLabel(from, to) {
+  return `${baseOf(from).toLocaleString('ko-KR')}${unitText(from)} = ?${unitText(to)}`;
+}
+export const rateInBase = (rate, code) => (Number(rate) > 0 ? Number((Number(rate) * baseOf(code)).toPrecision(6)) : '');
+export const rateFromBase = (v, code) => (Number(v) > 0 ? Number(v) / baseOf(code) : 0);
+
 function openBudgetSettings(store) {
   const b = store.budget || {};
   const topups = store.list('budget_topups');
@@ -242,10 +251,10 @@ function openBudgetSettings(store) {
       </div>
       <div>
         <div class="flex items-center justify-between">
-          <label class="label">환율 (<span id="rate-unit">1${unitText(b.local_currency)} = ?${unitText(b.home_currency)}</span>)</label>
+          <label class="label">환율 (<span id="rate-unit">${baseLabel(b.local_currency, b.home_currency)}</span>)</label>
           <button type="button" data-action="fetch-rate" class="text-[10px] text-neon-cyan font-bold"><i class="fa-solid fa-rotate mr-0.5"></i>최신 환율로</button>
         </div>
-        <input name="rate" type="number" step="any" min="0" class="input font-mono" value="${b.rate}">
+        <input name="rate" type="number" step="any" min="0" inputmode="decimal" class="input font-mono" value="${rateInBase(b.rate, b.local_currency)}">
         <p id="rate-note" class="text-[10px] text-slate-500 mt-1">환율은 바꿀 때만 적용돼요. 이미 적은 지출의 환산액도 새 환율로 다시 계산돼요.</p>
       </div>
       <div><label class="label">기본 환전금 (현지 통화)</label><input name="base_amount" type="number" step="any" min="0" class="input font-mono" value="${b.base_amount}"></div>
@@ -273,7 +282,7 @@ function openBudgetSettings(store) {
     async function fillRate() {
       const from = form.elements.local_currency.value;
       const to = form.elements.home_currency.value;
-      $('#rate-unit', el).textContent = `1${unitText(from)} = ?${unitText(to)}`;
+      $('#rate-unit', el).textContent = baseLabel(from, to);
       const note = $('#rate-note', el);
       const my = ++seq;
       note.className = 'text-[10px] text-slate-400 mt-1';
@@ -281,7 +290,8 @@ function openBudgetSettings(store) {
       try {
         const r = await fetchRate(from, to);
         if (my !== seq) return;   // 그 사이 통화를 또 바꿨으면 무시
-        form.elements.rate.value = r.rate;
+        form.elements.rate.value = rateInBase(r.rate, from);
+        $('#rate-unit', el).textContent = baseLabel(from, to);
         note.className = 'text-[10px] text-emerald-300 mt-1';
         setHTML(note, r.source === 'same' ? html`같은 통화예요.`
           : html`자동 · ${r.date || '오늘'} 기준${r.attribution ? html` · <a href="${r.attribution}" target="_blank" rel="noopener" class="underline">Rates By Exchange Rate API</a>` : ''} (저장해야 적용돼요)`);
@@ -303,7 +313,7 @@ function openBudgetSettings(store) {
       e.preventDefault();
       const v = formValues(e.target);
       store.updateBudget({ local_currency: v.local_currency, home_currency: v.home_currency,
-        rate: Number(v.rate) || 1, base_amount: Number(v.base_amount) || 0 });
+        rate: rateFromBase(Number(v.rate), v.local_currency) || 1, base_amount: Number(v.base_amount) || 0 });
       toast('저장했습니다.');
       closeSheet();
     });

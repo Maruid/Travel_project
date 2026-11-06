@@ -10,6 +10,7 @@ import { openSheet, closeSheet, toast, confirmAction } from '../components/ui.js
 import { rpc, errorText } from '../lib/supabase.js';
 import { streamFunction, progressTicker } from '../lib/ai-stream.js';
 import { startGoogleLogin } from '../components/account.js';
+import { groupCategories } from '../lib/place-filter.js';
 import { DENSITY, MAX_TEXT, tooManyLiked, buildPlanRequest, validatePlan, dayCounts, applyPlan, saveUndo, loadUndo, shortHM } from '../lib/ai-plan.js';
 
 const DAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
@@ -39,6 +40,9 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
     text: '',
     start: '09:00', end: '21:00',
     skipVisited: true,
+    // 후보 카테고리: 기본은 숙소 · 교통 종류를 뺀 전부
+    cats: new Set(store.categories().filter((c) => !['lodging', 'transit'].includes(c.kind)).map((c) => c.id)),
+    mapDay: null,           // 미리보기에서 지도를 펼친 날짜
     busy: false,
     view: lastPlan.has(store.tripId) ? 'preview' : 'form',
   };
@@ -62,7 +66,14 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
     function render() {
       $('#ap-quota', el).textContent = quotaText();
       if (!access.allowed) return setHTML($('#ap-body', el), lockedHtml());
-      if (state.view === 'preview' && lastPlan.has(store.tripId)) return setHTML($('#ap-body', el), previewHtml(lastPlan.get(store.tripId)));
+      previewMap?.remove(); previewMap = null;
+      if (state.view === 'preview' && lastPlan.has(store.tripId)) {
+        const lp = lastPlan.get(store.tripId);
+        setHTML($('#ap-body', el), previewHtml(lp));
+        const day = lp.plan.days.find((d) => d.date === state.mapDay);
+        if (day) drawPreviewMap(day);
+        return;
+      }
       setHTML($('#ap-body', el), formHtml());
     }
 
@@ -112,6 +123,7 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
                   <p class="text-[10px] text-rose-300 pt-1">${removeN}개를 지우고 새로 짜요. 적용 뒤에도 되돌릴 수 있어요.</p>
                 </div>` : ''}
             </div>` : ''}
+          ${candidateHtml()}
           <div>
             <p class="label">하루 밀도</p>
             <div class="flex gap-1.5">${Object.entries(DENSITY).map(([k, v]) => seg('density', k, `${v.label} ${v.min}~${v.max}곳`, state.density))}</div>
@@ -140,6 +152,62 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
         </div>`;
     }
 
+    // 후보 장소: 종류별로 묶은 카테고리 칩 (여러 개), [전체]
+    function candidateHtml() {
+      const places = store.list('places');
+      const { groups } = groupCategories(store.categories(), places);
+      const allIds = groups.flatMap((g) => g.cats.map((c) => c.id));
+      const all = allIds.every((id) => state.cats.has(id));
+      const n = places.filter((p) => !p.is_anchor && state.cats.has(p.category_id) && (!state.skipVisited || !p.visited_at || likes.has(p.id))).length;
+      const chip = (on) => `h-7 px-2 rounded-full border text-[10px] font-bold flex items-center gap-1 ${on ? 'bg-purple-500/30 text-purple-100 border-purple-400/60' : 'bg-slate-800 text-slate-500 border-white/10'}`;
+      return html`
+        <div>
+          <div class="flex items-center justify-between">
+            <p class="label">후보 장소 <span class="text-slate-500 font-normal">· ${n}곳</span></p>
+            <button data-action="cat-all" class="text-[10px] text-purple-200 underline underline-offset-2">${all ? '모두 끄기' : '전체'}</button>
+          </div>
+          <div class="space-y-1.5">
+            ${groups.map((g) => html`
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[9px] text-slate-500 w-7 flex-shrink-0">${g.label}</span>
+                ${g.cats.map((c) => html`<button data-action="cat" data-id="${c.id}" class="${chip(state.cats.has(c.id))}">${c.name}<span class="opacity-60">${c.count}</span></button>`)}
+              </div>`)}
+          </div>
+          ${state.likeMode === 'must' ? html`<p class="text-[10px] text-slate-500 mt-1">찜 꼭 넣기: 고른 카테고리 밖이라도 찜한 곳은 후보에 넣어요.</p>` : ''}
+        </div>`;
+    }
+
+    // ---------- 미리보기 지도: 그날 순서대로 번호 (기존 회색 · AI 보라), 지울 일정은 안 보임 ----------
+    let previewMap = null;
+    async function drawPreviewMap(day) {
+      previewMap?.remove(); previewMap = null;
+      const box = $('#ap-map', el);
+      if (!box) return;
+      const { loadMapLib } = await import('./tabs/places.js');
+      let lib;
+      try { lib = await loadMapLib(); } catch { box.textContent = '지도를 불러오지 못했어요.'; return; }
+      if (!el.isConnected || !$('#ap-map', el)) return;
+      const pts = [];
+      day.rows.forEach((r) => {
+        const pid = r.kind === 'fixed' ? store.get('itinerary_items', r.itemId)?.place_id : r.placeId;
+        const p = pid && store.get('places', pid);
+        if (p?.lat != null) pts.push({ p, ai: r.kind === 'new' });
+      });
+      box.textContent = '';
+      if (!pts.length) { box.textContent = '위치가 있는 장소가 없어요.'; return; }
+      previewMap = lib.createMap(box, { zoom: 14 });
+      const layer = lib.L.layerGroup().addTo(previewMap);
+      lib.L.polyline(pts.map((x) => [x.p.lat, x.p.lng]), { color: '#a855f7', weight: 3, opacity: 0.8, interactive: false }).addTo(layer);
+      pts.forEach((x, i) => {
+        lib.L.marker([x.p.lat, x.p.lng], { icon: lib.pinIcon({ color: x.ai ? '#a855f7' : '#64748b', size: 24, label: i + 1 }), zIndexOffset: 100 + i })
+          .bindTooltip(lib.esc(x.p.name), { direction: 'top', offset: [0, -12] }).addTo(layer);
+      });
+      const ll = pts.map((x) => [x.p.lat, x.p.lng]);
+      if (ll.length > 1) previewMap.fitBounds(lib.L.latLngBounds(ll), { padding: [24, 24], maxZoom: 16 });
+      else previewMap.setView(ll[0], 16);
+      setTimeout(() => previewMap?.invalidateSize(), 50);
+    }
+
     // ---------- 2) 미리보기 ----------
     function previewHtml(lp) {
       const { plan, applied } = lp;
@@ -158,11 +226,15 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
             return html`
             <section class="glass-card rounded-2xl p-3 ${done ? 'opacity-60' : ''}">
               <div class="flex items-center justify-between gap-2 mb-2">
-                <h4 class="text-xs font-black text-white">${dayText(d.date)}</h4>
+                <div class="flex items-center gap-1.5">
+                  <h4 class="text-xs font-black text-white">${dayText(d.date)}</h4>
+                  <button data-action="day-map" data-d="${d.date}" class="text-[10px] px-1.5 py-0.5 rounded-md border ${state.mapDay === d.date ? 'bg-purple-500/30 text-purple-100 border-purple-400/60' : 'bg-slate-800 text-slate-400 border-white/10'}"><i class="fa-solid fa-map mr-0.5"></i>지도</button>
+                </div>
                 ${done ? html`<span class="text-[10px] text-emerald-300"><i class="fa-solid fa-check mr-0.5"></i>적용함</span>`
                   : c.add || c.remove ? html`<button data-action="apply-day" data-d="${d.date}" class="text-[10px] px-2 py-1 rounded-lg bg-slate-800 border border-white/10 text-purple-200 font-bold">이 날만 적용 · ${countText(c)}</button>`
                   : html`<span class="text-[10px] text-slate-500">바뀌는 것 없음</span>`}
               </div>
+              ${state.mapDay === d.date ? html`<div id="ap-map" class="h-48 rounded-xl overflow-hidden mb-2 z-10 relative flex items-center justify-center text-[10px] text-slate-500">지도 불러오는 중...</div>` : ''}
               <div class="space-y-1">
                 ${d.rows.map((r) => r.kind === 'fixed' ? (() => { const it = store.get('itinerary_items', r.itemId); return it ? html`
                   <div class="flex items-center gap-2 text-[11px] text-slate-400 px-2 py-1">
@@ -208,8 +280,9 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
         dayHeaders: store.list('itinerary_days'), categoryOf: (id) => store.category(id),
         dates: chosen, mode: state.mode, keepIds: state.keep || new Set(),
         density: state.density, likeMode: state.likeMode, likes, text: state.text,
-        start: state.start, end: state.end, skipVisited: state.skipVisited,
+        start: state.start, end: state.end, skipVisited: state.skipVisited, cats: state.cats,
       });
+      if (!body.places.some((p) => !p.anchor)) { toast('후보 장소가 없어요. 후보 카테고리를 골라 주세요.', 'error'); return; }
       state.busy = true;
       render();
       const prog = $('#ap-progress', el);
@@ -270,6 +343,14 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
       date: (b) => { const d = b.dataset.d; if (state.dates.has(d)) state.dates.delete(d); else state.dates.add(d); state.keep = null; render(); },
       mode: (b) => { state.mode = b.dataset.v; render(); },
       density: (b) => { state.density = b.dataset.v; render(); },
+      cat: (b) => { state.text = $('#ap-text', el)?.value ?? state.text; const id = b.dataset.id; if (state.cats.has(id)) state.cats.delete(id); else state.cats.add(id); render(); },
+      'cat-all': () => {
+        const ids = groupCategories(store.categories(), store.list('places')).groups.flatMap((g) => g.cats.map((c) => c.id));
+        const all = ids.every((id) => state.cats.has(id));
+        state.cats = all ? new Set() : new Set(ids);
+        render();
+      },
+      'day-map': (b) => { state.mapDay = state.mapDay === b.dataset.d ? null : b.dataset.d; render(); },
       like: (b) => { state.likeMode = b.dataset.v; render(); },
       run: () => run(),
       'apply-day': (b) => apply([b.dataset.d]),
@@ -299,7 +380,7 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
     const onChange = (e) => {
       if (e.target.id === 'ap-start') { state.start = e.target.value || '09:00'; return; }
       if (e.target.id === 'ap-end') { state.end = e.target.value || '21:00'; return; }
-      if (e.target.id === 'ap-skip-visited') { state.skipVisited = e.target.checked; return; }
+      if (e.target.id === 'ap-skip-visited') { state.skipVisited = e.target.checked; state.text = $('#ap-text', el)?.value ?? state.text; render(); return; }
       const id = e.target.dataset?.keep;
       if (!id) return;
       if (e.target.checked) state.keep.add(id); else state.keep.delete(id);
@@ -309,6 +390,6 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
     el.addEventListener('input', onInput);
     el.addEventListener('change', onChange);
     render();
-    return () => { off(); el.removeEventListener('input', onInput); el.removeEventListener('change', onChange); };
+    return () => { off(); previewMap?.remove(); el.removeEventListener('input', onInput); el.removeEventListener('change', onChange); };
   });
 }

@@ -70,7 +70,7 @@ export async function render(app) {
   const user = await getUser();
 
   const header = html`
-    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center justify-between">
+    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center justify-between" style="padding-top:calc(0.75rem + env(safe-area-inset-top))">
       <div class="flex items-center gap-2">
         <button data-action="home" class="w-7 h-7 text-slate-400"><i class="fa-solid fa-chevron-left"></i></button>
         <h1 class="text-sm font-black text-white">관리자</h1>

@@ -4,6 +4,8 @@ import { accountChip, startGoogleLogin, openAccountMenu, openDeviceCodeEntry } f
 import { rpc, errorText } from '../lib/supabase.js';
 import { spinner, emptyCard, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
+import { markFromHome } from '../lib/back-nav.js';
+import { installBannerHtml, promptInstall, dismissBanner } from '../lib/install.js';
 
 export async function render(app) {
   setHTML(app, spinner());
@@ -20,7 +22,7 @@ export async function render(app) {
   const chip = await accountChip();
 
   setHTML(app, html`
-    <header class="px-4 py-4 glass-nav sticky top-0 z-40 flex items-center justify-between">
+    <header class="px-4 py-4 glass-nav sticky top-0 z-40 flex items-center justify-between" style="padding-top:calc(1rem + env(safe-area-inset-top))">
       <div class="flex items-center gap-2">
         <span class="w-2.5 h-2.5 rounded-full bg-neon-cyan animate-pulse shadow-[0_0_8px_#00f2fe]"></span>
         <h1 class="text-sm font-black tracking-wide text-white">MY TRIPS</h1>
@@ -32,6 +34,7 @@ export async function render(app) {
     </header>
 
     <main class="flex-1 p-4 space-y-3">
+      <div id="install-slot">${installBannerHtml()}</div>
       ${trips.length ? trips.map((t) => html`
         <button data-action="open" data-id="${t.trip_id}" class="w-full text-left glass-card p-4 rounded-2xl flex items-center gap-3 hover:border-slate-500 transition">
           <span class="text-2xl">${t.cover_emoji || '✈️'}</span>
@@ -62,14 +65,26 @@ export async function render(app) {
   `);
 
   const off = delegate(app, {
-    open: (el) => navigate(`/trip/${el.dataset.id}/places`),
+    open: (el) => { markFromHome(); navigate(`/trip/${el.dataset.id}/places`); },
+    install: async () => {
+      const r = await promptInstall();
+      if (r === 'accepted') toast('설치했어요. 홈 화면의 앱 아이콘으로 열어 주세요.');
+      refreshInstall();
+    },
+    'install-dismiss': () => { dismissBanner(); refreshInstall(); },
     create: () => navigate('/create'),
     admin: () => navigate('/admin'),
     'account-login': () => startGoogleLogin({ hasLocalTrips: trips.length > 0 }),
     'account-menu': async () => openAccountMenu(await getUser()),
     'device-code': () => openDeviceCodeEntry(),
   });
-  return { cleanup: off };
+  // 설치 가능 신호가 늦게 오거나 설치가 끝나면 띠만 다시 그림
+  function refreshInstall() {
+    const slot = app.querySelector('#install-slot');
+    if (slot) setHTML(slot, installBannerHtml());
+  }
+  window.addEventListener('app:installable', refreshInstall);
+  return { cleanup: () => { off(); window.removeEventListener('app:installable', refreshInstall); } };
 }
 
 function cachedTrips() {

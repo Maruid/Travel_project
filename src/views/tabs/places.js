@@ -134,13 +134,12 @@ export function mount(root, store) {
     </button>
 
     <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
-      <div class="flex items-center justify-between gap-2 text-xs py-1 mb-1 flex-shrink-0">
+      <!-- 한 줄 툴바: [필터] [정렬 칩 (좁으면 이 부분만 옆으로 밀림)] [AI] [+] -->
+      <div class="flex items-center gap-1.5 text-xs py-1 mb-1 flex-shrink-0 min-w-0">
         <button data-action="filter" id="btn-filter" class="flex-shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold flex items-center gap-1"></button>
-        <div class="flex items-center gap-1.5 flex-shrink-0">
-          <div id="sort-chips" class="flex items-center gap-1"></div>
-          <button data-action="recommend" title="AI 추천" class="text-[11px] px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-400/40 font-bold"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
-          <button data-action="add" class="text-[11px] px-2.5 py-0.5 rounded-lg bg-neon-cyan text-night-950 font-black"><i class="fa-solid fa-plus"></i> 추가</button>
-        </div>
+        <div id="sort-chips" class="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto no-scrollbar"></div>
+        <button data-action="recommend" title="AI 추천" class="flex-shrink-0 w-7 h-7 rounded-lg bg-purple-500/20 text-purple-200 border border-purple-400/40 text-[11px]"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+        <button data-action="add" title="장소 추가" class="flex-shrink-0 w-7 h-7 rounded-lg bg-neon-cyan text-night-950 text-xs font-black"><i class="fa-solid fa-plus"></i></button>
       </div>
       <div id="filter-chips" class="hidden flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>
       <button data-action="geo-review" id="geo-banner" class="hidden w-full mb-1.5 px-3 h-8 flex-shrink-0 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 font-bold flex items-center justify-between">

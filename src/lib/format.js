@@ -17,7 +17,7 @@ export function walkInfo(from, to) {
 }
 
 // 통화: "93,000엔", "809,100원" 처럼 한국어 단위로 표시 (모르는 코드는 "12.5 XYZ")
-import { CURRENCY_INFO, isCurrencyCode, unitOf } from './currency.js';
+import { CURRENCY_INFO, isCurrencyCode, unitOf, moneyProfile } from './currency.js';
 const ZERO_DECIMAL = new Set(['KRW', 'JPY', 'VND', 'IDR', 'TWD']);
 const fmt0 = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 });
 const fmt2 = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 });
@@ -72,8 +72,7 @@ export function priceInHome(p, budget) {
 export function rateText(budget) {
   const L = budget?.local_currency; const H = budget?.home_currency; const rate = Number(budget?.rate) || 0;
   if (!L || !H || !(rate > 0)) return '환율 미설정';
-  let base = 1;
-  while (base * rate < 100 && base < 1e6) base *= 10;
+  const base = moneyProfile(L, rate).base;   // 통화별 기준 단위 (100엔, 100바트, 1달러 …)
   return `${money(base, L)} = ${money(base * rate, H)}`;
 }
 

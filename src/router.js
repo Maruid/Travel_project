@@ -20,6 +20,9 @@ export function route(pattern, loader) {
 
 export function navigate(path, { replace = false } = {}) {
   const hash = '#' + path;
+  // 시트가 열린 채 이동: 시트용 기록 자리를 새 화면으로 바꿔치기 (뒤로가기가 두 번 필요하지 않게)
+  if (history.state?.sheet) replace = true;
+  globalThis.dispatchEvent?.(new Event('app:route'));
   if (replace) history.replaceState(null, '', hash);
   else if (location.hash !== hash) { location.hash = hash; return; }
   render();
@@ -40,12 +43,14 @@ export async function render() {
     // 같은 뷰 안에서 파라미터만 바뀐 경우(탭 전환 등) 뷰가 직접 처리할 수 있게 함
     if (current.key === r.re.source && current.update) {
       current.update(params);
+      globalThis.dispatchEvent?.(new Event('app:rendered'));
       return;
     }
     if (typeof current.cleanup === 'function') current.cleanup();
     const result = await view.render(app, params);
     current = { key: r.re.source, cleanup: result?.cleanup || null, update: result?.update || null };
     window.scrollTo(0, 0);
+    globalThis.dispatchEvent?.(new Event('app:rendered'));
     return;
   }
   navigate('/', { replace: true });
