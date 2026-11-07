@@ -54,10 +54,10 @@ export function hoursBrief(oh, weekdays) {
  * @param o.likes       Map(placeId → 찜한 사람 수)
  * @returns { body(서버로 보낼 것), ctx(검증용) }
  */
-export function buildPlanRequest({ trip, places, items, dayHeaders = [], categoryOf, dates, mode = 'keep', keepIds = new Set(), density = 'normal', likeMode = 'prefer', likes = new Map(), text = '', start = '09:00', end = '21:00', skipVisited = false, cats = null }) {
+export function buildPlanRequest({ trip, places, items, dayHeaders = [], categoryOf, dates, mode = 'keep', keepIds = new Set(), density = 'normal', likeMode = 'prefer', likes = new Map(), text = '', start = '09:00', end = '21:00', skipVisited = false, cats = null, tripLast = null }) {
   // 날짜별 숙소 (itinerary_days.stay_place_id, 비워둔 날은 앞 날이 이어짐)
   const live = new Set(places.map((p) => p.id));
-  const stays = Object.fromEntries(dates.map((d) => [d, dayStays(dayHeaders, d, (id) => live.has(id))]));
+  const stays = Object.fromEntries(dates.map((d) => [d, dayStays(dayHeaders, d, (id) => live.has(id), { lastDate: tripLast })]));
   const stayIds = new Set(Object.values(stays).flatMap((s) => [s.start, s.end]).filter(Boolean));
   const dateSet = new Set(dates);
   const weekdays = dates.map(weekdayOf);

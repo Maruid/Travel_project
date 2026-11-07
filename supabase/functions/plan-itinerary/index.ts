@@ -86,7 +86,7 @@ function prompt(r: Req) {
       ? d.fixed.map((x) => `    F${x.f}. ${x.time || '시간 미정'} ${x.title}${x.place ? ` (장소 ${x.place})` : ''}`).join('\n')
       : '    (없음)';
     const stay = d.stayStart || d.stayEnd
-      ? `\n  숙소: ${d.stayStart === d.stayEnd || !d.stayEnd ? `${d.stayStart || d.stayEnd}번에서 출발해 돌아옴` : !d.stayStart ? `${d.stayEnd}번으로 돌아옴` : `${d.stayStart}번에서 출발해 ${d.stayEnd}번으로 이동(체크아웃 → 체크인)`}`
+      ? `\n  숙소: ${!d.stayEnd ? `${d.stayStart}번에서 출발(체크아웃), 숙소로 돌아오지 않음 (귀국·이동하는 날)` : d.stayStart === d.stayEnd ? `${d.stayStart}번에서 출발해 돌아옴` : !d.stayStart ? `${d.stayEnd}번으로 돌아옴` : `${d.stayStart}번에서 출발해 ${d.stayEnd}번으로 이동(체크아웃 → 체크인)`}`
       : '';
     return `- ${d.date} (${d.weekday})${d.title ? ` "${d.title}"` : ''}${stay}\n  남길 일정:\n${fixed}`;
   };
@@ -108,7 +108,7 @@ ${r.places.map(placeLine).join('\n')}
 - 각 날짜의 하루 순서를 처음부터 끝까지 출력하세요. 남길 일정은 {"f": 번호} 로 그 자리에 그대로 넣고, 시간과 순서를 지키세요. 남길 일정을 빼거나 바꾸지 마세요.
 - 하루에 들르는 곳은 ${DENSITY[r.density]} (남길 일정 포함). 날짜마다 빠짐없이 짜세요.
 - 새 일정은 ${r.start} 이후에 시작해서 ${r.end} 전에 끝나게. 남길 일정이 이 시간 밖에 있으면 그대로 두세요.
-- 좌표를 보고 가까운 곳끼리 묶어 이동이 짧게, 같은 동네는 같은 날에. ${r.days.some((d) => d.stayStart || d.stayEnd) ? '날짜마다 적힌 숙소에서 출발해 그 숙소로 돌아오는 동선으로 짜세요(숙소를 옮기는 날은 앞 숙소 근처에서 시작해 새 숙소 근처에서 끝나게).' : anchors.length ? `숙소/기준점(${anchors.join(', ')})에서 출발해 돌아온다고 생각하세요.` : ''} 숙소·기준점 자체는 일정에 넣지 마세요.
+- 좌표를 보고 가까운 곳끼리 묶어 이동이 짧게, 같은 동네는 같은 날에. ${r.days.some((d) => d.stayStart || d.stayEnd) ? '날짜마다 적힌 숙소에서 출발해 그 숙소로 돌아오는 동선으로 짜세요(숙소를 옮기는 날은 앞 숙소 근처에서 시작해 새 숙소 근처에서 끝나게, 돌아오지 않는 날은 마지막 일정이 숙소 근처일 필요 없음).' : anchors.length ? `숙소/기준점(${anchors.join(', ')})에서 출발해 돌아온다고 생각하세요.` : ''} 숙소·기준점 자체는 일정에 넣지 마세요.
 - 식당은 점심(11:30~13:30)·저녁(18:00~20:00) 무렵에, 카페는 오후에, 술집은 저녁 이후에.
 - 영업시간이 있으면 그 요일·시간에 영업하는 때에만 넣으세요. "휴무"인 요일에는 넣지 마세요.
 - 같은 장소를 두 번 넣지 마세요. "이미 다녀옴"·"다른 날 일정에 있음"인 곳은 되도록 빼세요.

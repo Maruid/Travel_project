@@ -193,22 +193,22 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
 
   // 그날 숙소: 날짜 헤더에서 정한 숙소(출발 = 전날 밤, 도착 = 그날 밤). 지도에는 토글과 상관없이 늘 표시
   //  [숙소 출발·복귀]: 숙소를 정한 날은 기본 켬, 정하지 않았으면 가장 가까운 기준점을 쓰고 기본 끔
+  //  일정이 그날 숙소에 연결돼 있으면 번호 없이 숙소 지점으로. 마지막 날·"숙소 없음"인 날은 돌아오지 않음
   function currentRoute(items) {
     const getPlace = (id) => store.get('places', id);
-    const base = buildRoute(items, getPlace);
-    const st = dayStays(store.list('itinerary_days'), selected, livePlace);
+    const st = dayStays(store.list('itinerary_days'), selected, livePlace, { lastDate: tripLastDate(store) });
     let startH = getPlace(st.start); let endH = getPlace(st.end);
     const hasStay = !!(startH || endH);
+    const hotelIds = new Set([st.start, st.end].filter(Boolean));
+    const base = buildRoute(items, getPlace, { hotelIds });
     const on = route.hotel ?? hasStay;
-    if (!hasStay && on && base.stops.length) {
+    if (!hasStay && !st.none && on && base.stops.length) {
       const anchors = store.list('places').filter((p) => p.is_anchor);
       startH = endH = nearestAnchor(anchors, base.stops[0].place);
     }
     const hotels = [...new Set([startH, endH].filter((h) => h && h.lat != null))];
     if (!on || !base.stops.length) return { ...base, hotels, on };
-    // 숙소가 일정의 첫·마지막 장소와 같으면 그쪽 연결은 생략
-    const first = base.stops[0].place.id; const last = base.stops[base.stops.length - 1].place.id;
-    const plan = buildRoute(items, getPlace, { start: startH && startH.id !== first ? startH : null, end: endH && endH.id !== last ? endH : null });
+    const plan = buildRoute(items, getPlace, { start: startH, end: endH, hotelIds: new Set(hotels.map((h) => h.id)) });
     return { ...plan, hotels, on };
   }
   const livePlace = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
@@ -292,7 +292,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
       const hotelSeg = sg.from.edge || sg.to.edge;
       const a = ll(sg.from.place); const b = ll(sg.to.place);
       L.polyline([a, b], {
-        color: c, weight: focus === i ? 6 : 4, opacity: dim(i) ? 0.2 : 0.9,
+        color: c, weight: focus === i ? 6 : hotelSeg ? 3 : 4, opacity: dim(i) ? 0.2 : hotelSeg && focus !== i ? 0.55 : 0.9,
         dashArray: hotelSeg || sg.transit ? '7 7' : null, interactive: false,
       }).addTo(route.layer);
       if (!dim(i)) {
@@ -391,12 +391,24 @@ function stayCandidates(store) {
 }
 
 // 날짜 헤더 아래 숙소 한 줄: "🏨 도미인 프리미엄 난바" / 옮기는 날 "A → B" / 이어진 값은 흐리게
+// 여행 마지막 날: 여행 종료일과 일정이 있는 날 중 가장 늦은 날
+export function tripLastDate(store) {
+  const ds = [store.trip?.end_date, ...store.list('itinerary_items').map((i) => i.day_date), ...store.list('itinerary_days').map((d) => d.day_date)].filter(Boolean);
+  return ds.length ? ds.sort().at(-1) : null;
+}
+
 function stayLine(store, date, readOnly) {
   const live = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
-  const st = dayStays(store.list('itinerary_days'), date, live);
+  const st = dayStays(store.list('itinerary_days'), date, live, { lastDate: tripLastDate(store) });
   const name = (id) => store.get('places', id)?.name || '';
   if (!st.end && !st.start) {
+    if (st.none) return html`<p class="text-[11px] mt-1 text-slate-400"><i class="fa-solid fa-moon mr-1"></i>이 날 밤 숙소 없음</p>`;
     return readOnly || !stayCandidates(store).length ? '' : html`<p class="text-[10px] text-slate-500 mt-1"><i class="fa-solid fa-hotel mr-1"></i>오늘 묵는 숙소를 정할 수 있어요</p>`;
+  }
+  if (!st.end) {
+    // 체크아웃하고 돌아오지 않는 날 (마지막 날 자동 · 숙소 없음)
+    return html`<p class="text-[11px] mt-1 text-amber-200/80 truncate"><i class="fa-solid fa-hotel mr-1"></i>${name(st.start)} 체크아웃
+      <span class="text-[10px] text-slate-400">· ${st.autoLast ? '마지막 날이라 돌아오지 않아요' : '이 날 밤 숙소 없음'}</span></p>`;
   }
   return html`<p class="text-[11px] mt-1 ${st.inherited && !st.moved ? 'text-amber-200/60' : 'text-amber-200'} truncate">
     <i class="fa-solid fa-hotel mr-1"></i>${st.moved ? html`${name(st.start)} <i class="fa-solid fa-arrow-right text-[9px] mx-0.5"></i> ${name(st.end)} <span class="text-[10px] text-slate-400">(숙소 이동)</span>` : name(st.end || st.start)}</p>`;
@@ -405,9 +417,12 @@ function stayLine(store, date, readOnly) {
 function openDayEditor(store, day) {
   const cur = store.list('itinerary_days').find((d) => d.day_date === day);
   const stays = stayCandidates(store);
-  // 이 날을 비워두면 이어질 숙소 (전날까지 중 가장 최근)
-  const prev = store.list('itinerary_days').filter((d) => d.stay_place_id && d.day_date < day).sort((a, b) => b.day_date.localeCompare(a.day_date))[0];
-  const inherited = prev ? store.get('places', prev.stay_place_id) : null;
+  // 이 날을 비워두면: 마지막 날은 자동 "숙소 없음", 아니면 앞 날 값이 이어짐
+  const isLast = day === tripLastDate(store);
+  const prev = store.list('itinerary_days').filter((d) => (d.stay_place_id || d.stay_none) && d.day_date < day).sort((a, b) => b.day_date.localeCompare(a.day_date))[0];
+  const inherited = prev?.stay_place_id && !prev.stay_none ? store.get('places', prev.stay_place_id) : null;
+  const curVal = cur?.stay_none ? '__none' : cur?.stay_place_id || '';
+  const blankText = isLast ? '자동 (마지막 날 · 숙소로 돌아오지 않음)' : inherited ? `앞 날과 같음 (${inherited.name})` : prev?.stay_none ? '앞 날과 같음 (숙소 없음)' : '정하지 않음';
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${dayLabel(day)} 정보</h3>
     <form id="day-form" class="space-y-2.5">
@@ -417,17 +432,19 @@ function openDayEditor(store, day) {
       <div>
         <label class="label"><i class="fa-solid fa-hotel text-amber-300 mr-1"></i>오늘 묵는 숙소</label>
         <select name="stay_place_id" class="input">
-          <option value="">${inherited ? `앞 날과 같음 (${inherited.name})` : '정하지 않음'}</option>
-          ${stays.map((p) => html`<option value="${p.id}" ${cur?.stay_place_id === p.id ? 'selected' : ''}>${p.name}${p.is_anchor ? '' : ' (기준점 아님)'}</option>`)}
+          <option value="">${blankText}</option>
+          ${stays.map((p) => html`<option value="${p.id}" ${curVal === p.id ? 'selected' : ''}>${p.name}${p.is_anchor ? '' : ' (기준점 아님)'}</option>`)}
+          <option value="__none" ${curVal === '__none' ? 'selected' : ''}>이 날 밤 숙소 없음 (귀국 · 야간 이동)</option>
         </select>
-        <p class="text-[10px] text-slate-500 mt-1">다음 날들도 바꿀 때까지 이 숙소로 이어져요. 동선 지도의 숙소 출발·복귀와 AI 일정 짜기가 이 숙소를 써요.</p>
+        <p class="text-[10px] text-slate-500 mt-1">다음 날들도 바꿀 때까지 이어져요. 마지막 날은 비워두면 숙소로 돌아오지 않고, 숙소를 직접 고르면 돌아와요(레이트 체크아웃 등). 동선 지도와 AI 일정 짜기가 이 값을 써요.</p>
       </div>
       <button class="btn-primary">저장</button>
     </form>`, (el) => {
     $('#day-form', el).addEventListener('submit', (e) => {
       e.preventDefault();
       const v = formValues(e.target);
-      v.stay_place_id = v.stay_place_id || null;
+      v.stay_none = v.stay_place_id === '__none';
+      v.stay_place_id = v.stay_none ? null : v.stay_place_id || null;
       if (cur) store.update('itinerary_days', cur.id, v);
       else store.insert('itinerary_days', { day_date: day, ...v });
       closeSheet();

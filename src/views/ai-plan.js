@@ -12,6 +12,7 @@ import { streamFunction, progressTicker } from '../lib/ai-stream.js';
 import { startGoogleLogin } from '../components/account.js';
 import { groupCategories } from '../lib/place-filter.js';
 import { dayStays, segColor, HOTEL_COLOR } from '../lib/route-plan.js';
+import { tripLastDate } from './tabs/schedule.js';
 import { DENSITY, MAX_TEXT, tooManyLiked, buildPlanRequest, validatePlan, dayCounts, applyPlan, saveUndo, loadUndo, shortHM } from '../lib/ai-plan.js';
 
 const DAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
@@ -188,18 +189,18 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
       let lib;
       try { lib = await loadMapLib(); } catch { box.textContent = '지도를 불러오지 못했어요.'; return; }
       if (!el.isConnected || !$('#ap-map', el)) return;
+      const live = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
+      const st = dayStays(store.list('itinerary_days'), day.date, live, { lastDate: tripLastDate(store) });
       const pts = [];
       day.rows.forEach((r) => {
         const pid = r.kind === 'fixed' ? store.get('itinerary_items', r.itemId)?.place_id : r.placeId;
         const p = pid && store.get('places', pid);
-        if (p?.lat != null) pts.push({ p, ai: r.kind === 'new' });
+        if (p?.lat != null && p.id !== st.start && p.id !== st.end) pts.push({ p, ai: r.kind === 'new' });   // 숙소는 번호 없이 사각형으로만
       });
       box.textContent = '';
       if (!pts.length) { box.textContent = '위치가 있는 장소가 없어요.'; return; }
       // 일정 탭 동선 지도와 같은 규칙: 순서 색 선 + 방향 화살표, 기존 일정은 회색 핀 · AI 일정은 순서 색 핀,
       // 그날 숙소는 주황 사각형 + 이름, 줌 단계에 따라 핀 크기
-      const live = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
-      const st = dayStays(store.list('itinerary_days'), day.date, live);
       const hotels = [...new Set([st.start, st.end].filter(Boolean))].map((id) => store.get('places', id)).filter((h) => h?.lat != null);
       previewMap = lib.createMap(box, { zoom: 14 });
       const layer = lib.L.layerGroup().addTo(previewMap);
@@ -305,7 +306,7 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
         dayHeaders: store.list('itinerary_days'), categoryOf: (id) => store.category(id),
         dates: chosen, mode: state.mode, keepIds: state.keep || new Set(),
         density: state.density, likeMode: state.likeMode, likes, text: state.text,
-        start: state.start, end: state.end, skipVisited: state.skipVisited, cats: state.cats,
+        start: state.start, end: state.end, skipVisited: state.skipVisited, cats: state.cats, tripLast: tripLastDate(store),
       });
       if (!body.places.some((p) => !p.anchor)) { toast('후보 장소가 없어요. 후보 카테고리를 골라 주세요.', 'error'); return; }
       state.busy = true;
