@@ -11,6 +11,7 @@ import { rpc, errorText } from '../lib/supabase.js';
 import { streamFunction, progressTicker } from '../lib/ai-stream.js';
 import { startGoogleLogin } from '../components/account.js';
 import { groupCategories } from '../lib/place-filter.js';
+import { dayStays, segColor, HOTEL_COLOR } from '../lib/route-plan.js';
 import { DENSITY, MAX_TEXT, tooManyLiked, buildPlanRequest, validatePlan, dayCounts, applyPlan, saveUndo, loadUndo, shortHM } from '../lib/ai-plan.js';
 
 const DAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
@@ -195,16 +196,40 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
       });
       box.textContent = '';
       if (!pts.length) { box.textContent = '위치가 있는 장소가 없어요.'; return; }
+      // 일정 탭 동선 지도와 같은 규칙: 순서 색 선 + 방향 화살표, 기존 일정은 회색 핀 · AI 일정은 순서 색 핀,
+      // 그날 숙소는 주황 사각형 + 이름, 줌 단계에 따라 핀 크기
+      const live = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
+      const st = dayStays(store.list('itinerary_days'), day.date, live);
+      const hotels = [...new Set([st.start, st.end].filter(Boolean))].map((id) => store.get('places', id)).filter((h) => h?.lat != null);
       previewMap = lib.createMap(box, { zoom: 14 });
       const layer = lib.L.layerGroup().addTo(previewMap);
-      lib.L.polyline(pts.map((x) => [x.p.lat, x.p.lng]), { color: '#a855f7', weight: 3, opacity: 0.8, interactive: false }).addTo(layer);
-      pts.forEach((x, i) => {
-        lib.L.marker([x.p.lat, x.p.lng], { icon: lib.pinIcon({ color: x.ai ? '#a855f7' : '#64748b', size: 24, label: i + 1 }), zIndexOffset: 100 + i })
-          .bindTooltip(lib.esc(x.p.name), { direction: 'top', offset: [0, -12] }).addTo(layer);
-      });
-      const ll = pts.map((x) => [x.p.lat, x.p.lng]);
-      if (ll.length > 1) previewMap.fitBounds(lib.L.latLngBounds(ll), { padding: [24, 24], maxZoom: 16 });
-      else previewMap.setView(ll[0], 16);
+      const ll = (p) => [p.lat, p.lng];
+      const draw = () => {
+        layer.clearLayers();
+        const z = previewMap.getZoom();
+        const n = pts.length;
+        for (let k = 1; k < n; k++) {
+          const a = ll(pts[k - 1].p); const b = ll(pts[k].p); const c = segColor(k - 1, n - 1);
+          lib.L.polyline([a, b], { color: c, weight: 4, opacity: 0.9, interactive: false }).addTo(layer);
+          lib.L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { icon: lib.arrowIcon(previewMap, a, b, c), interactive: false, keyboard: false }).addTo(layer);
+        }
+        pts.forEach((x, k) => {
+          const size = lib.routePinSize(z);
+          lib.L.marker(ll(x.p), { icon: lib.pinIcon({ color: x.ai ? segColor(k, n) : '#64748b', size, label: k + 1 }), zIndexOffset: 100 + k })
+            .bindTooltip(lib.esc(x.p.name), { direction: 'top', offset: [0, -size / 2] }).addTo(layer);
+        });
+        hotels.forEach((h) => {
+          const size = lib.routePinSize(z, { hotel: true });
+          lib.L.marker(ll(h), { icon: lib.pinIcon({ color: HOTEL_COLOR, icon: 'fa-hotel', size, shape: 'square' }), zIndexOffset: 50 })
+            .bindTooltip(lib.esc(`🏨 ${h.name}`), { direction: 'top', offset: [0, -size / 2] }).addTo(layer);
+        });
+      };
+      const all = [...pts.map((x) => ll(x.p)), ...hotels.map(ll)];
+      if (all.length > 1) previewMap.fitBounds(lib.L.latLngBounds(all), { padding: [28, 28], maxZoom: 16 });
+      else previewMap.setView(all[0], 16);
+      draw();
+      let band = lib.routeZoomBand(previewMap.getZoom());
+      previewMap.on('zoomend', () => { const b = lib.routeZoomBand(previewMap.getZoom()); if (b !== band) { band = b; draw(); } });
       setTimeout(() => previewMap?.invalidateSize(), 50);
     }
 

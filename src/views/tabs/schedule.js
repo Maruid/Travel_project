@@ -3,9 +3,9 @@ import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../co
 import { dateRange, dayLabel, shortTime, todayIn } from '../../lib/format.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail, loadMapLib } from './places.js';
-import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays } from '../../lib/route-plan.js';
+import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays, segColor, HOTEL_COLOR } from '../../lib/route-plan.js';
 import { loadUndo, undoPlan, clearUndo } from '../../lib/ai-plan.js';
-import { getPref, setPref, PREF_ROUTE_OPEN, PREF_ROUTE_HOTEL } from '../../lib/prefs.js';
+import { getPref, setPref, getPrefStr, PREF_ROUTE_OPEN, PREF_ROUTE_HOTEL } from '../../lib/prefs.js';
 import { esc } from '../../lib/dom.js';
 import { color } from '../../lib/safe.js';
 import { hoursIssueAt } from '../../lib/hours.js';
@@ -35,7 +35,9 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
       </div>
       <div id="sched-body" class="space-y-3"></div>
     </div>`);
-  const route = { open: getPref(PREF_ROUTE_OPEN), hotel: getPref(PREF_ROUTE_HOTEL), map: null, layer: null, sig: '', lib: null, destroyed: false };
+  // hotel: null 이면 그날 숙소를 정했는지에 따라 (정했으면 켬). 버튼을 누르면 이 기기에 기억
+  const hotelPref = getPrefStr(PREF_ROUTE_HOTEL);
+  const route = { open: getPref(PREF_ROUTE_OPEN), hotel: hotelPref == null ? null : hotelPref === '1', map: null, layer: null, sig: '', lib: null, destroyed: false, focus: null, plan: null };
 
   function days() {
     const fromTrip = dateRange(store.trip.start_date, store.trip.end_date);
@@ -54,13 +56,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     const guides = store.list('guides').filter((g) => g.day_date === selected);
 
     const plan = currentRoute(items);
-    setHTML($('#sched-tabs', root), html`
-        <div class="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
-          ${all.map((d, i) => html`
-            <button data-action="day" data-day="${d}" class="flex-shrink-0 text-xs px-3 py-1.5 rounded-xl font-bold ${d === selected ? 'bg-rose-500 text-white shadow-lg' : 'glass-card text-slate-400'}">
-              ${i + 1}일 (${dayLabel(d)})</button>`)}
-          ${readOnly ? '' : html`<button data-action="add-day" class="flex-shrink-0 text-xs px-2.5 py-1.5 rounded-xl glass-card text-slate-400" title="날짜 추가"><i class="fa-solid fa-plus"></i></button>`}
-        </div>`);
+    renderDayTabs(all);
     renderRoute(plan);
 
     const undo = readOnly ? null : loadUndo(store.tripId);
@@ -127,23 +123,103 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   }
 
   // ---------- 하루 동선 지도 ----------
+  // ---------- 날짜 줄 ----------
+  //  다시 그려도 옆으로 넘겨둔 위치를 지키고, 고른 날짜가 화면 밖이면 가운데쯤으로 넘겨줌
+  let lastTabsKey = '';
+  let lastCentered = null;
+  function renderDayTabs(all) {
+    const box = $('#sched-tabs', root);
+    const key = `${all.join(',')}|${readOnly}`;
+    if (key !== lastTabsKey) {
+      const prev = box.querySelector('.day-strip')?.scrollLeft || 0;
+      lastTabsKey = key;
+      setHTML(box, html`
+        <div class="day-strip flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+          ${all.map((d, i) => html`
+            <button data-action="day" data-day="${d}" class="day-chip flex-shrink-0 text-xs px-3 py-1.5 rounded-xl font-bold">${i + 1}일 · ${chipDate(d)}</button>`)}
+          ${readOnly ? '' : html`<button data-action="add-day" class="flex-shrink-0 text-xs px-2.5 py-1.5 rounded-xl glass-card text-slate-400" title="날짜 추가"><i class="fa-solid fa-plus"></i></button>`}
+        </div>`);
+      box.querySelector('.day-strip').scrollLeft = prev;
+    }
+    // 선택 표시만 바꿈 (줄을 다시 만들지 않음)
+    box.querySelectorAll('.day-chip').forEach((b) => {
+      const on = b.dataset.day === selected;
+      b.classList.toggle('bg-rose-500', on); b.classList.toggle('text-white', on); b.classList.toggle('shadow-lg', on);
+      b.classList.toggle('glass-card', !on); b.classList.toggle('text-slate-400', !on);
+    });
+    if (lastCentered !== selected) {
+      const first = lastCentered == null;
+      lastCentered = selected;
+      const strip = box.querySelector('.day-strip');
+      const chip = strip?.querySelector(`[data-day="${selected}"]`);
+      if (strip && chip) {
+        const left = chip.offsetLeft - strip.offsetLeft;
+        const visible = left >= strip.scrollLeft && left + chip.offsetWidth <= strip.scrollLeft + strip.clientWidth;
+        if (!visible || first) strip.scrollTo({ left: Math.max(0, left - (strip.clientWidth - chip.offsetWidth) / 2), behavior: first ? 'auto' : 'smooth' });
+      }
+    }
+  }
+  const chipDate = (d) => { const x = new Date(`${d}T00:00:00`); return `${x.getMonth() + 1}/${x.getDate()} ${'일월화수목금토'[x.getDay()]}`; };
+
+  // ---------- 좌우로 밀어서 날짜 넘기기 ----------
+  //  지도 · 가로로 넘기는 줄(날짜 줄 등) · 입력칸 위에서는 동작하지 않음
+  let swipe = null;
+  function goDay(step) {
+    const all = days();
+    const i = all.indexOf(selected);
+    const next = all[i + step];
+    if (!next) return;
+    selected = next;
+    route.focus = null;
+    update();
+    const body = $('#sched-body', root);
+    body.animate?.([{ opacity: 0.3, transform: `translateX(${step * 24}px)` }, { opacity: 1, transform: 'none' }], { duration: 180, easing: 'ease-out' });
+  }
+  const onTouchStart = (e) => {
+    const t = e.touches[0];
+    if (e.touches.length !== 1 || e.target.closest('.leaflet-container, .overflow-x-auto, input, textarea, select')) { swipe = null; return; }
+    swipe = { x: t.clientX, y: t.clientY, at: Date.now() };
+  };
+  const onTouchEnd = (e) => {
+    if (!swipe) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - swipe.x; const dy = t.clientY - swipe.y;
+    const fast = Date.now() - swipe.at < 700;
+    swipe = null;
+    if (fast && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.6) goDay(dx < 0 ? 1 : -1);
+  };
+  root.addEventListener('touchstart', onTouchStart, { passive: true });
+  root.addEventListener('touchend', onTouchEnd, { passive: true });
+
+  // 그날 숙소: 날짜 헤더에서 정한 숙소(출발 = 전날 밤, 도착 = 그날 밤). 지도에는 토글과 상관없이 늘 표시
+  //  [숙소 출발·복귀]: 숙소를 정한 날은 기본 켬, 정하지 않았으면 가장 가까운 기준점을 쓰고 기본 끔
   function currentRoute(items) {
     const getPlace = (id) => store.get('places', id);
     const base = buildRoute(items, getPlace);
-    if (!route.hotel || !base.stops.length) return { ...base, hotels: [] };
-    // 날짜별 숙소(일정 날짜 헤더에서 정함)가 있으면 그것, 없으면 그날 첫 장소에서 가장 가까운 기준점
     const st = dayStays(store.list('itinerary_days'), selected, livePlace);
     let startH = getPlace(st.start); let endH = getPlace(st.end);
-    if (!startH && !endH) {
+    const hasStay = !!(startH || endH);
+    const on = route.hotel ?? hasStay;
+    if (!hasStay && on && base.stops.length) {
       const anchors = store.list('places').filter((p) => p.is_anchor);
       startH = endH = nearestAnchor(anchors, base.stops[0].place);
     }
+    const hotels = [...new Set([startH, endH].filter((h) => h && h.lat != null))];
+    if (!on || !base.stops.length) return { ...base, hotels, on };
     // 숙소가 일정의 첫·마지막 장소와 같으면 그쪽 연결은 생략
     const first = base.stops[0].place.id; const last = base.stops[base.stops.length - 1].place.id;
     const plan = buildRoute(items, getPlace, { start: startH && startH.id !== first ? startH : null, end: endH && endH.id !== last ? endH : null });
-    return { ...plan, hotels: [...new Set([startH, endH].filter(Boolean))] };
+    return { ...plan, hotels, on };
   }
   const livePlace = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
+
+  // 구간 색: 장소 사이는 순서대로 색이 변함, 숙소 오가는 구간은 주황
+  const stopSegs = (plan) => plan.segments.filter((sg) => !sg.from.edge && !sg.to.edge);
+  function segColorOf(plan, sg) {
+    if (sg.from.edge || sg.to.edge) return HOTEL_COLOR;
+    const list = stopSegs(plan);
+    return segColor(list.indexOf(sg), list.length);
+  }
 
   function renderRoute(plan) {
     const box = $('#route-box', root);
@@ -157,22 +233,28 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
       <i class="fa-solid ${route.open ? 'fa-chevron-up' : 'fa-chevron-down'} ml-auto text-slate-400"></i>`);
     $('#route-panel', root).classList.toggle('hidden', !route.open);
     if (!route.open) return;
+    if (route.focus != null && !plan.segments[route.focus]) route.focus = null;
 
-    const hasAnchor = store.list('places').some((p) => p.is_anchor && p.lat != null) || store.list('itinerary_days').some((d) => d.stay_place_id);
-    const label = (pt) => (pt.edge ? html`<i class="fa-solid fa-hotel text-amber-300 text-[10px]"></i>` : html`<span class="text-rose-300 font-black">${circled(pt.no)}</span>`);
+    const hasAnchor = store.list('places').some((p) => p.is_anchor && p.lat != null) || plan.hotels.length > 0;
+    const short = (name) => (name.length > 8 ? `${name.slice(0, 8)}…` : name);
+    const label = (pt) => (pt.edge
+      ? html`<span class="text-amber-300 font-bold whitespace-nowrap"><i class="fa-solid fa-hotel text-[10px] mr-0.5"></i>${short(pt.place.name)}</span>`
+      : html`<span class="text-rose-200 font-black">${circled(pt.no)}</span>`);
     setHTML($('#route-list', root), html`
-      ${plan.segments.length ? plan.segments.map((sg) => html`
-        <div class="flex items-center gap-1.5 text-[11px] min-w-0">
+      ${plan.segments.length ? plan.segments.map((sg, i) => html`
+        <div data-action="seg" data-i="${i}" class="flex items-center gap-1.5 text-[11px] min-w-0 px-1.5 py-1 rounded-lg cursor-pointer ${route.focus === i ? 'bg-white/10' : route.focus != null ? 'opacity-50' : ''}">
+          <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${segColorOf(plan, sg)}"></span>
           <span class="flex-shrink-0 flex items-center gap-1">${label(sg.from)}<i class="fa-solid fa-arrow-right text-[8px] text-slate-500"></i>${label(sg.to)}</span>
           <span class="truncate min-w-0 ${sg.transit ? 'text-amber-200' : 'text-slate-300'}">${sg.text}</span>
           <a href="${directionsHref(sg.from.place, sg.to.place, sg.transit)}" target="_blank" rel="noopener" class="ml-auto flex-shrink-0 px-2 py-0.5 rounded-md bg-slate-800 border border-white/10 text-neon-cyan text-[10px] font-bold">
             <i class="fa-solid fa-diamond-turn-right mr-0.5"></i>길찾기</a>
         </div>`) : html`<p class="text-[11px] text-slate-400">장소가 한 곳이라 이동 구간이 없어요.</p>`}
       <div class="flex items-center justify-between gap-2 pt-1.5 mt-1 border-t border-white/5">
-        <span class="text-[9px] text-slate-500 leading-tight">직선 거리 × 1.3 으로 어림한 값이에요${plan.skipped ? ` · 위치 없는 장소 ${plan.skipped}곳 제외` : ''}</span>
-        ${hasAnchor ? html`<button data-action="route-hotel" class="flex-shrink-0 text-[10px] px-2 py-1 rounded-lg font-bold ${route.hotel ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40' : 'bg-slate-800 text-slate-400 border border-white/10'}">
-          <i class="fa-solid fa-hotel mr-0.5"></i>숙소 출발·복귀 ${route.hotel ? '켬' : '끔'}</button>` : ''}
+        <span class="text-[9px] text-slate-500 leading-tight">${plan.segments.length > 1 ? '구간을 누르면 지도에서 그 구간만 보여요 · ' : ''}직선 거리 × 1.3 어림${plan.skipped ? ` · 위치 없는 장소 ${plan.skipped}곳 제외` : ''}</span>
+        ${hasAnchor ? html`<button data-action="route-hotel" class="flex-shrink-0 text-[10px] px-2 py-1 rounded-lg font-bold ${plan.on ? 'bg-amber-500/20 text-amber-200 border border-amber-500/40' : 'bg-slate-800 text-slate-400 border border-white/10'}">
+          <i class="fa-solid fa-hotel mr-0.5"></i>숙소 출발·복귀 ${plan.on ? '켬' : '끔'}</button>` : ''}
       </div>`);
+    route.plan = plan;
     drawRouteMap(plan);
   }
 
@@ -185,38 +267,79 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
       }
       if (route.destroyed) return;
     }
-    const { L, createMap, pinIcon } = route.lib;
+    const { L, createMap, pinIcon, routePinSize, routeZoomBand, arrowIcon } = route.lib;
     if (!route.map) {
       route.map = createMap($('#route-map', root), { zoom: 14 });
       route.layer = L.layerGroup().addTo(route.map);
       $('#route-loading', root)?.remove();
+      // 확대 단계가 바뀔 때만 핀 크기를 다시 그림
+      let band = routeZoomBand(route.map.getZoom());
+      route.map.on('zoomend', () => {
+        const b = routeZoomBand(route.map.getZoom());
+        if (b !== band && route.plan) { band = b; drawRouteMap(route.plan); }
+      });
     }
     setTimeout(() => route.map?.invalidateSize(), 50);
     route.layer.clearLayers();
-    const latlngs = plan.points.map((pt) => [pt.place.lat, pt.place.lng]);
-    // 구간 선: 걷는 구간은 실선, 전철 권장 구간은 점선
-    plan.segments.forEach((sg) => {
-      L.polyline([[sg.from.place.lat, sg.from.place.lng], [sg.to.place.lat, sg.to.place.lng]], {
-        color: sg.transit ? '#fbbf24' : '#f43f5e', weight: 3, opacity: 0.85, dashArray: sg.transit ? '6 6' : null, interactive: false,
+    const zoom = route.map.getZoom();
+    const ll = (p) => [p.lat, p.lng];
+    const focus = route.focus;
+    const dim = (i) => focus != null && focus !== i;
+
+    // 선: 장소 사이는 순서 색 실선(전철 권장은 점선), 숙소 구간은 주황 점선. 가운데 방향 화살표
+    plan.segments.forEach((sg, i) => {
+      const c = segColorOf(plan, sg);
+      const hotelSeg = sg.from.edge || sg.to.edge;
+      const a = ll(sg.from.place); const b = ll(sg.to.place);
+      L.polyline([a, b], {
+        color: c, weight: focus === i ? 6 : 4, opacity: dim(i) ? 0.2 : 0.9,
+        dashArray: hotelSeg || sg.transit ? '7 7' : null, interactive: false,
       }).addTo(route.layer);
+      if (!dim(i)) {
+        L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], { icon: arrowIcon(route.map, a, b, c), interactive: false, keyboard: false }).addTo(route.layer);
+      }
     });
-    plan.hotels.filter((h) => h.lat != null && plan.points.some((pt) => pt.edge && pt.place.id === h.id)).forEach((h) => {
-      L.marker([h.lat, h.lng], { icon: pinIcon({ color: '#f59e0b', icon: 'fa-hotel', size: 24 }), zIndexOffset: -100 })
-        .bindTooltip(esc(h.name), { direction: 'top', offset: [0, -12] }).addTo(route.layer);
-    });
+    // 번호 핀: 순서 색. 숙소와 같은 장소면 주황 테두리
+    const hotelIds = new Set(plan.hotels.map((h) => h.id));
     plan.stops.forEach((st) => {
-      L.marker([st.place.lat, st.place.lng], { icon: pinIcon({ color: '#f43f5e', size: 26, label: st.no }), zIndexOffset: 100 + st.no })
-        .bindTooltip(esc(st.place.name), { direction: 'top', offset: [0, -14] })
+      const ring = hotelIds.has(st.place.id) ? HOTEL_COLOR : null;
+      const fill = segColor(st.no - 1, plan.stops.length);   // 선과 같은 순서 색
+      const size = routePinSize(zoom);
+      L.marker(ll(st.place), {
+        icon: pinIcon({ color: fill, size, label: st.no, ring }),
+        zIndexOffset: 100 + st.no,
+      })
+        .bindTooltip(esc(st.place.name), { direction: 'top', offset: [0, -size / 2] })
         .on('click', () => (onPlace ? onPlace(st.place.id) : openPlaceDetail(store, st.place.id, null)))
         .addTo(route.layer);
     });
+    // 숙소: 주황 사각형 · 번호 핀보다 크게(겹쳐도 테두리가 보임) · 토글이 꺼져 있어도 표시. 누르면 이름
+    plan.hotels.forEach((h) => {
+      const size = routePinSize(zoom, { hotel: true });
+      L.marker(ll(h), { icon: pinIcon({ color: HOTEL_COLOR, icon: 'fa-hotel', size, shape: 'square' }), zIndexOffset: 50 })
+        .bindTooltip(esc(`🏨 ${h.name}`), { direction: 'top', offset: [0, -size / 2] })
+        .addTo(route.layer);
+    });
+
     // 날짜나 장소가 바뀐 때만 화면 맞춤 (같은 날 다시 그릴 때는 보던 위치 유지)
+    const latlngs = [...plan.points.map((pt) => ll(pt.place)), ...plan.hotels.map(ll)];
     const sig = `${selected}|${latlngs.map((x) => x.join(',')).join(';')}`;
     if (sig !== route.sig) {
       route.sig = sig;
-      if (latlngs.length > 1) route.map.fitBounds(L.latLngBounds(latlngs), { padding: [28, 28], maxZoom: 16 });
+      if (latlngs.length > 1) route.map.fitBounds(L.latLngBounds(latlngs), { padding: [32, 32], maxZoom: 16 });
       else route.map.setView(latlngs[0], 16);
     }
+  }
+
+  // 구간 하나 강조: 그 구간으로 지도 이동, 다시 누르면 전체
+  function focusSegment(i) {
+    const plan = route.plan;
+    if (!plan) return;
+    route.focus = route.focus === i ? null : i;
+    renderRoute(plan);
+    const sg = plan.segments[route.focus];
+    if (sg && route.map) route.map.fitBounds(route.lib.L.latLngBounds([[sg.from.place.lat, sg.from.place.lng], [sg.to.place.lat, sg.to.place.lng]]), { padding: [40, 40], maxZoom: 17 });
+    else if (route.map) { route.sig = ''; drawRouteMap(plan); }
   }
 
   const off = delegate(root, {
@@ -235,8 +358,9 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     },
     'ai-undo-close': () => { clearUndo(store.tripId); update(); },
     'route-toggle': () => { route.open = !route.open; setPref(PREF_ROUTE_OPEN, route.open); update(); },
-    'route-hotel': () => { route.hotel = !route.hotel; setPref(PREF_ROUTE_HOTEL, route.hotel); update(); },
-    day: (el) => { selected = el.dataset.day; update(); },
+    'route-hotel': () => { route.hotel = !(route.plan?.on); setPref(PREF_ROUTE_HOTEL, route.hotel); route.focus = null; update(); },
+    seg: (el, e) => { if (e?.target?.closest('a')) return; focusSegment(Number(el.dataset.i)); },
+    day: (el) => { selected = el.dataset.day; route.focus = null; update(); },
     place: (el) => (onPlace ? onPlace(el.dataset.id) : openPlaceDetail(store, el.dataset.id, null)),
     add: () => openItemEditor(store, null, selected),
     edit: (el) => openItemEditor(store, el.dataset.id, selected),
@@ -252,7 +376,10 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   update();
   return {
     update,
-    destroy: () => { off(); route.destroyed = true; route.map?.remove(); route.map = null; },
+    destroy: () => {
+      off(); route.destroyed = true; route.map?.remove(); route.map = null;
+      root.removeEventListener('touchstart', onTouchStart); root.removeEventListener('touchend', onTouchEnd);
+    },
   };
 }
 

@@ -63,3 +63,12 @@ test('날짜별 숙소: 비워둔 날은 이어짐, 옮기는 날은 출발·도
   // 지운 장소는 건너뜀 → 교토가 이어짐
   assert.equal(dayStays(rows, '2026-11-14', (id) => id !== 'gone').end, 'kyoto');
 });
+
+test('구간 색: 처음 하늘색 → 가운데 보라 → 끝 빨강', async () => {
+  const { segColor } = await import('../src/lib/route-plan.js');
+  assert.equal(segColor(0, 5), '#22d3ee');
+  assert.equal(segColor(2, 5), '#a78bfa');
+  assert.equal(segColor(4, 5), '#f43f5e');
+  assert.equal(segColor(0, 1), '#22d3ee');
+  assert.match(segColor(1, 5), /^#[0-9a-f]{6}$/);
+});

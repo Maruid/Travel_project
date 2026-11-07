@@ -43,14 +43,17 @@ export function pinSize(zoom, { selected = false, anchor = false, visited = fals
 
 const HIT = 32; // 손가락으로 누르기 쉬운 최소 터치 영역
 
-export function pinIcon({ color = '#38bdf8', icon = 'fa-location-dot', size = 28, pulse = false, faded = false, dot = false, label = '' } = {}) {
+// shape: 'round' | 'square'(숙소), ring: 테두리 색 (번호 핀이 숙소와 같은 장소일 때 등)
+export function pinIcon({ color = '#38bdf8', icon = 'fa-location-dot', size = 28, pulse = false, faded = false, dot = false, label = '', shape = 'round', ring = null } = {}) {
   const safeColor = /^#[0-9a-f]{3,8}$/i.test(color) ? color : '#38bdf8';
   const safeIcon = /^fa-[a-z0-9-]+$/.test(icon) ? icon : 'fa-location-dot';
   const box = Math.max(size, HIT);
   const iconPx = size >= 30 ? 12 : size >= 24 ? 11 : 9;
   const glow = faded || dot ? 'none' : `0 0 6px ${safeColor}66`;
+  const radius = shape === 'square' ? '28%' : '9999px';
+  const border = ring && /^#[0-9a-f]{3,8}$/i.test(ring) ? `2.5px solid ${ring}` : `${dot && size < 12 ? 1 : 1.5}px solid rgba(255,255,255,.75)`;
   const inner = label
-    ? `<span style="font:800 ${size >= 24 ? 12 : 10}px/1 Outfit,sans-serif">${esc(String(label))}</span>`
+    ? `<span style="font:800 ${size >= 26 ? 13 : size >= 22 ? 12 : 10}px/1 Outfit,sans-serif">${esc(String(label))}</span>`
     : dot ? '' : `<i class="fa-solid ${safeIcon}" style="font-size:${iconPx}px"></i>`;
   return L.divIcon({
     className: '',
@@ -60,12 +63,32 @@ export function pinIcon({ color = '#38bdf8', icon = 'fa-location-dot', size = 28
       <div class="flex items-center justify-center" style="width:${box}px;height:${box}px">
         <div class="relative flex items-center justify-center" style="width:${size}px;height:${size}px;${faded ? 'opacity:.35;filter:grayscale(1)' : ''}">
           ${pulse ? `<div class="absolute inset-0 rounded-full pulse-marker" style="background:${safeColor}"></div>` : ''}
-          <div class="relative w-full h-full rounded-full flex items-center justify-center text-white"
-               style="background:${safeColor};border:${dot && size < 12 ? 1 : 1.5}px solid rgba(255,255,255,.75);box-shadow:0 1px 3px rgba(0,0,0,.45)${glow === 'none' ? '' : ',' + glow}">
+          <div class="relative w-full h-full flex items-center justify-center text-white"
+               style="border-radius:${radius};background:${safeColor};border:${border};box-shadow:0 1px 3px rgba(0,0,0,.45)${glow === 'none' ? '' : ',' + glow}">
             ${inner}
           </div>
         </div>
       </div>`,
+  });
+}
+
+// 동선 지도(일정 탭 · AI 미리보기) 핀 크기: 번호가 늘 읽히도록 점으로 줄이지 않음
+//  숙소는 번호 핀보다 10px 큰 사각형 → 번호 핀이 위에 겹쳐도 주황 테두리가 둘러 보임
+export function routePinSize(zoom, { hotel = false } = {}) {
+  const base = zoom <= 13 ? 20 : zoom <= 15 ? 24 : 28;
+  return hotel ? base + 10 : base;
+}
+export const routeZoomBand = (z) => (z <= 13 ? 0 : z <= 15 ? 1 : 2);
+
+// 선 가운데 진행 방향 화살표 (화면 좌표 기준 각도 → 확대해도 같음)
+export function arrowIcon(map, from, to, color) {
+  const a = map.project(from, 10); const b = map.project(to, 10);
+  const deg = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+  const safe = /^#[0-9a-f]{3,8}$/i.test(color) ? color : '#f43f5e';
+  return L.divIcon({
+    className: '', iconSize: [14, 14], iconAnchor: [7, 7],
+    html: `<div style="width:14px;height:14px;transform:rotate(${deg}deg);display:flex;align-items:center;justify-content:center">
+      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 1.5 L10.5 6 L2 10.5 Z" fill="${safe}" stroke="rgba(0,0,0,.5)" stroke-width="1"/></svg></div>`,
   });
 }
 

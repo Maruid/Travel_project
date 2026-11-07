@@ -99,3 +99,15 @@ export function dayStays(dayRows, date, validId) {
     moved: !!(lastNight && tonight && lastNight.placeId !== tonight.placeId),
   };
 }
+
+// ---------- 동선 색 ----------
+// 구간 순서대로 하늘색 → 보라 → 빨강으로 바뀌는 색 (어디서 시작해 어디서 끝나는지 보이게)
+const STOPS = [[34, 211, 238], [167, 139, 250], [244, 63, 94]];
+export function segColor(i, n) {
+  const t = n <= 1 ? 0 : i / (n - 1);
+  const seg = t <= 0.5 ? 0 : 1;
+  const k = seg === 0 ? t / 0.5 : (t - 0.5) / 0.5;
+  const [a, b] = [STOPS[seg], STOPS[seg + 1]];
+  return '#' + a.map((v, j) => Math.round(v + (b[j] - v) * k).toString(16).padStart(2, '0')).join('');
+}
+export const HOTEL_COLOR = '#f59e0b';
