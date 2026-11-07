@@ -37,6 +37,21 @@ export function sheetClosedByApp() {
 export function sheetClosedByRoute() { sheetOpen = false; }
 export const sheetIsOpen = () => sheetOpen;
 
+// ---------- 시트 위에 한 겹 더 (장소 고르기 창 등) ----------
+let pickerOpen = false;
+let closePickerQuietly = null;
+export function pickerOpened(quietClose) {
+  closePickerQuietly = quietClose;
+  if (pickerOpen) return;
+  pickerOpen = true;
+  history.pushState({ ...state(), picker: true }, '');
+}
+export function pickerClosedByApp() {
+  if (!pickerOpen) return;
+  pickerOpen = false;
+  if (state().picker) { ignorePops++; history.back(); }
+}
+
 // ---------- 홈: 한 번 더 누르면 종료 ----------
 function armGuard() {
   if (isHome() && !state().guard && !state().sheet) history.pushState({ guard: true }, '');
@@ -45,6 +60,11 @@ function armGuard() {
 export function installBackNav({ onExitHint }) {
   hint = onExitHint || hint;
   window.addEventListener('popstate', () => {
+    if (pickerOpen && !state().picker) {   // 맨 위 창부터 닫음
+      pickerOpen = false;
+      closePickerQuietly?.();
+      return;
+    }
     if (ignorePops > 0) {
       ignorePops--;
       // 닫자마자 새 시트를 연 경우: 그 시트용 기록을 다시 올림

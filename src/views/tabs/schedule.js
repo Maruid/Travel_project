@@ -1,6 +1,7 @@
 import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { dateRange, dayLabel, shortTime, todayIn } from '../../lib/format.js';
+import { dateRange, dayLabel, shortTime, todayIn, distanceKm } from '../../lib/format.js';
+import { openPicker, placeItem } from '../../components/picker.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail, loadMapLib } from './places.js';
 import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays, segColor, HOTEL_COLOR } from '../../lib/route-plan.js';
@@ -423,6 +424,8 @@ function openDayEditor(store, day) {
   const inherited = prev?.stay_place_id && !prev.stay_none ? store.get('places', prev.stay_place_id) : null;
   const curVal = cur?.stay_none ? '__none' : cur?.stay_place_id || '';
   const blankText = isLast ? '자동 (마지막 날 · 숙소로 돌아오지 않음)' : inherited ? `앞 날과 같음 (${inherited.name})` : prev?.stay_none ? '앞 날과 같음 (숙소 없음)' : '정하지 않음';
+  const NONE_TEXT = '이 날 밤 숙소 없음 (귀국 · 야간 이동)';
+  const stayText = (v) => (v === '__none' ? NONE_TEXT : v ? store.get('places', v)?.name || blankText : blankText);
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${dayLabel(day)} 정보</h3>
     <form id="day-form" class="space-y-2.5">
@@ -431,16 +434,38 @@ function openDayEditor(store, day) {
       <div><label class="label">요약</label><input name="summary" class="input" maxlength="300" value="${cur?.summary || ''}"></div>
       <div>
         <label class="label"><i class="fa-solid fa-hotel text-amber-300 mr-1"></i>오늘 묵는 숙소</label>
-        <select name="stay_place_id" class="input">
-          <option value="">${blankText}</option>
-          ${stays.map((p) => html`<option value="${p.id}" ${curVal === p.id ? 'selected' : ''}>${p.name}${p.is_anchor ? '' : ' (기준점 아님)'}</option>`)}
-          <option value="__none" ${curVal === '__none' ? 'selected' : ''}>이 날 밤 숙소 없음 (귀국 · 야간 이동)</option>
-        </select>
+        <input type="hidden" name="stay_place_id" value="${curVal}">
+        <button type="button" data-action="pick-stay" id="stay-pick-btn" class="input text-left flex items-center gap-2">
+          <i class="fa-solid ${curVal === '__none' ? 'fa-moon' : 'fa-hotel'} text-amber-300 text-[11px]"></i>
+          <span class="flex-1 truncate">${stayText(curVal)}</span>
+          <i class="fa-solid fa-chevron-down text-[10px] text-slate-500"></i>
+        </button>
         <p class="text-[10px] text-slate-500 mt-1">다음 날들도 바꿀 때까지 이어져요. 마지막 날은 비워두면 숙소로 돌아오지 않고, 숙소를 직접 고르면 돌아와요(레이트 체크아웃 등). 동선 지도와 AI 일정 짜기가 이 값을 써요.</p>
       </div>
       <button class="btn-primary">저장</button>
     </form>`, (el) => {
-    $('#day-form', el).addEventListener('submit', (e) => {
+    const form = $('#day-form', el);
+    // 숙소 고르기: 맨 위 "앞 날과 같음(또는 마지막 날 자동)" · "숙소 없음", 아래 숙소 목록
+    const offPick = delegate(el, {
+      'pick-stay': () => openPicker({
+        title: '오늘 묵는 숙소',
+        selected: form.elements.stay_place_id.value || '__inherit',
+        top: [
+          { id: '__inherit', title: blankText, icon: isLast ? 'fa-plane-departure' : 'fa-arrow-turn-down', color: '#94a3b8' },
+          { id: '__none', title: NONE_TEXT, icon: 'fa-moon', color: '#94a3b8' },
+        ],
+        sections: [{ label: '숙소', items: stays.map((p) => placeItem(store, p, { badges: p.is_anchor ? [] : [{ text: '기준점 아님' }] })) }],
+        categories: store.categories(),
+        emptyText: '숙소로 쓸 장소가 없어요. 장소에서 숙소 카테고리로 추가하거나 기준점으로 지정하세요.',
+        onPick: (v) => {
+          const val = v === '__inherit' ? '' : v;
+          form.elements.stay_place_id.value = val;
+          $('#stay-pick-btn span', el).textContent = stayText(val);
+          $('#stay-pick-btn i', el).className = `fa-solid ${val === '__none' ? 'fa-moon' : 'fa-hotel'} text-amber-300 text-[11px]`;
+        },
+      }),
+    });
+    form.addEventListener('submit', (e) => {
       e.preventDefault();
       const v = formValues(e.target);
       v.stay_none = v.stay_place_id === '__none';
@@ -449,6 +474,48 @@ function openDayEditor(store, day) {
       else store.insert('itinerary_days', { day_date: day, ...v });
       closeSheet();
     });
+    return offPick;
+  });
+}
+
+// 일정의 "연결할 장소" 고르기: 그날 다른 일정 장소에서 가까운 순 → 나머지는 이름순
+//  표시: 다른 날 일정에 있음 · 다녀옴 · 찜 수
+const NEAR_KM = 1.5;
+function pickPlaceForItem(store, { day, itemId, selected, onPick }) {
+  const places = store.list('places');
+  const items = store.list('itinerary_items');
+  const dayItems = items.filter((x) => x.day_date === day && x.id !== itemId && x.place_id);
+  const refs = dayItems.map((x) => store.get('places', x.place_id)).filter((p) => p?.lat != null);
+  const allDays = [...new Set([...dateRange(store.trip.start_date, store.trip.end_date), ...items.map((x) => x.day_date)])].sort();
+  const dayNo = (d) => allDays.indexOf(d) + 1;
+  const likes = store.likeMap ? store.likeMap() : new Map();
+  const near = (p) => (p.lat == null || !refs.length ? Infinity : Math.min(...refs.map((r) => distanceKm(r, p))));
+  const badgesOf = (p) => {
+    const b = [];
+    const other = [...new Set(items.filter((x) => x.place_id === p.id && x.id !== itemId).map((x) => x.day_date))];
+    if (other.length) b.push({ text: other.map((d) => (d === day ? '이 날' : `${dayNo(d)}일차`)).join('·') + '에 있음', cls: 'bg-amber-500/15 text-amber-200' });
+    if (p.visited_at) b.push({ text: '✓ 다녀옴', cls: 'bg-emerald-500/15 text-emerald-300' });
+    const n = likes.get(p.id)?.length;
+    if (n) b.push({ text: `❤️ ${n}`, cls: 'bg-rose-500/15 text-rose-200' });
+    return b;
+  };
+  const withDist = places.map((p) => ({ p, d: near(p) }));
+  const nearList = withDist.filter((x) => x.d <= NEAR_KM).sort((a, b) => a.d - b.d);
+  const nearIds = new Set(nearList.map((x) => x.p.id));
+  const rest = places.filter((p) => !nearIds.has(p.id)).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  const walk = (km) => `도보 ${Math.max(1, Math.round(km * 1000 * 1.3 / 75))}분`;
+  const sub = (p, km) => [store.category(p.category_id)?.name, p.zone, km != null ? walk(km) : null].filter(Boolean).join(' · ');
+  openPicker({
+    title: '연결할 장소',
+    selected: selected || '__none',
+    top: [{ id: '__none', title: '연결 안 함', icon: 'fa-xmark', color: '#64748b' }],
+    sections: [
+      ...(nearList.length ? [{ label: '이 날 동선 근처', items: nearList.map(({ p, d }) => placeItem(store, p, { sub: sub(p, d), badges: badgesOf(p) })) }] : []),
+      { label: nearList.length ? '나머지 (이름순)' : refs.length ? '전체 (이름순)' : '전체 (이름순) · 이 날 다른 일정에 장소를 연결하면 가까운 순으로 보여요', items: rest.map((p) => placeItem(store, p, { sub: sub(p, null), badges: badgesOf(p) })) },
+    ],
+    categories: store.categories(),
+    emptyText: '맞는 장소가 없어요.',
+    onPick,
   });
 }
 
@@ -457,7 +524,7 @@ const KIND_ICON = { food: 'fa-utensils', cafe: 'fa-mug-saucer', bar: 'fa-beer-mu
 export function openItemEditor(store, id, day, { place = null } = {}) {
   const it = id ? store.get('itinerary_items', id)
     : { day_date: day, icon: KIND_ICON[store.category(place?.category_id)?.kind] || 'fa-location-dot', title: place?.name || '', place_id: place?.id || null };
-  const places = store.list('places').sort((a, b) => a.name.localeCompare(b.name));
+  const placeName = (pid) => store.get('places', pid)?.name || '';
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${id ? '일정 수정' : '일정 추가'}</h3>
     <form id="item-form" class="space-y-2.5">
@@ -469,8 +536,12 @@ export function openItemEditor(store, id, day, { place = null } = {}) {
       <div><label class="label">설명</label><textarea name="description" class="input" rows="2" maxlength="1000">${it.description || ''}</textarea></div>
       <div><label class="label">주의 문구</label><input name="alert" class="input" maxlength="300" value="${it.alert || ''}"></div>
       <div><label class="label">연결할 장소</label>
-        <select name="place_id" class="input"><option value="">없음</option>
-          ${places.map((p) => html`<option value="${p.id}" ${p.id === it.place_id ? 'selected' : ''}>${p.name}</option>`)}</select></div>
+        <input type="hidden" name="place_id" value="${it.place_id || ''}">
+        <button type="button" data-action="pick-place" id="place-pick-btn" class="input text-left flex items-center gap-2">
+          <i class="fa-solid fa-location-dot text-neon-cyan text-[11px]"></i>
+          <span class="flex-1 truncate ${it.place_id ? 'text-white' : 'text-slate-500'}">${placeName(it.place_id) || '없음 · 눌러서 고르기'}</span>
+          <i class="fa-solid fa-chevron-down text-[10px] text-slate-500"></i>
+        </button></div>
       <div><label class="label">아이콘</label>
         <div class="flex flex-wrap gap-1.5" id="icon-pick">
           ${ICONS.map((ic) => html`<button type="button" data-action="icon" data-icon="${ic}" class="w-8 h-8 rounded-lg ${ic === it.icon ? 'bg-neon-cyan text-night-950' : 'bg-slate-800 text-slate-300'}"><i class="fa-solid ${ic} text-xs"></i></button>`)}
@@ -480,6 +551,17 @@ export function openItemEditor(store, id, day, { place = null } = {}) {
     </form>`, (el) => {
     const form = $('#item-form', el);
     const off = delegate(el, {
+      'pick-place': () => pickPlaceForItem(store, {
+        day: form.elements.day_date.value || it.day_date, itemId: id, selected: form.elements.place_id.value || null,
+        onPick: (pid) => {
+          form.elements.place_id.value = pid === '__none' ? '' : pid;
+          const btn = $('#place-pick-btn span', el);
+          btn.textContent = pid === '__none' ? '없음 · 눌러서 고르기' : placeName(pid);
+          btn.className = `flex-1 truncate ${pid === '__none' ? 'text-slate-500' : 'text-white'}`;
+          // 제목이 비어 있으면 장소 이름으로
+          if (pid !== '__none' && !form.elements.title.value.trim()) form.elements.title.value = placeName(pid);
+        },
+      }),
       icon: (b) => {
         form.elements.icon.value = b.dataset.icon;
         el.querySelectorAll('[data-action="icon"]').forEach((x) => {

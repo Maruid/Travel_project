@@ -23,6 +23,7 @@ import {
   geoReviewOf, geoReviewList, distanceText,
 } from '../../lib/google-place.js';
 import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCHOR_NEAR_SORT, PREF_PLACE_SORT, PREF_MAP_SIZE, PREF_HIDE_VISITED, PREF_PLACE_FILTER } from '../../lib/prefs.js';
+import { openPicker, placeItem } from '../../components/picker.js';
 import { parseFilter, filterToString, activeCount, pruneFilter, passesFilter, searchPlaces, groupCategories, EMPTY_FILTER } from '../../lib/place-filter.js';
 import { hoursStatus } from '../../lib/hours.js';
 import { todayIn, dateRange } from '../../lib/format.js';
@@ -108,13 +109,12 @@ export function mount(root, store) {
       <div id="map-loading" class="absolute inset-0 flex items-center justify-center text-[11px] text-slate-500">
         <i class="fa-solid fa-map mr-1.5"></i>지도 불러오는 중...</div>
       <div id="map" class="w-full h-full z-10"></div>
-      <!-- 기준점: 작은 버튼 하나 (투명한 select 를 위에 겹쳐 누르면 목록이 열림) -->
-      <label class="absolute top-2 left-2 z-20 max-w-[60%] h-8 pl-2.5 pr-2 rounded-full glass-card bg-night-950/85 border border-white/20 flex items-center gap-1 text-[11px] text-slate-100 font-bold">
+      <!-- 기준점: 작은 버튼 하나 → 고르기 창 -->
+      <button data-action="anchor-pick" class="absolute top-2 left-2 z-20 max-w-[60%] h-8 pl-2.5 pr-2 rounded-full glass-card bg-night-950/85 border border-white/20 flex items-center gap-1 text-[11px] text-slate-100 font-bold" aria-label="거리 기준점">
         <i class="fa-solid fa-location-dot text-neon-cyan text-[10px]"></i>
         <span id="anchor-label" class="truncate">기준점</span>
         <i class="fa-solid fa-caret-down text-slate-400 text-[10px]"></i>
-        <select id="anchor-select" class="absolute inset-0 opacity-0 w-full cursor-pointer" aria-label="거리 기준점"></select>
-      </label>
+      </button>
       <!-- 내 위치 · 초기화: 오른쪽 아래 세로로 -->
       <div class="absolute bottom-2 right-2 z-20 flex flex-col gap-1.5">
         <button data-action="gps" class="w-9 h-9 rounded-full glass-card bg-night-950/85 flex items-center justify-center text-neon-cyan border border-neon-cyan/40" title="내 위치">
@@ -185,7 +185,7 @@ export function mount(root, store) {
     map.on('click', () => { if (state.selectedId) select(null); });
     // 지도를 움직인 뒤 기준점 목록 순서 갱신 (목록을 열어둔 중에는 건드리지 않음)
     map.on('moveend', () => {
-      if (getPref(PREF_ANCHOR_NEAR_SORT) && document.activeElement !== $('#anchor-select', root)) renderAnchorSelect();
+      if (getPref(PREF_ANCHOR_NEAR_SORT)) renderAnchorSelect();
     });
     // 확대 단계가 바뀔 때만 핀 크기를 다시 그림 (점 ↔ 아이콘 핀)
     let lastZoomBand = zoomBand(map.getZoom());
@@ -224,21 +224,46 @@ export function mount(root, store) {
   }
 
   // 기준점 목록: 설정에서 켜면 "지금 지도 중심에서 가까운 순" (여러 도시를 도는 여행용)
-  function renderAnchorSelect() {
+  function anchorList() {
     let anchors = store.list('places').filter((p) => p.is_anchor && p.lat != null);
-    if (state.anchorId == null && anchors[0]) state.anchorId = anchors[0].id;
     if (map && getPref(PREF_ANCHOR_NEAR_SORT) && anchors.length > 1) {
       const c = map.getCenter();
       const center = { lat: c.lat, lng: c.lng };
       anchors = anchors.map((a) => ({ a, d: walkInfo(center, a).meters })).sort((x, y) => x.d - y.d).map((x) => x.a);
     }
-    const sel = $('#anchor-select', root);
-    setHTML(sel, html`
-      ${anchors.length ? '' : html`<option value="">기준점 없음</option>`}
-      ${anchors.map((a) => html`<option value="${a.id}" ${a.id === state.anchorId ? 'selected' : ''}>기준: ${a.name}</option>`)}
-      <option value="gps" ${state.anchorId === 'gps' ? 'selected' : ''}>기준: 내 GPS</option>`);
+    return anchors;
+  }
+  function renderAnchorSelect() {
+    const anchors = anchorList();
+    if (state.anchorId == null && anchors[0]) state.anchorId = anchors[0].id;
     const cur = state.anchorId === 'gps' ? '내 위치' : anchors.find((a) => a.id === state.anchorId)?.name;
     $('#anchor-label', root).textContent = cur || '기준점 없음';
+  }
+  function chooseAnchor(v) {
+    if (v === 'gps') { locate(); return; }
+    state.anchorId = v || null;
+    const a = anchorPoint();
+    if (a && !state.collapsed) map?.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
+    state.resetNext = 'all';
+    renderResetButton();
+    update();
+  }
+  function openAnchorPicker() {
+    const anchors = anchorList();
+    const c = map?.getCenter();
+    const near = map && getPref(PREF_ANCHOR_NEAR_SORT) && anchors.length > 1;
+    openPicker({
+      title: '거리 기준점',
+      selected: state.anchorId,
+      top: [{ id: 'gps', title: '내 위치 (GPS)', sub: '지금 있는 곳에서 거리 계산', icon: 'fa-location-crosshairs', color: '#22d3ee' }],
+      sections: [{
+        label: near ? '기준점 · 지금 지도 중심에서 가까운 순' : '기준점',
+        items: anchors.map((a) => placeItem(store, a, c ? { sub: [store.category(a.category_id)?.name, `지도 중심에서 ${walkInfo({ lat: c.lat, lng: c.lng }, a).text || ''}`].filter(Boolean).join(' · ') } : {})),
+      }],
+      categories: store.categories(),
+      emptyText: '기준점이 없어요. 장소 상세에서 [거리 계산 기준점으로 지정]을 누르세요.',
+      onPick: chooseAnchor,
+    });
   }
 
   // 한 명이라도 찜한 장소 id
@@ -590,15 +615,6 @@ export function mount(root, store) {
   }
 
   // ---------- 이벤트 ----------
-  $('#anchor-select', root).addEventListener('change', (e) => {
-    if (e.target.value === 'gps') { locate(); return; }
-    state.anchorId = e.target.value || null;
-    const a = anchorPoint();
-    if (a && !state.collapsed) map?.flyTo([a.lat, a.lng], ZOOM_ANCHOR, { duration: 0.6 });
-    state.resetNext = 'all';
-    renderResetButton();
-    update();
-  });
 
   async function locate() {
     try {
@@ -620,6 +636,7 @@ export function mount(root, store) {
     'reset-view': resetView,
     'toggle-map': () => setCollapsed(!state.collapsed),
     filter: openFilterSheet,
+    'anchor-pick': openAnchorPicker,
     'filter-off': (el) => {
       const f = state.filter;
       if (el.dataset.cat) setFilter({ ...f, cats: f.cats.filter((x) => x !== el.dataset.cat) });

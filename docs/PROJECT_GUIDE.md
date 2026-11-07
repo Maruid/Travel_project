@@ -61,7 +61,9 @@ src/
   styles.css               Tailwind v4 @theme(색: night-950/900, neon-cyan …) + @utility(glass-card, btn-*, input …)
   components/
     ui.js                  openSheet/closeSheet(바텀시트), toast, copyText, confirmAction, emptyCard, spinner
-    map.js                 createMap, pinIcon(점·흐림·번호), pinSize(줌 단계), draggablePin, L (MapLibre 포함 → 무거움)
+    map.js                 createMap, pinIcon(점·흐림·번호·사각형), pinSize · routePinSize(줌 단계), arrowIcon, draggablePin, L (MapLibre 포함 → 무거움)
+    picker.js              공용 고르기 창(시트 위 한 겹): 검색 + 카테고리 칩, 뒤로가기는 이 창만 닫음
+    fx-calc.js             환율 계산기 (앱 안 키패드)
     account.js             계정 칩/메뉴, Google 로그인, 기기 코드 발급·입력
   lib/
     dom.js                 html`` 자동 escape, raw, esc, setHTML, delegate(data-action), formValues, $
@@ -494,6 +496,15 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **마지막 날 자동**(`dayStays` lastDate = 여행 종료일과 일정 날짜 중 가장 늦은 날): 그날 정한 값이 없으면 숙소로 돌아오지 않음. 헤더 "🏨 도미인 체크아웃 · 마지막 날이라 돌아오지 않아요". 마지막 날에 숙소를 직접 고르면 돌아옴(레이트 체크아웃 · 데이유즈).
 - 숙소 오가는 주황 점선은 조금 가늘고 연하게(장소 사이 선이 먼저 보이게).
 - AI 일정: 돌아오지 않는 날은 "N번에서 출발(체크아웃), 숙소로 돌아오지 않음"으로 전달. 미리보기 지도도 숙소는 번호 없이.
+
+### 7-7-11. 공용 고르기 창 (2026-11-08)
+
+- `components/picker.js` `openPicker({ title, top, sections, categories, selected, onPick })`: 바텀시트 위에 한 겹 더 뜨는 창(z 70). 항목이 8개를 넘으면 검색칸(이름 · 현지 이름 · 동네 · 대표 메뉴, 0.15초)과 카테고리 칩. `top`은 검색과 상관없이 맨 위(연결 안 함 · 내 위치 등). 열릴 때 키보드는 띄우지 않음.
+- 뒤로가기: `back-nav.js` `pickerOpened/pickerClosedByApp` — 맨 위 창부터 닫음. 아래 시트에 쓰던 내용은 그대로.
+- **일정 → 연결할 장소**: 기본 선택 상자 대신 버튼 → 고르기 창. "이 날 동선 근처"(그날 다른 일정 장소에서 1.5km 안, 가까운 순, 도보 n분) → "나머지(이름순)". 표시: n일차에 있음 · ✓ 다녀옴 · ❤️ n. 제목이 비어 있으면 장소 이름을 채움.
+- **장소 탭 기준점 버튼**: 투명 선택 상자 대신 고르기 창. 맨 위 "내 위치 (GPS)", 기준점마다 지도 중심에서의 거리.
+- **날짜 정보 → 오늘 묵는 숙소**: 고르기 창. 맨 위 "앞 날과 같음(마지막 날은 자동)" · "이 날 밤 숙소 없음", 아래 숙소 목록.
+- PC 크롬에서 기본 선택 상자 목록이 흰 바탕 + 흰 글씨로 보이던 문제: 투명 선택 상자에 배경색이 없어서. `:root { color-scheme: dark }` + option 배경색으로 전체 방지.
 
 ### 7-8. 설정 탭 (more.js) 구성
 

@@ -130,3 +130,7 @@
 
 /* 화면보다 넓은 내용이 있어도 페이지 전체가 옆으로 밀리거나 확대되지 않게 (안쪽 가로 스크롤은 그대로 동작) */
 html, body { overflow-x: clip; }
+
+/* PC 크롬은 기본 선택 상자의 펼침 목록 · 날짜 선택 · 스크롤바를 이 값으로 그림 → 흰 바탕에 흰 글씨 방지 */
+:root { color-scheme: dark; }
+select option { background-color: #1e293b; color: #f1f5f9; }
