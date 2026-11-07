@@ -3,6 +3,7 @@
 //  - 남길 일정(고정)은 F번호로 보여주고, AI 는 그 사이에 새 일정을 끼워 넣은 "하루 순서"를 돌려줌
 //  - 결과는 앱이 다시 검증: 없는 번호·중복·고정 빠짐·영업시간 문제
 import { hoursIssueAt } from './hours.js';
+import { dayStays } from './route-plan.js';
 
 export const DENSITY = {
   easy: { label: '여유', min: 3, max: 4 },
@@ -54,12 +55,16 @@ export function hoursBrief(oh, weekdays) {
  * @returns { body(서버로 보낼 것), ctx(검증용) }
  */
 export function buildPlanRequest({ trip, places, items, dayHeaders = [], categoryOf, dates, mode = 'keep', keepIds = new Set(), density = 'normal', likeMode = 'prefer', likes = new Map(), text = '', start = '09:00', end = '21:00', skipVisited = false, cats = null }) {
+  // 날짜별 숙소 (itinerary_days.stay_place_id, 비워둔 날은 앞 날이 이어짐)
+  const live = new Set(places.map((p) => p.id));
+  const stays = Object.fromEntries(dates.map((d) => [d, dayStays(dayHeaders, d, (id) => live.has(id))]));
+  const stayIds = new Set(Object.values(stays).flatMap((s) => [s.start, s.end]).filter(Boolean));
   const dateSet = new Set(dates);
   const weekdays = dates.map(weekdayOf);
   // 장소: 찜 많은 순 → 안 간 곳 → 이름. 너무 많으면 앞에서부터
   // 후보: 고른 카테고리(cats, null 이면 전체) + 다녀온 곳 빼기. 기준점(숙소)은 출발점으로 항상 보냄, 찜 꼭 넣기면 찜한 곳도
   const liked = (p) => (likes.get(p.id) || 0) > 0;
-  const pool = places.filter((p) => p.is_anchor
+  const pool = places.filter((p) => p.is_anchor || stayIds.has(p.id)
     || ((!cats || cats.has(p.category_id) || (likeMode === 'must' && liked(p)))
       && (!skipVisited || !p.visited_at || liked(p))));
   const sorted = [...pool].sort((a, b) => (likes.get(b.id) || 0) - (likes.get(a.id) || 0)
@@ -82,6 +87,7 @@ export function buildPlanRequest({ trip, places, items, dayHeaders = [], categor
     const header = dayHeaders.find((d) => d.day_date === date);
     days.push({
       date, weekday: DAY_KO[weekdayOf(date)], title: header?.title || null,
+      stayStart: indexOf.get(stays[date].start) || null, stayEnd: indexOf.get(stays[date].end) || null,
       fixed: keep.map((it, i) => ({ f: i + 1, time: shortHM(it.start_time), title: it.title, place: indexOf.get(it.place_id) || null })),
     });
   }
@@ -98,12 +104,12 @@ export function buildPlanRequest({ trip, places, items, dayHeaders = [], categor
         i: i + 1, name: p.name, kind: cat?.kind || 'etc', cat: cat?.name || null, zone: p.zone || null,
         lat: p.lat != null ? Math.round(p.lat * 1e4) / 1e4 : null, lng: p.lng != null ? Math.round(p.lng * 1e4) / 1e4 : null,
         hours: hoursBrief(p.opening_hours, weekdays), likes: likes.get(p.id) || 0,
-        anchor: !!p.is_anchor || undefined, visited: !!p.visited_at || undefined, elsewhere: elsewhere.has(p.id) || undefined,
+        anchor: !!p.is_anchor || stayIds.has(p.id) || undefined, visited: !!p.visited_at || undefined, elsewhere: elsewhere.has(p.id) || undefined,
         sig: p.signature ? String(p.signature).slice(0, 40) : undefined,
       };
     }),
   };
-  return { body, ctx: { placeIds, fixedMap, removed, dates, likeMode, likes } };
+  return { body, ctx: { placeIds, fixedMap, removed, dates, likeMode, likes, stayIds } };
 }
 
 /**
@@ -137,6 +143,7 @@ export function validatePlan(raw, ctx, { getPlace, getItem, categoryOf = () => n
       if (Number.isInteger(n) && n >= 1 && n <= ctx.placeIds.length) {
         const placeId = ctx.placeIds[n - 1];
         if (used.has(placeId) || fixedPlaces.has(placeId)) continue;   // 같은 곳 두 번은 빼기
+        if (ctx.stayIds?.has(placeId)) continue;                          // 숙소 자체는 일정에 넣지 않음
         const p = getPlace(placeId);
         if (!p) continue;
         used.add(placeId);

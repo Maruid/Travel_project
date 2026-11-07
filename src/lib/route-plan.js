@@ -72,3 +72,30 @@ export function totalText(segments) {
 
 export const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫', '⑬', '⑭', '⑮', '⑯', '⑰', '⑱', '⑲', '⑳'];
 export const circled = (n) => CIRCLED[n - 1] || `(${n})`;
+
+// ---------- 날짜별 숙소 (migration_013 itinerary_days.stay_place_id) ----------
+const prevDate = (d) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); };
+
+// 그날 밤 묵는 숙소: 그 날짜까지 중 가장 최근에 정한 숙소 (비워둔 날은 앞 날 숙소가 이어짐)
+//  validId(id): 지금도 있는 장소인지 (지운 장소는 건너뜀)
+export function stayFor(dayRows, date, validId = () => true) {
+  let best = null;
+  for (const d of dayRows) {
+    if (!d.stay_place_id || d.deleted_at || d.day_date > date || !validId(d.stay_place_id)) continue;
+    if (!best || d.day_date > best.day_date) best = d;
+  }
+  return best ? { placeId: best.stay_place_id, inherited: best.day_date !== date } : null;
+}
+
+// 그날 동선의 출발 · 도착 숙소: 출발은 전날 밤 숙소(없으면 그날 숙소), 도착은 그날 밤 숙소
+//  체크아웃하고 다른 숙소로 옮기는 날은 둘이 달라짐
+export function dayStays(dayRows, date, validId) {
+  const tonight = stayFor(dayRows, date, validId);
+  const lastNight = stayFor(dayRows, prevDate(date), validId);
+  return {
+    start: lastNight?.placeId || tonight?.placeId || null,
+    end: tonight?.placeId || null,
+    inherited: !!tonight?.inherited,
+    moved: !!(lastNight && tonight && lastNight.placeId !== tonight.placeId),
+  };
+}

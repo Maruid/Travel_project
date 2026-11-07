@@ -113,3 +113,12 @@ test('후보 카테고리: 고른 것만 + 기준점은 항상 + 찜 꼭 넣기�
   const must = buildPlanRequest({ ...base, dates: ['2026-11-10'], cats: new Set(['c1']), likeMode: 'must', likes: new Map([['pb', 1]]) }).body;
   assert.ok(must.places.some((p) => p.name === '호젠지'));
 });
+
+test('날짜별 숙소를 번호로 넘기고, 숙소는 후보에서 빠지지 않음', () => {
+  const dayHeaders = [{ day_date: '2026-11-10', stay_place_id: 'pb' }, { day_date: '2026-11-11', stay_place_id: 'ph' }];
+  const { body, ctx } = buildPlanRequest({ ...base, dayHeaders, dates: ['2026-11-11'], cats: new Set(['c1']) });
+  const n = (id) => ctx.placeIds.indexOf(id) + 1;
+  assert.equal(body.days[0].stayStart, n('pb'));
+  assert.equal(body.days[0].stayEnd, n('ph'));
+  assert.ok(body.places.find((p) => p.name === '호젠지').anchor);
+});

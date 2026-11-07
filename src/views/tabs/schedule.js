@@ -3,7 +3,7 @@ import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../co
 import { dateRange, dayLabel, shortTime, todayIn } from '../../lib/format.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail, loadMapLib } from './places.js';
-import { buildRoute, directionsHref, nearestAnchor, totalText, circled } from '../../lib/route-plan.js';
+import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays } from '../../lib/route-plan.js';
 import { loadUndo, undoPlan, clearUndo } from '../../lib/ai-plan.js';
 import { getPref, setPref, PREF_ROUTE_OPEN, PREF_ROUTE_HOTEL } from '../../lib/prefs.js';
 import { esc } from '../../lib/dom.js';
@@ -81,6 +81,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
             </div>
             <h4 class="text-sm font-extrabold text-white">${header?.title || (readOnly ? dayLabel(selected) : '이 날의 제목을 정해보세요')}</h4>
             ${header?.summary ? html`<p class="text-[11px] text-slate-400 mt-0.5">${header.summary}</p>` : ''}
+            ${stayLine(store, selected, readOnly)}
           </div>
 
           ${guides.map((g) => html`
@@ -129,14 +130,20 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   function currentRoute(items) {
     const getPlace = (id) => store.get('places', id);
     const base = buildRoute(items, getPlace);
-    if (!route.hotel || !base.stops.length) return { ...base, hotel: null };
-    const anchors = store.list('places').filter((p) => p.is_anchor);
-    const hotel = nearestAnchor(anchors, base.stops[0].place);
+    if (!route.hotel || !base.stops.length) return { ...base, hotels: [] };
+    // 날짜별 숙소(일정 날짜 헤더에서 정함)가 있으면 그것, 없으면 그날 첫 장소에서 가장 가까운 기준점
+    const st = dayStays(store.list('itinerary_days'), selected, livePlace);
+    let startH = getPlace(st.start); let endH = getPlace(st.end);
+    if (!startH && !endH) {
+      const anchors = store.list('places').filter((p) => p.is_anchor);
+      startH = endH = nearestAnchor(anchors, base.stops[0].place);
+    }
     // 숙소가 일정의 첫·마지막 장소와 같으면 그쪽 연결은 생략
     const first = base.stops[0].place.id; const last = base.stops[base.stops.length - 1].place.id;
-    const plan = buildRoute(items, getPlace, { start: hotel && hotel.id !== first ? hotel : null, end: hotel && hotel.id !== last ? hotel : null });
-    return { ...plan, hotel };
+    const plan = buildRoute(items, getPlace, { start: startH && startH.id !== first ? startH : null, end: endH && endH.id !== last ? endH : null });
+    return { ...plan, hotels: [...new Set([startH, endH].filter(Boolean))] };
   }
+  const livePlace = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
 
   function renderRoute(plan) {
     const box = $('#route-box', root);
@@ -151,7 +158,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     $('#route-panel', root).classList.toggle('hidden', !route.open);
     if (!route.open) return;
 
-    const hasAnchor = store.list('places').some((p) => p.is_anchor && p.lat != null);
+    const hasAnchor = store.list('places').some((p) => p.is_anchor && p.lat != null) || store.list('itinerary_days').some((d) => d.stay_place_id);
     const label = (pt) => (pt.edge ? html`<i class="fa-solid fa-hotel text-amber-300 text-[10px]"></i>` : html`<span class="text-rose-300 font-black">${circled(pt.no)}</span>`);
     setHTML($('#route-list', root), html`
       ${plan.segments.length ? plan.segments.map((sg) => html`
@@ -193,10 +200,10 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
         color: sg.transit ? '#fbbf24' : '#f43f5e', weight: 3, opacity: 0.85, dashArray: sg.transit ? '6 6' : null, interactive: false,
       }).addTo(route.layer);
     });
-    if (plan.hotel && (plan.points[0]?.edge || plan.points[plan.points.length - 1]?.edge)) {
-      L.marker([plan.hotel.lat, plan.hotel.lng], { icon: pinIcon({ color: '#f59e0b', icon: 'fa-hotel', size: 24 }), zIndexOffset: -100 })
-        .bindTooltip(esc(plan.hotel.name), { direction: 'top', offset: [0, -12] }).addTo(route.layer);
-    }
+    plan.hotels.filter((h) => h.lat != null && plan.points.some((pt) => pt.edge && pt.place.id === h.id)).forEach((h) => {
+      L.marker([h.lat, h.lng], { icon: pinIcon({ color: '#f59e0b', icon: 'fa-hotel', size: 24 }), zIndexOffset: -100 })
+        .bindTooltip(esc(h.name), { direction: 'top', offset: [0, -12] }).addTo(route.layer);
+    });
     plan.stops.forEach((st) => {
       L.marker([st.place.lat, st.place.lng], { icon: pinIcon({ color: '#f43f5e', size: 26, label: st.no }), zIndexOffset: 100 + st.no })
         .bindTooltip(esc(st.place.name), { direction: 'top', offset: [0, -14] })
@@ -249,19 +256,51 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
   };
 }
 
+// 숙소 후보: 숙소 종류 카테고리 장소 + 기준점 (숙소 종류 먼저)
+function stayCandidates(store) {
+  const isLodging = (p) => store.category(p.category_id)?.kind === 'lodging';
+  return store.list('places').filter((p) => isLodging(p) || p.is_anchor)
+    .sort((a, b) => (isLodging(b) - isLodging(a)) || String(a.name).localeCompare(String(b.name), 'ko'));
+}
+
+// 날짜 헤더 아래 숙소 한 줄: "🏨 도미인 프리미엄 난바" / 옮기는 날 "A → B" / 이어진 값은 흐리게
+function stayLine(store, date, readOnly) {
+  const live = (id) => { const p = store.get('places', id); return !!p && !p.deleted_at; };
+  const st = dayStays(store.list('itinerary_days'), date, live);
+  const name = (id) => store.get('places', id)?.name || '';
+  if (!st.end && !st.start) {
+    return readOnly || !stayCandidates(store).length ? '' : html`<p class="text-[10px] text-slate-500 mt-1"><i class="fa-solid fa-hotel mr-1"></i>오늘 묵는 숙소를 정할 수 있어요</p>`;
+  }
+  return html`<p class="text-[11px] mt-1 ${st.inherited && !st.moved ? 'text-amber-200/60' : 'text-amber-200'} truncate">
+    <i class="fa-solid fa-hotel mr-1"></i>${st.moved ? html`${name(st.start)} <i class="fa-solid fa-arrow-right text-[9px] mx-0.5"></i> ${name(st.end)} <span class="text-[10px] text-slate-400">(숙소 이동)</span>` : name(st.end || st.start)}</p>`;
+}
+
 function openDayEditor(store, day) {
   const cur = store.list('itinerary_days').find((d) => d.day_date === day);
+  const stays = stayCandidates(store);
+  // 이 날을 비워두면 이어질 숙소 (전날까지 중 가장 최근)
+  const prev = store.list('itinerary_days').filter((d) => d.stay_place_id && d.day_date < day).sort((a, b) => b.day_date.localeCompare(a.day_date))[0];
+  const inherited = prev ? store.get('places', prev.stay_place_id) : null;
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${dayLabel(day)} 정보</h3>
     <form id="day-form" class="space-y-2.5">
       <div><label class="label">제목</label><input name="title" class="input" maxlength="80" value="${cur?.title || ''}"></div>
       <div><label class="label">뱃지</label><input name="badge" class="input" maxlength="20" value="${cur?.badge || ''}" placeholder="예: 테마파크 집중"></div>
       <div><label class="label">요약</label><input name="summary" class="input" maxlength="300" value="${cur?.summary || ''}"></div>
+      <div>
+        <label class="label"><i class="fa-solid fa-hotel text-amber-300 mr-1"></i>오늘 묵는 숙소</label>
+        <select name="stay_place_id" class="input">
+          <option value="">${inherited ? `앞 날과 같음 (${inherited.name})` : '정하지 않음'}</option>
+          ${stays.map((p) => html`<option value="${p.id}" ${cur?.stay_place_id === p.id ? 'selected' : ''}>${p.name}${p.is_anchor ? '' : ' (기준점 아님)'}</option>`)}
+        </select>
+        <p class="text-[10px] text-slate-500 mt-1">다음 날들도 바꿀 때까지 이 숙소로 이어져요. 동선 지도의 숙소 출발·복귀와 AI 일정 짜기가 이 숙소를 써요.</p>
+      </div>
       <button class="btn-primary">저장</button>
     </form>`, (el) => {
     $('#day-form', el).addEventListener('submit', (e) => {
       e.preventDefault();
       const v = formValues(e.target);
+      v.stay_place_id = v.stay_place_id || null;
       if (cur) store.update('itinerary_days', cur.id, v);
       else store.insert('itinerary_days', { day_date: day, ...v });
       closeSheet();

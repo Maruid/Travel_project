@@ -146,7 +146,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | trip_budgets | home/local_currency, rate(현지 1 = 내 통화 rate), base_amount |
 | categories | trip_id null = 전역 기본 8종, 값 있음 = 여행 커스텀 |
 | places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb + visited_at |
-| itinerary_days / itinerary_items | 날짜 헤더 / 시간 항목(place_id 연결, ai_plan = AI 가 넣은 일정의 실행 id) |
+| itinerary_days / itinerary_items | 날짜 헤더(stay_place_id = 오늘 묵는 숙소) / 시간 항목(place_id 연결, ai_plan = AI 가 넣은 일정의 실행 id) |
 | guides | 마크다운 카드 (day_date 지정 시 일정에도 노출) |
 | budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
 | todos | kind todo/place/shop |
@@ -175,6 +175,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 008_currency_text | 통화 칸 4개 char(3) → text + `^[A-Z]{3}$` 검사, 잘린 값(J/K) 복구 |
 | 010_visited | places.visited_at (다녀옴 체크) |
 | 009_ai_recommend | AI 추천 권한(ai_grants)·요청(ai_grant_requests)·AI 사용 기록(ai_calls, 토큰)·추천 결과(recommend_cache), 관련 RPC, 자동 정리 추가 |
+| 013_day_stay | itinerary_days.stay_place_id (날짜별 오늘 묵는 숙소, 같은 여행 장소만, 장소 삭제 시 비움) |
 | 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
@@ -466,6 +467,15 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **앱 설치**(`install.js`): `beforeinstallprompt`를 받아 두었다가 홈 위쪽 띠 [설치]·설정 [앱으로 설치]에서 바로 설치 창(바로가기 선택 없음). 띠 [닫기]는 이 기기 30일. 설치형으로 열면 숨김. 아이폰은 "공유 → 홈 화면에 추가" 안내.
 - **화면 정보**(설정 → 앱 → 화면 정보): 실행 방식, 화면·보이는 영역, 100dvh/svh, 상태바·제스처 바 영역(env 값), 가로 넘침, 크롬 버전, 설치 신호. [복사].
 - **AI 일정**: 후보 장소 카테고리(종류별 칩, 기본은 숙소·교통 뺀 전부, 기준점은 항상 출발점으로 전달, 찜 꼭 넣기면 고른 카테고리 밖 찜도 포함). 미리보기 날짜마다 [지도] → 그날 순서대로 번호(기존 회색·AI 보라)와 선.
+
+### 7-7-8. 날짜별 숙소 (013, 2026-11-07)
+
+- 일정 탭 날짜 헤더를 눌러 여는 "날짜 정보"에 **오늘 묵는 숙소** 선택(숙소 종류 카테고리 장소 + 기준점, 숙소 종류 먼저).
+- **비워두면 앞 날 숙소가 이어짐**(`stayFor`): 첫날만 정하면 바꿀 때까지 계속. 바꾸는 날만 다시 고름. 지운 장소는 건너뜀.
+- 그날 동선(`dayStays`): 출발 = 전날 밤 숙소(없으면 그날 숙소), 도착 = 그날 밤 숙소 → 숙소를 옮기는 날은 "A → B (숙소 이동)".
+- 날짜 헤더 아래 "🏨 숙소 이름" 한 줄(이어진 값은 흐리게).
+- 동선 지도 [숙소 출발·복귀]와 AI 일정 짜기가 이 값을 씀. 정한 숙소가 없으면 예전처럼 그날 첫 장소에서 가장 가까운 기준점.
+- AI 일정: 날짜마다 `stayStart`/`stayEnd`(장소 번호)를 보내고, 숙소는 후보에서 빠지지 않음(출발점), 일정 항목으로는 넣지 않음(앱 검증에서도 제거).
 
 ### 7-8. 설정 탭 (more.js) 구성
 

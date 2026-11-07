@@ -47,3 +47,19 @@ test('길찾기 링크와 합계', () => {
   assert.match(totalText([segmentInfo(P.a, P.b), segmentInfo(P.b, P.c)]), /^약 [0-9.]+km · 걷기 [0-9]+분 · 전철 1구간$/);
   assert.equal(circled(3), '③');
 });
+
+test('날짜별 숙소: 비워둔 날은 이어짐, 옮기는 날은 출발·도착이 다름', async () => {
+  const { stayFor, dayStays } = await import('../src/lib/route-plan.js');
+  const rows = [
+    { day_date: '2026-11-10', stay_place_id: 'osaka' },
+    { day_date: '2026-11-11', title: '제목만' },
+    { day_date: '2026-11-13', stay_place_id: 'kyoto' },
+    { day_date: '2026-11-14', stay_place_id: 'gone' },
+  ];
+  assert.deepEqual(stayFor(rows, '2026-11-12'), { placeId: 'osaka', inherited: true });
+  assert.equal(stayFor(rows, '2026-11-09'), null);
+  assert.deepEqual(dayStays(rows, '2026-11-10'), { start: 'osaka', end: 'osaka', inherited: false, moved: false });
+  assert.deepEqual(dayStays(rows, '2026-11-13'), { start: 'osaka', end: 'kyoto', inherited: false, moved: true });
+  // 지운 장소는 건너뜀 → 교토가 이어짐
+  assert.equal(dayStays(rows, '2026-11-14', (id) => id !== 'gone').end, 'kyoto');
+});

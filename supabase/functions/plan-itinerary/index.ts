@@ -43,7 +43,7 @@ const hm = (v: unknown) => (typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/
 
 type Place = { i: number; name: string; kind: string; cat: string | null; zone: string | null; lat: number | null; lng: number | null;
   hours: string | null; likes: number; anchor: boolean; visited: boolean; elsewhere: boolean; sig: string | null };
-type Day = { date: string; weekday: string; title: string | null; fixed: { f: number; time: string | null; title: string; place: number | null }[] };
+type Day = { date: string; weekday: string; title: string | null; stayStart: number | null; stayEnd: number | null; fixed: { f: number; time: string | null; title: string; place: number | null }[] };
 type Req = { destination: string | null; timezone: string | null; density: string; likeMode: string; text: string | null; start: string; end: string; places: Place[]; days: Day[] };
 
 // 앱이 보낸 값 정리 (길이·개수 제한)
@@ -58,6 +58,7 @@ function readRequest(b: any): Req | null {
   }));
   const days: Day[] = (Array.isArray(b?.days) ? b.days : []).filter((d: any) => isDate(d?.date)).slice(0, MAX_DAYS).map((d: any) => ({
     date: d.date, weekday: str(d.weekday, 2) || '', title: str(d.title, 60),
+    stayStart: int(d.stayStart, 1, places.length), stayEnd: int(d.stayEnd, 1, places.length),
     fixed: (Array.isArray(d.fixed) ? d.fixed : []).slice(0, 30).map((x: any, k: number) => ({
       f: k + 1, time: hm(x?.time), title: str(x?.title, 60) || '일정', place: int(x?.place, 1, places.length),
     })),
@@ -84,7 +85,10 @@ function prompt(r: Req) {
     const fixed = d.fixed.length
       ? d.fixed.map((x) => `    F${x.f}. ${x.time || '시간 미정'} ${x.title}${x.place ? ` (장소 ${x.place})` : ''}`).join('\n')
       : '    (없음)';
-    return `- ${d.date} (${d.weekday})${d.title ? ` "${d.title}"` : ''}\n  남길 일정:\n${fixed}`;
+    const stay = d.stayStart || d.stayEnd
+      ? `\n  숙소: ${d.stayStart === d.stayEnd || !d.stayEnd ? `${d.stayStart || d.stayEnd}번에서 출발해 돌아옴` : !d.stayStart ? `${d.stayEnd}번으로 돌아옴` : `${d.stayStart}번에서 출발해 ${d.stayEnd}번으로 이동(체크아웃 → 체크인)`}`
+      : '';
+    return `- ${d.date} (${d.weekday})${d.title ? ` "${d.title}"` : ''}${stay}\n  남길 일정:\n${fixed}`;
   };
   const likeRule = {
     must: '찜이 있는 장소는 모두 일정 어딘가에 꼭 넣으세요. 찜이 많은 곳을 먼저 배치하세요.',
@@ -104,7 +108,7 @@ ${r.places.map(placeLine).join('\n')}
 - 각 날짜의 하루 순서를 처음부터 끝까지 출력하세요. 남길 일정은 {"f": 번호} 로 그 자리에 그대로 넣고, 시간과 순서를 지키세요. 남길 일정을 빼거나 바꾸지 마세요.
 - 하루에 들르는 곳은 ${DENSITY[r.density]} (남길 일정 포함). 날짜마다 빠짐없이 짜세요.
 - 새 일정은 ${r.start} 이후에 시작해서 ${r.end} 전에 끝나게. 남길 일정이 이 시간 밖에 있으면 그대로 두세요.
-- 좌표를 보고 가까운 곳끼리 묶어 이동이 짧게, 같은 동네는 같은 날에. ${anchors.length ? `숙소/기준점(${anchors.join(', ')})에서 출발해 돌아온다고 생각하세요. 숙소 자체는 넣지 마세요.` : ''}
+- 좌표를 보고 가까운 곳끼리 묶어 이동이 짧게, 같은 동네는 같은 날에. ${r.days.some((d) => d.stayStart || d.stayEnd) ? '날짜마다 적힌 숙소에서 출발해 그 숙소로 돌아오는 동선으로 짜세요(숙소를 옮기는 날은 앞 숙소 근처에서 시작해 새 숙소 근처에서 끝나게).' : anchors.length ? `숙소/기준점(${anchors.join(', ')})에서 출발해 돌아온다고 생각하세요.` : ''} 숙소·기준점 자체는 일정에 넣지 마세요.
 - 식당은 점심(11:30~13:30)·저녁(18:00~20:00) 무렵에, 카페는 오후에, 술집은 저녁 이후에.
 - 영업시간이 있으면 그 요일·시간에 영업하는 때에만 넣으세요. "휴무"인 요일에는 넣지 마세요.
 - 같은 장소를 두 번 넣지 마세요. "이미 다녀옴"·"다른 날 일정에 있음"인 곳은 되도록 빼세요.
