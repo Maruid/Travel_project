@@ -1,6 +1,8 @@
 import { supabase, errorText } from './supabase.js';
 import { toast } from '../components/ui.js';
 import { likeId, likeMap } from './likes.js';
+import { sessionReady } from './auth.js';
+import { markSynced } from './offline.js';
 
 // =====================================================================
 // TripStore: 여행 1개의 데이터 캐시 + 오프라인 동기화
@@ -36,6 +38,11 @@ async function runLimited(items, n, fn) {
 const isNetworkError = (err) =>
   !navigator.onLine || /fetch|network|Failed to|Load failed|timeout/i.test(err?.message || '');
 
+// 토큰 문제(만료 · 없음)는 데이터 문제가 아니므로 버리지 않고 다음에 다시 보냄
+//  (메시지 속 id 등에 우연히 섞인 글자로 오판하지 않도록 코드 · 단어 단위로만)
+const isTokenError = (err) => /^PGRST30[0-3]$/.test(err?.code || '') || /\bJWT\b/i.test(err?.message || '');
+const isPermissionError = (err) => /42501|row-level security|FORBIDDEN|permission denied/i.test(`${err?.code || ''} ${err?.message || ''}`);
+
 // 서버에서 온 두 버전 중 더 새 것 (updated_at 기준, 같으면 들어온 쪽)
 //  - 로컬에서만 바꾼 값은 updated_at 이 그대로라 들어온 값으로 바뀌지만, 보낼 변경(outbox)이 다시 덮어씀
 // Realtime 이 char(3) 통화 코드를 1글자로 잘라 보내던 문제 방어 (migration_008 이후엔 발생하지 않음)
@@ -70,7 +77,8 @@ function ts(s) {
 }
 
 export class TripStore {
-  constructor(tripId, userId) {
+  // headless: 화면 없이 잠깐 받아서 저장만 (자동 미리 받기) → 이벤트 · 타이머 · 실시간 구독 없음
+  constructor(tripId, userId, { headless = false } = {}) {
     this.tripId = tripId;
     this.userId = userId;
     this.cacheKey = `trip-cache:v1:${tripId}`;
@@ -95,6 +103,9 @@ export class TripStore {
     this._emitKind = null;
     this._cacheTimer = null;
     this._flushTimer = null;
+    this.lastSyncedAt = null;
+    this.headless = headless;
+    if (headless) return;
 
     this._onOnline = () => this.sync();
     window.addEventListener('online', this._onOnline);
@@ -136,6 +147,7 @@ export class TripStore {
         this.trip = c.trip; this.budget = c.budget; this.members = c.members || []; this.devices = c.devices || [];
         this.invite = c.invite; this.globalCategories = c.globalCategories || []; this.viewLink = c.viewLink || null;
         this.cursors = c.cursors || {};
+        this.lastSyncedAt = c.syncedAt || null;
         for (const t of CONTENT_TABLES) this.tables[t] = new Map((c.tables?.[t] || []).map((r) => [r.id, r]));
       }
       this.outbox = JSON.parse(localStorage.getItem(this.outboxKey) || '[]');
@@ -160,6 +172,7 @@ export class TripStore {
       localStorage.setItem(this.cacheKey, JSON.stringify({
         trip: this.trip, budget: this.budget, members: this.members, devices: this.devices, invite: this.invite,
         viewLink: this.viewLink, globalCategories: this.globalCategories, cursors: this.cursors,
+        syncedAt: this.lastSyncedAt, userId: this.userId ?? null,
         tables: Object.fromEntries(CONTENT_TABLES.map((t) => [t, [...this.tables[t].values()]])),
       }));
     } catch (e) { console.warn('cache save failed', e); }
@@ -179,6 +192,7 @@ export class TripStore {
   }
 
   destroy() {
+    if (this.headless) { if (this._cacheTimer) this.saveCacheNow(); clearTimeout(this._emitTimer); this.listeners.clear(); return; }
     window.removeEventListener('online', this._onOnline);
     window.removeEventListener('offline', this._onOnline);
     document.removeEventListener('visibilitychange', this._onVisible);
@@ -197,20 +211,32 @@ export class TripStore {
   }
 
   async _sync() {
-    if (!navigator.onLine) { this.status = 'offline'; this.emit('status'); return; }
+    if (!navigator.onLine) { this.status = 'offline'; this.emit('status'); return false; }
     this.status = 'syncing'; this.emit('status');
-    let changed = false;
+    // 로그인 확인(토큰 갱신)이 안 된 상태로 보내면 "권한 없음"이 되므로 확인될 때까지 미룸
+    if (!(await sessionReady())) { this.status = 'offline'; this.emit('status'); return false; }
+    let changed = false; let ok = false;
     try {
       await this.flush();
       changed = await this.pull();
       this.status = this.outbox.length ? 'offline' : 'idle';
       this.lastSyncedAt = Date.now();
+      markSynced(this.tripId, this.userId, this.lastSyncedAt);
+      ok = true;
     } catch (e) {
-      this.status = isNetworkError(e) ? 'offline' : 'error';
-      if (!isNetworkError(e)) console.error(e);
+      this.status = isNetworkError(e) || isTokenError(e) ? 'offline' : 'error';
+      if (this.status === 'error') console.error(e);
     }
-    if (changed) this.saveCache();
+    if (ok) this.saveCache();                 // 받은 시각도 함께 저장
     this.emit(changed ? 'data' : 'status');   // 받은 게 없으면 헤더만 갱신
+    return ok;
+  }
+
+  // 보내기 실패를 "나중에 다시"로 볼지: 네트워크 · 토큰 문제, 또는 권한 오류인데 지금 로그인 확인이 안 되는 경우
+  async retryLater(err) {
+    if (isNetworkError(err) || isTokenError(err)) return true;
+    if (isPermissionError(err) && !(await sessionReady())) return true;
+    return false;
   }
 
   // ---------------------------------------------------------- 서버 → 로컬
@@ -330,8 +356,9 @@ export class TripStore {
   }
 
   async flush() {
-    if (this.flushing || !navigator.onLine) return;
+    if (this.flushing || !navigator.onLine || !this.outbox.length) return;
     this.flushing = true;
+    if (!(await sessionReady())) { this.flushing = false; this.status = 'offline'; this.emit('status'); return; }
     let dropped = false;
     try {
       while (this.outbox.length) {
@@ -368,7 +395,7 @@ export class TripStore {
 
     for (const op of batch.filter((o) => o.table === 'trip_budgets')) {
       const res = await supabase.from('trip_budgets').update(op.data).eq('trip_id', this.tripId).select().maybeSingle();
-      if (res.error) { if (isNetworkError(res.error)) return { done, dropped, offline: true }; fail(op, res.error); continue; }
+      if (res.error) { if (await this.retryLater(res.error)) return { done, dropped, offline: true }; fail(op, res.error); continue; }
       done.push(op);
       if (res.data) this.budget = newer(this.budget, res.data);
     }
@@ -386,11 +413,11 @@ export class TripStore {
           (res.data || []).forEach((row) => this.applyRemote(t, row, false));
           continue;
         }
-        if (isNetworkError(res.error)) return { done, dropped, offline: true };
+        if (await this.retryLater(res.error)) return { done, dropped, offline: true };
         // 묶음 중 한 건 때문에 전체가 실패 → 한 건씩 다시 보내서 문제 있는 것만 버림
         for (const op of chunk) {
           const r1 = await supabase.from(t).upsert(stripMeta(op.data), { onConflict: 'id', ignoreDuplicates: true }).select().maybeSingle();
-          if (r1.error) { if (isNetworkError(r1.error)) return { done, dropped, offline: true }; fail(op, r1.error); continue; }
+          if (r1.error) { if (await this.retryLater(r1.error)) return { done, dropped, offline: true }; fail(op, r1.error); continue; }
           done.push(op);
           if (r1.data) this.applyRemote(t, r1.data, false);
         }
@@ -409,7 +436,7 @@ export class TripStore {
       if (offline) return;
       const res = await supabase.from(m.table).update(m.data).eq('id', m.id).select().maybeSingle();
       if (res.error) {
-        if (isNetworkError(res.error)) { offline = true; return; }
+        if (await this.retryLater(res.error)) { offline = true; return; }
         m.ops.forEach((op) => fail(op, res.error));
         return;
       }

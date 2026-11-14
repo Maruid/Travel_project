@@ -30,6 +30,7 @@ const ERROR_TEXT = {
   CANNOT_KICK_OWNER: 'owner 는 강퇴할 수 없습니다.',
   CANNOT_UNLINK_OWNER: 'owner 는 연결 해제할 수 없습니다.',
   AUTH_REQUIRED: '로그인이 필요합니다.',
+  OFFLINE: '인터넷에 연결되어 있지 않아요. 연결된 뒤 다시 시도해 주세요.',
   FORBIDDEN: '권한이 없습니다.',
   ROW_LIMIT: '이 여행에 등록할 수 있는 최대 개수를 넘었습니다.',
   INVALID_DEVICE_CODE: '코드가 틀렸거나 만료되었습니다. 기존 기기에서 새 코드를 받아주세요.',
