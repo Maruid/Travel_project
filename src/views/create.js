@@ -15,7 +15,7 @@ export async function render(app) {
   const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
   setHTML(app, html`
-    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center gap-2" style="padding-top:calc(0.75rem + env(safe-area-inset-top))">
+    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center gap-2" style="padding-top:calc(0.75rem + var(--sat))">
       <button data-action="back" class="w-8 h-8 rounded-lg text-slate-300"><i class="fa-solid fa-chevron-left"></i></button>
       <h1 class="text-sm font-black text-white">새 여행 만들기</h1>
     </header>

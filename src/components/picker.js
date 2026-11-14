@@ -41,7 +41,7 @@ export function openPicker({ title, top = [], sections = [], categories = [], se
 
   const el = document.createElement('div');
   el.className = 'fixed inset-0 z-[70] flex items-end justify-center bg-black/60 transition-opacity duration-200 opacity-0';
-  el.innerHTML = `<div data-panel class="w-full max-w-md bg-night-950 border-t border-white/20 rounded-t-[28px] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] max-h-[85vh] flex flex-col transition-transform duration-200 translate-y-full"></div>`;
+  el.innerHTML = `<div data-panel class="w-full max-w-md bg-night-950 border-t border-white/20 rounded-t-[28px] p-4 pb-[calc(1rem+var(--sab))] max-h-[85vh] flex flex-col transition-transform duration-200 translate-y-full"></div>`;
   document.body.appendChild(el);
   const panel = el.querySelector('[data-panel]');
 

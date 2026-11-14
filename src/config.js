@@ -8,7 +8,11 @@ export const MAP_STYLE = 'https://tiles.openfreemap.org/styles/dark';
 export const MAP_STYLE_FALLBACK = 'https://tiles.openfreemap.org/styles/liberty';
 
 // 앱 루트 URL (OAuth 리다이렉트용). 해시 라우팅이라 base 경로까지만 사용
-export const APP_URL = new URL(import.meta.env.BASE_URL, window.location.origin).href;
+// 안드로이드 앱 안에서는 주소가 https://localhost/ 라서, 남에게 보내는 링크(초대 · 보기 전용)는 웹 주소로 만듦
+//   (VITE_WEB_URL 로 바꿀 수 있음. 앱의 로그인 복귀는 딥링크라 이 값을 쓰지 않음)
+export const APP_URL = import.meta.env.VITE_APP === '1'
+  ? (import.meta.env.VITE_WEB_URL || 'https://maruid.github.io/Travel_project/')
+  : new URL(import.meta.env.BASE_URL, window.location.origin).href;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('VITE_SUPABASE_URL / VITE_SUPABASE_KEY 가 설정되지 않았습니다. .env.local 을 확인하세요.');

@@ -1,4 +1,5 @@
 import { html, setHTML, delegate, $ } from '../lib/dom.js';
+import { canShare, shareContent } from '../lib/native.js';
 import { openSheet, closeSheet, toast, copyText, confirmAction } from '../components/ui.js';
 import { rpc, supabase, errorText } from '../lib/supabase.js';
 import { color, icon } from '../lib/safe.js';
@@ -252,14 +253,14 @@ function showNewCode(store, r) {
     <h3 class="text-sm font-black text-white mb-2 text-center">공유 코드를 만들었어요</h3>
     <p class="font-mono text-3xl font-black text-neon-cyan tracking-[0.3em] text-center my-4">${r.code}</p>
     <p class="text-[11px] text-slate-400 text-center mb-4">장소 ${r.count}곳 · ${fmtDate(r.expires_at)}까지 사용 가능</p>
-    <div class="grid ${navigator.share ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
+    <div class="grid ${canShare() ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
       <button data-action="copy" class="btn-ghost py-2.5">복사</button>
-      ${navigator.share ? html`<button data-action="share" class="btn-ghost py-2.5"><i class="fa-solid fa-share-nodes mr-1"></i>보내기</button>` : ''}
+      ${canShare() ? html`<button data-action="share" class="btn-ghost py-2.5"><i class="fa-solid fa-share-nodes mr-1"></i>보내기</button>` : ''}
     </div>
     <button data-action="back" class="w-full mt-2 py-2 text-[11px] text-slate-400">코드 목록으로</button>
   `, (el) => delegate(el, {
     copy: () => copyText(text, '코드와 안내'),
-    share: () => navigator.share({ text }).catch(() => {}),
+    share: () => shareContent({ text }),
     back: () => openShareCodes(store),
   }));
 }

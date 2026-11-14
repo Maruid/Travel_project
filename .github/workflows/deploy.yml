@@ -36,6 +36,25 @@ jobs:
           VITE_SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
           # 커스텀 도메인을 쓰면 '/' 로 바꾸세요
           VITE_BASE: /${{ github.event.repository.name }}/
+      # 안드로이드 앱이 받아 가는 화면 묶음 (앱을 다시 설치하지 않아도 화면이 업데이트됨, docs/APP_GUIDE.md)
+      - name: 앱용 화면 묶음
+        run: |
+          export VITE_APP_BUNDLE="${GITHUB_SHA::12}"
+          npm run build:app
+          OWNER=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          PAGES="https://${OWNER}.github.io/${{ github.event.repository.name }}"
+          mkdir -p dist/app
+          (cd dist-app && zip -qr "../dist/app/bundle-${VITE_APP_BUNDLE}.zip" .)
+          MIN=$(node -p "require('./app-version.json').min_native_api")
+          cat > dist/app/version.json <<JSON
+          {"version":"${VITE_APP_BUNDLE}","url":"${PAGES}/app/bundle-${VITE_APP_BUNDLE}.zip","min_native_api":${MIN},"apk":"https://github.com/${{ github.repository }}/releases/latest/download/travel.apk"}
+          JSON
+          cat dist/app/version.json
+        env:
+          VITE_BASE: /
+          VITE_APP: '1'
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

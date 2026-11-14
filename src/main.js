@@ -1,12 +1,15 @@
 import './styles.css';
 import { route, startRouter } from './router.js';
 import { supabase } from './lib/supabase.js';
-import { consumeReturn, readAuthError } from './lib/auth.js';
-import { setupPWA } from './lib/pwa.js';
+import { consumeReturn, readAuthError, setupAuthConnection } from './lib/auth.js';
+import { startAutoPrefetch } from './lib/prefetch.js';
+import { setupPWA, showUpdateBar } from './lib/pwa.js';
+import { initApp } from './lib/native.js';
 import { toast } from './components/ui.js';
 import { installBackNav } from './lib/back-nav.js';
 import { setupInstall } from './lib/install.js';
 
+setupAuthConnection();   // 오프라인이면 토큰 자동 갱신 멈춤, 다시 연결되면 바로 갱신
 setupPWA();
 setupInstall();   // 앱 설치 신호를 일찍 받아 둠 (홈 · 설정의 [설치] 버튼)
 
@@ -18,6 +21,9 @@ route('/admin', () => import('./views/admin.js'));
 route('/view/:token', () => import('./views/view.js'));   // 보기 전용 공유 링크 (로그인 없음)
 
 async function boot() {
+  // 안드로이드 앱: 로그인 복귀(딥링크) · 화면 묶음 업데이트 (웹에서는 아무것도 안 함)
+  await initApp({ supabase, toast, showBar: showUpdateBar });
+
   // OAuth 복귀(?code=...) 처리: supabase-js 가 세션 교환을 끝낸 뒤 원래 경로로 이동
   if (new URLSearchParams(location.search).has('code')) {
     await supabase.auth.getSession();
@@ -37,6 +43,7 @@ async function boot() {
   }
   await startRouter();
   installBackNav({ onExitHint: (text) => toast(text) });
+  startAutoPrefetch();     // 진행 중 · 곧 출발 여행 미리 받기 + 저장된 여행 최신화
 }
 
 boot().catch((e) => {

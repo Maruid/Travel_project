@@ -58,14 +58,14 @@ export async function render(app, params) {
   document.title = `${store.trip.title} · 일정`;
 
   setHTML(app, html`
-    <header class="px-3 flex items-center gap-2 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top)">
+    <header class="px-3 flex items-center gap-2 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + var(--sat)); padding-top:var(--sat)">
       <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
         ${`${store.trip.cover_emoji || ''} ${store.trip.title}`.trim()}${prog ? html`<span class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan">· ${prog}</span>` : ''}</h1>
       <span class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10"><i class="fa-solid fa-eye mr-1"></i>보기 전용</span>
       <button data-action="reload" class="w-8 h-8 rounded-lg text-slate-400 flex-shrink-0" title="새로고침"><i class="fa-solid fa-rotate-right text-sm"></i></button>
     </header>
-    <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + env(safe-area-inset-bottom))"></section>
-    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + env(safe-area-inset-bottom)); padding-bottom:env(safe-area-inset-bottom)">
+    <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + var(--sab))"></section>
+    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + var(--sab)); padding-bottom:var(--sab)">
       ${TABS.map((t) => html`
         <button data-action="tab" data-tab="${t.key}" class="tab-btn flex flex-col items-center gap-0.5 py-1 px-4 text-slate-400 transition">
           <i class="fa-solid ${t.icon} text-base"></i><span class="text-[10px]">${t.label}</span>

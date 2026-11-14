@@ -2,12 +2,14 @@ import 'leaflet/dist/leaflet.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import L from 'leaflet';
 import { maplibreGL } from '@maplibre/maplibre-gl-leaflet';
-import { setWorkerUrl } from 'maplibre-gl';
+import { setWorkerUrl, addProtocol } from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { MAP_STYLE, MAP_STYLE_FALLBACK } from '../config.js';
 import { esc } from '../lib/dom.js';
+import { registerMapCache, mapTransformRequest, toCacheUrl, useAppMapCache } from '../lib/map-cache.js';
 
 setWorkerUrl(workerUrl);
+registerMapCache(addProtocol);   // 안드로이드 앱만: 지도 요청을 기기 저장소로 (웹은 Service Worker)
 
 const ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
 
@@ -26,10 +28,12 @@ export function createMap(el, { center = [37.5665, 126.978], zoom = 13 } = {}) {
   // 터치 화면은 두 손가락으로 확대·축소하므로 버튼을 두지 않음 (지도를 가리지 않게)
   if (!window.matchMedia?.('(pointer: coarse)').matches) L.control.zoom({ position: 'topright' }).addTo(map);
 
-  const gl = maplibreGL({ style: MAP_STYLE, attribution: ATTRIBUTION }).addTo(map);
+  // 앱: 스타일 주소부터 저장소 경유 (안의 타일 · 글꼴 주소는 transformRequest 가 바꿈)
+  const styleUrl = (u) => (useAppMapCache() ? toCacheUrl(u) || u : u);
+  const gl = maplibreGL({ style: styleUrl(MAP_STYLE), attribution: ATTRIBUTION, transformRequest: mapTransformRequest }).addTo(map);
   gl.getMaplibreMap().once('error', (e) => {
     // 다크 스타일 URL 이 바뀌었거나 일시 장애면 기본 스타일로 대체
-    if (String(e?.error?.message || '').includes('style')) gl.getMaplibreMap().setStyle(MAP_STYLE_FALLBACK);
+    if (String(e?.error?.message || '').includes('style')) gl.getMaplibreMap().setStyle(styleUrl(MAP_STYLE_FALLBACK));
   });
   return map;
 }

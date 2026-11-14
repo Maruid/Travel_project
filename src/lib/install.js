@@ -5,6 +5,7 @@
 //  - 이미 설치된 앱으로 열었으면 아무것도 보여주지 않음
 import { html } from './dom.js';
 import { isStandalone } from './back-nav.js';
+import { isApp } from './native.js';
 
 let deferred = null;
 const DISMISS_KEY = 'install:dismissedAt';
@@ -22,8 +23,8 @@ export function setupInstall() {
   });
 }
 
-export const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) && !isStandalone();
-export const canInstall = () => !!deferred && !isStandalone();
+export const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) && !isStandalone() && !isApp();
+export const canInstall = () => !!deferred && !isStandalone() && !isApp();
 
 export async function promptInstall() {
   if (!deferred) return 'unavailable';
@@ -44,7 +45,7 @@ export function dismissBanner() {
 }
 
 export function installBannerHtml() {
-  if (isStandalone() || bannerDismissed()) return '';
+  if (isApp() || isStandalone() || bannerDismissed()) return '';
   if (canInstall()) {
     return html`
       <div class="flex items-center gap-2 p-3 rounded-2xl bg-neon-cyan/10 border border-neon-cyan/40 text-[11px]">
@@ -76,12 +77,12 @@ function probe(css) {
   return r;
 }
 export function screenInfo() {
-  const inset = (side) => probe(`padding-${side}:env(safe-area-inset-${side});width:0;height:0;box-sizing:content-box`);
+  const inset = (side) => probe(`padding-${side}:var(--sa${side[0]});width:0;height:0;box-sizing:content-box`);
   const top = inset('top').h; const bottom = inset('bottom').h;
   const chrome = navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || '-';
   const doc = document.documentElement;
   return {
-    mode: isStandalone() ? '설치형 앱' : '브라우저 탭',
+    mode: isApp() ? '안드로이드 앱' : isStandalone() ? '설치형 앱' : '브라우저 탭',
     viewport: `${window.innerWidth} × ${window.innerHeight}`,
     visual: window.visualViewport ? `${Math.round(visualViewport.width)} × ${Math.round(visualViewport.height)} (배율 ${visualViewport.scale.toFixed(2)})` : '-',
     dvh: `${probe('height:100dvh;width:1px').h} / svh ${probe('height:100svh;width:1px').h}`,

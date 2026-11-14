@@ -3,7 +3,7 @@
 > 이 문서는 **다음 작업을 시작하기 전에 가장 먼저 읽는 문서**입니다.
 > 구조, 규칙, 결정된 정책, 숫자 기준, 남은 일을 한곳에 모았습니다.
 > 기능을 바꾸면 이 문서의 해당 부분도 같이 고쳐 주세요.
-> 마지막 정리: 2026-11-02
+> 마지막 정리: 2026-11-14
 
 ---
 
@@ -36,7 +36,7 @@
 | 프론트 | Vanilla JS + Vite 8 + Tailwind v4, 해시 라우팅, PWA |
 | 지도 | Leaflet + `@maplibre/maplibre-gl-leaflet` + OpenFreeMap(dark, 실패 시 liberty) |
 | 외부 API | Gemini(AI 정보 채우기), Google Places API (New), Nominatim(주소 검색), 무료 환율 API |
-| 배포 | `main` push → `.github/workflows/deploy.yml` → Pages |
+| 배포 | `main` push → `.github/workflows/deploy.yml` → Pages (+ 안드로이드 앱용 화면 묶음 `app/`). APK 는 `.github/workflows/android.yml`(수동 실행 · `app-v*` 태그) → Releases `travel.apk` |
 | 유지 | `.github/workflows/keepalive.yml`이 3일마다 `ping()` 호출 + `.keepalive` 커밋 |
 
 ### 프로젝트 문서 경로 주의
@@ -53,11 +53,16 @@
 
 ```
 index.html                 앱 셸 (#app, #sheet, #toast). 프로젝트 문서에서는 app-shell/index.html
-vite.config.js             VITE_BASE, PWA(registerType: prompt), 지도 타일 런타임 캐시
+vite.config.js             VITE_BASE, PWA(registerType: prompt), 지도 타일 런타임 캐시. VITE_APP=1 이면 PWA 없음(안드로이드 앱 빌드)
+capacitor.config.json      안드로이드 앱(Capacitor): 앱 ID io.github.maruid.travel, 이름 "여행", 화면 dist-app
+app-version.json           앱이 필요로 하는 앱 기능 버전(min_native_api) → 낮은 앱은 업데이트 안내
+android/                   Capacitor 안드로이드 프로젝트 (TravelPlugin, 로그인 딥링크, 위치 권한, 서명 환경 변수) — docs/APP_GUIDE.md
+tools/make_keystore.py     APK 서명 키 만들기 (내 PC, 한 번)
 src/
   main.js                  라우트 등록, OAuth 복귀 처리, PWA 업데이트 배너
   router.js                해시 라우터: / · /create · /join/:token · /trip/:id/:tab? · /admin · /view/:token
   config.js                공개 설정 (VITE_SUPABASE_URL/KEY, MAP_STYLE, APP_URL)
+  fonts/                   내장 글꼴: noto-sans-kr.woff2(가변, 한글 11,172자 등 1.1MB), outfit.woff2 (Google Fonts 안 씀)
   styles.css               Tailwind v4 @theme(색: night-950/900, neon-cyan …) + @utility(glass-card, btn-*, input …)
   components/
     ui.js                  openSheet/closeSheet(바텀시트), toast, copyText, confirmAction, emptyCard, spinner
@@ -69,7 +74,13 @@ src/
     dom.js                 html`` 자동 escape, raw, esc, setHTML, delegate(data-action), formValues, $
     store.js               TripStore: 캐시 + outbox + Realtime + newer() 충돌 방지
     supabase.js            클라이언트, rpc(), ERROR_TEXT(서버 에러 코드 → 문구)
-    auth.js                익명 로그인, Google 로그인/연결, 오프라인 마지막 사용자
+    auth.js                익명 로그인, Google 로그인/연결, 로그인 확인 3초 제한 · sessionReady · 연결 상태별 토큰 자동 갱신
+    native.js              안드로이드 앱에서만: isApp(), 크롬 탭 로그인·계정 연결 복귀, 화면 묶음 업데이트, 앱 업데이트 안내, 공유(canShare/shareContent)
+    map-cache.js           앱의 지도 오프라인 저장: tcache:// 프로토콜 → Cache API (웹은 Service Worker)
+    app-link.js            붙여넣은 초대·보기 전용 링크 → 앱 경로 (순수 함수)
+    offline.js             오프라인 보조: 사용자별 여행 목록 · 받은 시각 색인 · 미리 받기 대상 고르기 · "n시간 전" (순수 함수)
+    net.js                 연결 상태 알림 (1.5초 유지된 변화만)
+    prefetch.js            여행 자동 미리 받기 · 최신화 (화면 없는 TripStore 로 하나씩)
     maps-link.js           구글 맵 URL 파서, splitPlaceText (순수 함수)
     place-lookup.js        짧은 링크 펼치기, enrichPlace(AI), Nominatim geocode, GPS
     google-place.js        place-details 호출, mergeIntoExisting, 위치 검토 helper
@@ -105,7 +116,8 @@ supabase/
   schema.sql, seed_osaka.sql, migration_002 ~ 007, config.toml
   functions/resolve-maps-link | enrich-place | place-details | recommend-places | plan-itinerary  (Deno, Verify JWT OFF)
 tests/                     node --test (maps-link, dom-router, tile-plan, place-sort, place-copy, store-newer, currency,
-                           name-match, hours, place-filter, route-plan, md-edit, settle-likes)
+                           name-match, hours, place-filter, route-plan, md-edit, settle-likes, ai-plan, fx-calc,
+                           offline, app-link, map-cache)
 public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 자리표시 아직 채워야 함
 ```
 
@@ -207,6 +219,10 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 
 - 여행마다 localStorage에 캐시하고, 오프라인 변경은 **outbox**에 쌓습니다.
 - 다시 보내는 때: 온라인 복귀, 화면 복귀(visibilitychange), outbox가 남아 있으면 30초마다.
+- **보내기 전에 로그인 확인(`sessionReady`)**: 유효한 토큰이 없으면 보내지도 받지도 않고 `offline` 상태로 기다립니다. 재연결 직후 토큰 갱신 전에 보내면 anon 키로 나가서 RLS 거절 → 예전엔 그 변경을 버렸습니다(2026-11-14 수정).
+- **버리지 않는 오류**: 네트워크 오류, 토큰 오류(`PGRST301~303`, 메시지에 `JWT`), 권한 오류인데 지금 로그인 확인이 안 되는 경우 → 남겨 두고 다음에 다시 보냄. 그 외(제약 위반, 진짜 권한 없음)만 버리고 서버 상태로 되돌립니다.
+- 캐시에 `syncedAt`(마지막으로 받은 시각)과 `userId`를 함께 저장하고, `trip-sync-index:v1` 색인에도 기록합니다.
+- `new TripStore(id, uid, { headless: true })`: 이벤트·타이머·실시간 구독 없이 `loadCache → sync → saveCacheNow` 만 하는 모드(자동 미리 받기용).
 - 같은 행의 아직 안 보낸 update는 하나로 합칩니다.
 - `sync()` = `flush()`(보내기) → `pull()`(커서 `updated_at` 이후 받기). 동시에 여러 번 불려도 한 번만 실행됩니다.
 - **pull은 서버 왕복 1번**: 여행 정보, 예산, 멤버, 초대, 기본 카테고리, 기기 목록, 콘텐츠 8개 표를 모두 한 번에 병렬로 요청합니다. 받은 게 없으면 `false`를 반환합니다.
@@ -526,6 +542,43 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - 새 버전이 나오면 "새 버전이 있어요 · 새로고침" 배너를 띄웁니다(강제로 바꾸지 않음, 옵션 A).
 - 로그인 토큰을 갱신할 수 없는 오프라인 상태에서는 마지막으로 확인된 사용자로 동작합니다.
 
+### 7-9-1. 오프라인 개선 (2026-11-14)
+
+증상: 관리자 화면을 띄워 둔 채 비행기 모드 → "Google 로그인" 화면. 앱을 다시 켜면 되지만 느림.
+
+- **원인**: 토큰(1시간)이 만료된 채 오프라인이면 supabase-js 가 갱신을 약 25초(0.2·0.4·…·12.8초) 재시도하고, 그동안 `getSession()`이 끝나지 않음. 끝나면 세션은 저장소에 남지만 `null`을 돌려줌 → 관리자 화면·계정 칩이 "로그인 안 함"으로 판단.
+- **로그인 확인**: `getUser()` 는 오프라인이면 서버를 묻지 않고 기기에 저장된 로그인 정보로 즉시 답함. 온라인이면 최대 3초만 기다림. 확인 못 해도 기기에 갱신용 토큰이 남아 있으면 그 사용자(`{ offline: true }`)로 동작.
+- **새 익명 계정 금지**: 기기에 로그인 정보가 남아 있으면 `ensureUser()` 가 절대 `signInAnonymously()` 를 부르지 않음 (약한 신호에서 이 기기의 참여 기록을 잃는 것 방지). 오프라인 + 정보 없음 → `OFFLINE` 오류.
+- **토큰 자동 갱신**(`setupAuthConnection`): 오프라인이면 멈춤(배터리), 다시 연결되면 supabase-js 의 "60초 실패 기억"(`lastRefreshFailure`)을 지우고 바로 갱신. 처음 오프라인/온라인 이벤트 이후에는 라이브러리의 화면 전환 처리 대신 앱이 관리.
+- **홈**
+  - 기기에 저장된 목록(`trips-list:v1:<userId>`, owner·인원 포함)을 먼저 그리고, 온라인이면 받아서 칸(slot)만 바꿈. 입력 창(시트)은 건드리지 않음.
+  - `my_trips` 는 로그인 확인이 된 경우에만 호출 (확인 전 anon 으로 부르면 빈 목록이 와서 저장된 목록을 지움).
+  - 오프라인 띠 "오프라인 · 3시간 전 받은 내용이에요", 서버에 못 닿으면 "서버에 연결하지 못했어요 [다시 시도]" + 20초마다 조용히 재시도.
+  - 최신 목록이 아닐 때 카드에 "저장됨 · n시간 전" / "이 기기에 아직 저장되지 않았어요". 오프라인에서 저장 안 된 여행은 흐리게 + 누르면 안내.
+  - 오프라인 · 확인 전에는 "다른 기기에서 쓰던 여행" 로그인 안내 숨김.
+  - 연결 변화는 1.5초 유지된 것만 반영(깜빡임 방지). 다시 연결되면 목록 · 계정 자동 갱신. 앱으로 돌아왔을 때 목록이 5분 넘었으면 갱신.
+  - 예전 기기(목록 저장 전)는 여행 캐시에서 목록을 만들되 다른 사용자 캐시는 제외.
+- **계정 칩**: 확인 못 한 사용자면 "이메일 · 오프라인"(또는 "연결 확인 중"), 누르면 안내만. Google 로그인은 오프라인에서 막음.
+- **관리자 화면**: 오프라인 · 확인 전이면 로그인 요구 대신 "인터넷에 연결된 상태에서만 쓸 수 있어요 [다시 시도]".
+- **여행 화면**: 캐시가 없고 오프라인이면 "이 기기에 아직 저장되지 않았어요" (예전: "볼 수 없습니다").
+- **자동 미리 받기 · 최신화**(`prefetch.js`, 앱이 열려 있는 동안)
+  - 언제: 앱 시작 4초 후 · 다시 연결 · 앱으로 돌아옴(5분 간격) · 홈 목록을 새로 받았을 때.
+  - 대상(`pickPrefetch`): 보낼 변경이 남은 여행(항상) → 진행 중 → 출발 7일 전 이내(저장된 적 없어도) → 이 기기에 저장된 그 외 여행(끝난 지 30일 이내). 마지막으로 받은 지 30분 넘은 것만, 한 번에 8개.
+  - 하나씩 차례로. 보낼 변경을 먼저 보내고 실패하면 받지 않음. 지금 열려 있는 여행은 건너뛰고, 받는 중에 그 여행을 열면 끝날 때까지 기다림(`whenIdle`, 보낼 변경 목록을 두 곳에서 고치지 않게).
+  - 앱이 완전히 닫혀 있을 때는 받지 않음 (브라우저 백그라운드 동기화는 신뢰하기 어려움).
+- 로그아웃 시 `trips-list:v1:*`, `trip-sync-index:v1`, `ai-plan-undo:v1:*` 도 지움.
+
+### 7-9-2. 안드로이드 앱 (APK, 2026-11-14)
+
+자세한 설치·빌드·구조는 **`docs/APP_GUIDE.md`**. 서재 앱(Maruid/seojae)과 같은 Capacitor 방식.
+
+- 앱 이름 "여행", ID `io.github.maruid.travel`, 로그인 복귀 `io.github.maruid.travel://login`(Supabase Redirect URLs 에 추가), 받는 주소 `…/Travel_project/releases/latest/download/travel.apk`.
+- 웹은 그대로, 앱일 때만(`isApp()`) 달라짐: 크롬 탭 로그인·계정 연결, 화면 묶음 자동 업데이트(Pages `app/version.json`), 앱 업데이트 안내, 안드로이드 공유 창, 지도 저장(`map-cache.js`), 설치 안내 띠 숨김, 처음 실행 안내(앱은 "새 기기" → Google 로그인 / 기기 코드 / 초대 링크 붙여넣기), 홈 [초대 링크로 참여].
+- 앱 안 주소는 `https://localhost/` 이므로 **남에게 보내는 링크는 `APP_URL` = 웹 주소**(앱 빌드에서만).
+- 여백은 CSS 변수 `--sat`/`--sab` (앱: Capacitor 의 `--safe-area-inset-*`, 웹: `env()`). 새 화면도 `env(safe-area-inset-*)` 대신 이 변수를 씀.
+- 앱 기능 버전: `TravelPlugin.NATIVE_API`(지금 1) ↔ `app-version.json` `min_native_api`. 새 앱 기능을 쓰는 화면은 새 APK 먼저.
+- **시트 닫고 이동 주의**: `closeSheet()` 뒤에 `navigate()` 하면 시트 기록을 지우는 `history.back()` 이 이동을 되돌림 → 시트에서 다른 화면으로 갈 때는 `navigate()` 만 부름(이동하면서 시트가 닫힘). 기기 추가 코드 입력·로그아웃에 있던 같은 문제도 고침.
+
 ### 7-10. 관리자 · 자동 정리 (007)
 
 - keepalive가 3일마다 `ping()`을 부르고, 그 안에서 `cleanup_expired()`를 실행합니다. 이 함수는 외부에서 직접 호출할 수 없습니다.
@@ -589,8 +642,11 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `install:dismissedAt` | 설치 안내 띠 닫은 시각 (30일) |
 | `nav:fromHome` (sessionStorage) | 여행을 홈에서 열었는지 ([←] 동작) |
 | `ai-plan-undo:v1:<tripId>` | AI 일정 되돌리기 기록 (24시간) |
+| `app:welcomedAt` | 안드로이드 앱 처음 실행 안내를 닫은 시각 |
 | 여행별 cache / outbox 키 | store.js (`cacheKey`, `outboxKey`) |
 | 마지막 사용자 | auth.js (`LAST_USER_KEY`) |
+| `trips-list:v1:<userId>` | 홈 여행 목록 `{at, trips}` (my_trips 결과 그대로, 사용자별) |
+| `trip-sync-index:v1` | 여행별 마지막으로 받은 시각 `{tripId: {at, uid}}` |
 
 모든 localStorage 접근은 try/catch로 감쌉니다. 실패해도 기본값으로 동작해야 합니다.
 
@@ -623,11 +679,17 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | 보기 전용은 함수 1개(view_trip)로 | anon 에게 테이블을 열지 않고 보낼 칸을 서버가 고름. 링크를 끄면 바로 막힘 |
 | 앱 안 키패드 + 더하는 지폐 칩 | 크롬 자동완성 줄은 웹에서 끌 수 없음. 손에 든 돈을 그대로 눌러 세기 |
 | 통화별 기준 단위 표 | 환율 숫자로 추측하면 "10바트"처럼 현지 감각과 어긋남 |
-| APK 대신 PWA 설치 + 웹 수정 | WebView APK 는 구글 로그인(딥링크)·아이폰 동행자·배포 부담. 뒤로가기·넘침은 어차피 웹에서 고쳐야 함 |
+| APK 대신 PWA 설치 + 웹 수정 (2026-11-06) → **안드로이드 APK 추가 (2026-11-14)** | 처음엔 구글 로그인 딥링크·배포 부담으로 미룸. 서재 앱에서 Capacitor + 크롬 탭 로그인 + 화면 묶음 자동 업데이트가 검증돼 같은 방식으로 추가. 웹·PWA·아이폰은 그대로 |
+| 앱 지도 저장은 tcache:// 프로토콜 | 앱에는 서비스 워커가 없음. MapLibre 요청을 Cache API 로 돌리면 웹 SW 와 같은 규칙으로 오프라인 지도 |
+| 글꼴 내장 (한글 11,172자 가변 글꼴 1.1MB) | 오프라인 첫 화면부터 같은 글꼴, Google Fonts 의존 제거. 2,350자(0.37MB)는 "똠양꿍"의 똠 같은 글자가 다른 글꼴로 섞여 보여서 전체 한글로 |
 | AI 일정은 장소 번호로만 + 앱이 다시 검증 | 없는 가게를 만들지 못하게, 영업시간·중복은 앱이 확실히 확인 |
 | AI 일정 한도는 추천과 합산 + 여행당 3번 | 한 번에 여러 날을 짜서 토큰이 큼(5천~1만 2천). 여행 단위로 몇 번이면 충분 |
 | 지우고 새로 짜기는 soft delete + 되돌리기 띠 | 실수해도 복구. 다른 멤버 수정은 덮지 않음 |
 | 찜 많은 순 정렬은 아직 없음 | 정렬 칩 줄 폭(모바일 390px)이 꽉 참. 필터 [찜한 곳] 으로 대신. 3차 자동 일정에서 찜 수를 씀 |
+| 로그인 확인 3초 제한 + 기기 저장 세션 신뢰 | supabase-js 가 오프라인에서 25초간 갱신 재시도 → 화면 멈춤. 저장된 갱신 토큰이 있으면 같은 사용자이므로 읽기·변경 쌓기는 안전 |
+| 확인 전에는 보내지 않고, 토큰 · 확인 불가 권한 오류는 버리지 않음 | 재연결 직후 anon 으로 나간 요청이 RLS 에 막혀 변경이 사라지던 문제 |
+| 저장된 로그인 정보가 있으면 새 익명 계정 금지 | 약한 신호에서 확인 실패 → 익명 가입 성공 시 이 기기의 참여 기록을 잃음 |
+| 자동 미리 받기는 출발 7일 전부터, 앱이 열려 있을 때만 | 데이터 사용량과 효과의 균형. 백그라운드 동기화는 크롬 설치 앱에서만 가끔 돌아 신뢰 불가 |
 | AI 진행 표시는 스트리밍 | 요청을 둘로 나누면 한도 없이 정리 단계만 부를 틈이 생김, 시간으로 흉내 내면 실제와 안 맞음 |
 
 ---
@@ -635,6 +697,12 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 ## 12. 검증 방법
 
 - `npm test`: 순수 함수 테스트. 새 순수 로직은 `src/lib/*`에 두고 `tests/*.test.js`를 추가합니다.
+- 오프라인 E2E(2026-11-14 방식): `.env.local`(`VITE_SUPABASE_URL=http://mock.local`, `VITE_SUPABASE_KEY=x`) + `npx vite --port 5179` + Playwright.
+  - `addInitScript` 로 `Navigator.prototype.onLine` 을 덮어 오프라인 시작을 흉내 내고, `context.route` 로 mock.local 응답(토큰 갱신 · my_trips · 표 조회 · 쓰기)을 만듦. 저장소 키는 `sb-mock-auth-token`.
+  - 확인 항목: 오프라인 시작 속도, 계정 칩 · 띠 · 잠긴 카드, 관리자 안내, 재연결 후 outbox 전송(anon 쓰기 0건), 미리 받기 대상, 약한 신호에서 signup 0회, 처음 방문 익명 로그인.
+  - 끝나면 하네스 파일과 `.env.local` 삭제.
+- `npm run build:app` (`VITE_APP=1 VITE_BASE=/`): 안드로이드 앱용 화면(`dist-app`)이 서비스 워커 없이 만들어지는지.
+- 앱 모드 브라우저 확인: `dist-app` 을 `vite preview --outDir dist-app` 으로 띄우고 Playwright `addInitScript` 로 `window.androidBridge = { postMessage(){} }` 를 넣으면 `isApp()` 이 true (플러그인 호출은 응답이 없으므로 화면 동작만 확인). APK 자체는 GitHub Actions 에서 빌드(작업 환경에서 안드로이드 SDK 를 받을 수 없음).
 - `npx vite build`: 청크 크기를 확인합니다. places 청크는 MapLibre 때문에 약 1.2MB이고, more/place-import 청크는 작게 유지되어야 합니다.
 - SQL 검증(작업 환경에 Postgres 16이 있을 때):
   1. Supabase 흉내 객체 만들기: `anon` / `authenticated` 역할, `auth` 스키마(`auth.users`, `auth.uid()`는 `request.jwt.claim.sub`에서 읽기), `extensions` 스키마의 pgcrypto, `supabase_realtime` publication
@@ -665,6 +733,9 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **2차 A (완료, 2026-11-06)**: 마커 정리 · 필터 창 + 이름 검색 · 하루 동선 지도 · 가이드 서식 버튼/미리보기 전환. DB 변경 없음. §7-7-4
 - **2차 B (완료, 2026-11-06)**: §7-7-5. migration_011 적용 필요
 - (참고: 합의 내용) 찜(likes 테이블, 카드에 ❤️ 수, 누르면 누가 찜했는지, 각자 자기 것만 켜고 끔, 필터 창 [찜한 곳] 켜기) · 정산 송금 목록(최소 송금, 현지 통화 + 원화 어림, 자리표시 멤버 포함) · 읽기 전용 공유 링크(`#/view/…`, 일정·장소(목록+지도)·가이드만, 가계부·할 일·멤버 숨김, owner가 만들고 끄기, 여행당 1개, 로그인 없음, 열 때 최신). migration 011 필요
+- **오프라인 개선 (완료, 2026-11-14)**: §7-9-1. DB 변경 없음
+- **안드로이드 앱 1단계 (완료, 2026-11-14)**: §7-9-2, `docs/APP_GUIDE.md`. DB 변경 없음. 서명 키 · Secrets · Supabase Redirect URL 필요
+- (다음 후보) 앱 2단계: 초대 링크를 누르면 앱으로 열기(App Links 는 maruid.github.io 맨 위 사이트에 확인 파일 필요 / 또는 웹 초대 화면에 [앱에서 열기]), 여행 중 화면 켜두기, 지도 조각을 앱 파일로 넉넉히
 - **3차 (완료, 2026-11-06)**: AI 일정 짜기 §7-7-6. migration_012 + plan-itinerary 함수 배포 필요
 - (참고: 처음 합의 메모) **3차: 일정 자동 짜기**(AI, 검색 없음)
   - 입력: 후보 장소(이름·카테고리·지역 묶음·숙소에서 도보 분·영업시간 요약·찜 수), 날짜·숙소·이미 있는 일정(고정), 자유 문구 200자("화요일은 USJ"), 시작·끝 시간, 페이스, 식사 자리, 후보 범위(찜 우선 / 카테고리 / 안 간 곳만)

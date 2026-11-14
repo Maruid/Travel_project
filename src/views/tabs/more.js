@@ -11,6 +11,7 @@ import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 import { openPlaceImport, openShareCodes } from '../place-import.js';
 import { canInstall, promptInstall, isIOS, screenInfo, SCREEN_LABEL } from '../../lib/install.js';
 import { isStandalone } from '../../lib/back-nav.js';
+import { canShare, shareContent, isApp, isAndroid, APK_URL } from '../../lib/native.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -45,7 +46,7 @@ export function mount(root, store) {
           <div class="flex gap-1.5">
             <input readonly class="input font-mono text-[10px]" value="${inviteUrl() || '불러오는 중...'}">
             <button data-action="copy-invite" class="btn-ghost flex-shrink-0">복사</button>
-            ${navigator.share ? html`<button data-action="share-invite" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
+            ${canShare() ? html`<button data-action="share-invite" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
           </div>
           ${owner ? html`<button data-action="regen" class="text-[10px] text-amber-300 underline">링크 재발급 (기존 링크는 더 이상 동작하지 않음)</button>` : ''}
         </section>
@@ -62,7 +63,7 @@ export function mount(root, store) {
             <div class="flex gap-1.5">
               <input readonly class="input font-mono text-[10px]" value="${viewUrl()}">
               <button data-action="copy-view" class="btn-ghost flex-shrink-0">복사</button>
-              ${navigator.share ? html`<button data-action="share-view" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
+              ${canShare() ? html`<button data-action="share-view" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
             </div>
             ${owner ? html`<button data-action="view-regen" class="text-[10px] text-amber-300 underline">링크 다시 만들기 (기존 링크는 더 이상 열리지 않음)</button>` : ''}`
           : owner ? '' : html`<p class="text-[10px] text-slate-500">여행 관리자(owner)가 켤 수 있어요.</p>`}
@@ -81,7 +82,7 @@ export function mount(root, store) {
                 ${m.role === 'owner' ? html`<span class="text-[9px] px-1.5 rounded bg-amber-500/20 text-amber-300 font-bold">owner</span>` : ''}
                 ${m.id === me?.id ? html`<span class="text-[9px] px-1.5 rounded bg-neon-cyan/20 text-neon-cyan font-bold">나</span>` : ''}
                 ${store.deviceCount(m.id) === 0 ? html`<span class="text-[9px] text-slate-500">미연결</span>`
-                  : store.deviceCount(m.id) > 1 ? html`<span class="text-[9px] text-slate-400"><i class="fa-solid fa-laptop-mobile"></i> ${store.deviceCount(m.id)}대</span>` : ''}
+                  : store.deviceCount(m.id) > 1 ? html`<span class="text-[9px] text-slate-400"><i class="fa-solid fa-mobile-screen-button"></i> ${store.deviceCount(m.id)}대</span>` : ''}
               </div>
               <div class="flex gap-1">
                 ${m.id === me?.id ? html`<button data-action="rename" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-300">이름 변경</button>` : ''}
@@ -175,7 +176,13 @@ export function mount(root, store) {
 
         ${groupTitle('앱')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
-          ${isStandalone() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>설치된 앱으로 쓰고 있어요.</p>`
+          ${isApp() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>안드로이드 앱으로 쓰고 있어요.</p>
+              <p class="text-[10px] text-slate-500">화면은 웹을 고치면 자동으로 받아요. 앱 자체 업데이트가 필요하면 아래쪽에 안내가 떠요.</p>`
+            : isAndroid() ? html`<button data-action="get-apk" class="btn-primary w-full"><i class="fa-solid fa-download mr-1"></i>안드로이드 앱 받기 (APK)</button>
+                <p class="text-[10px] text-slate-500 leading-relaxed">스토어 없이 설치하는 앱이에요. 받은 뒤 알림을 눌러 설치하고, 처음 한 번 "출처를 알 수 없는 앱 설치"를 허용해 주세요. 앱은 크롬과 저장 공간이 따로라, 앱에서 Google 로그인 또는 기기 추가 코드로 이어서 쓰면 돼요.</p>
+                ${isStandalone() ? html`<p class="text-[10px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>지금은 설치형 웹 앱으로 쓰고 있어요.</p>`
+                  : canInstall() ? html`<button data-action="install" class="btn-ghost w-full py-2"><i class="fa-solid fa-mobile-screen-button mr-1"></i>웹 앱으로 설치</button>` : ''}`
+            : isStandalone() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>설치된 앱으로 쓰고 있어요.</p>`
             : canInstall() ? html`<button data-action="install" class="btn-primary w-full"><i class="fa-solid fa-mobile-screen-button mr-1"></i>앱으로 설치</button>
                 <p class="text-[10px] text-slate-500">주소창 없이 넓게 쓰고, 홈 화면 아이콘으로 바로 열려요.</p>`
             : isIOS() ? html`<p class="text-[10px] text-slate-400">Safari 아래 공유 버튼 → "홈 화면에 추가"로 앱처럼 쓸 수 있어요.</p>`
@@ -210,6 +217,7 @@ export function mount(root, store) {
       if (r === 'accepted') toast('설치했어요. 홈 화면의 앱 아이콘으로 열어 주세요.');
       update();
     },
+    'get-apk': () => { location.href = APK_URL; },
     'screen-info': () => {
       const info = screenInfo();
       const text = Object.entries(info).map(([k, v]) => `${SCREEN_LABEL[k]}: ${v}`).join('\n');
@@ -223,10 +231,10 @@ export function mount(root, store) {
       (el) => delegate(el, { 'copy-info': () => copyText(text, '화면 정보') }));
     },
     'copy-view': () => viewUrl() && copyText(viewUrl(), '보기 전용 링크'),
-    'share-view': () => navigator.share?.({ title: `${store.trip.title} 일정`, url: viewUrl() }).catch(() => {}),
+    'share-view': () => shareContent({ title: `${store.trip.title} 일정`, url: viewUrl() }),
     'view-toggle': (el) => setViewLink(el.checked, false, el),
     'view-regen': () => confirmAction('새 링크를 만들면 지금 링크로는 더 이상 볼 수 없어요. 계속할까요?') && setViewLink(true, true),
-    'share-invite': () => navigator.share?.({ title: store.trip.title, url: inviteUrl() }).catch(() => {}),
+    'share-invite': () => shareContent({ title: store.trip.title, url: inviteUrl() }),
     regen: () => confirmAction('링크를 재발급하면 기존 링크로는 더 이상 참여할 수 없습니다. 계속할까요?')
       && run(() => rpc('regenerate_invite', { p_trip: store.tripId }), '새 링크를 발급했습니다.'),
     rename: () => {

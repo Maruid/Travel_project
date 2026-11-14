@@ -70,7 +70,7 @@ export async function render(app) {
   const user = await getUser();
 
   const header = html`
-    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center justify-between" style="padding-top:calc(0.75rem + env(safe-area-inset-top))">
+    <header class="px-4 py-3 glass-nav sticky top-0 z-40 flex items-center justify-between" style="padding-top:calc(0.75rem + var(--sat))">
       <div class="flex items-center gap-2">
         <button data-action="home" class="w-7 h-7 text-slate-400"><i class="fa-solid fa-chevron-left"></i></button>
         <h1 class="text-sm font-black text-white">관리자</h1>
@@ -83,6 +83,18 @@ export async function render(app) {
     login: () => signInWithGoogle().catch((e) => toast(errorText(e), 'error')),
     logout: async () => { await signOut(); navigate('/'); },
   };
+
+  // 오프라인(또는 로그인 확인 전)이면 로그인을 요구하지 않고 안내만 — 관리자 화면은 서버 데이터만 다룸
+  if (!navigator.onLine || user?.offline) {
+    setHTML(app, html`${header}
+      <main class="p-6 text-center space-y-3 mt-10">
+        <i class="fa-solid fa-plane text-3xl text-amber-300"></i>
+        <p class="text-sm text-slate-300">관리자 화면은 인터넷에 연결된 상태에서만 쓸 수 있어요.</p>
+        <p class="text-[10px] text-slate-500">${navigator.onLine ? '로그인 상태를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.' : '연결된 뒤 다시 시도해 주세요.'}</p>
+        <button data-action="retry" class="btn-ghost">다시 시도</button>
+      </main>`);
+    return { cleanup: delegate(app, { ...actions, retry: () => location.reload() }) };
+  }
 
   // 익명 세션이면 Google 로그인 요구
   if (!user || isAnonymous(user)) {

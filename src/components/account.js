@@ -1,5 +1,5 @@
 import { html, delegate, formValues, $ } from '../lib/dom.js';
-import { openSheet, closeSheet, toast, confirmAction } from './ui.js';
+import { openSheet, toast, confirmAction } from './ui.js';
 import { getUser, isAnonymous, signInWithGoogle, linkGoogle, signOut, pendingChanges } from '../lib/auth.js';
 import { rpc, errorText } from '../lib/supabase.js';
 import { navigate } from '../router.js';
@@ -10,8 +10,13 @@ import { navigate } from '../router.js';
 //  - 로그인 안 하는 사람은 "기기 추가 코드"로 다른 기기를 같은 멤버로 연결
 // =====================================================================
 
-export async function accountChip() {
-  const user = await getUser();
+// user: getUser() 결과 (offline: 서버 확인을 못 한 마지막 사용자)
+export function accountChip(user) {
+  if (user?.offline) {
+    const label = navigator.onLine ? '연결 확인 중' : '오프라인';
+    return html`<button data-action="account-offline" class="text-[10px] px-2 py-1 rounded-lg glass-card text-amber-300 max-w-48 truncate">
+      <i class="fa-solid ${navigator.onLine ? 'fa-rotate' : 'fa-plane'} mr-1"></i>${user.email && !isAnonymous(user) ? `${user.email} · ` : ''}${label}</button>`;
+  }
   if (!user || isAnonymous(user)) {
     return html`<button data-action="account-login" class="text-[10px] px-2 py-1 rounded-lg glass-card text-slate-300">
       <i class="fa-brands fa-google mr-1 text-neon-cyan"></i>로그인</button>`;
@@ -24,7 +29,9 @@ export async function accountChip() {
 //  - 이 기기에서 쓰던 기록이 없으면: 바로 로그인
 //  - 기록이 있으면: "이 기기 기록을 Google 에 연결" vs "이미 쓰던 Google 계정으로 로그인" 선택
 export async function startGoogleLogin({ hasLocalTrips = false } = {}) {
+  if (!navigator.onLine) { toast('인터넷에 연결된 뒤 로그인할 수 있어요.'); return; }
   const user = await getUser();
+  if (user?.offline) { toast('로그인 상태를 확인하는 중이에요. 잠시 후 다시 눌러 주세요.'); return; }
   if (!user || !isAnonymous(user) || !hasLocalTrips) {
     return signInWithGoogle().catch((e) => toast(errorText(e), 'error'));
   }
@@ -60,7 +67,6 @@ export function openAccountMenu(user) {
         : '로그아웃할까요? 이 기기에 저장된 여행 데이터도 함께 지워집니다.';
       if (!confirmAction(msg)) return;
       await signOut();
-      closeSheet();
       toast('로그아웃했습니다.');
       navigate('/', { replace: true });
     },
@@ -87,9 +93,8 @@ export function openDeviceCodeEntry() {
       btn.disabled = true;
       try {
         const tripId = await rpc('redeem_device_code', { p_code: code });
-        closeSheet();
         toast('이 기기를 연결했습니다.');
-        navigate(`/trip/${tripId}/places`);
+        navigate(`/trip/${tripId}/places`);   // 시트는 이동과 함께 닫힘 (closeSheet 를 먼저 부르면 뒤로가기가 이동을 되돌림)
       } catch (err) {
         toast(errorText(err), 'error');
         btn.disabled = false;

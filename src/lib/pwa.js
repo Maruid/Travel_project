@@ -1,6 +1,7 @@
 import { registerSW } from 'virtual:pwa-register';
 import { html, setHTML } from './dom.js';
 import { toast } from '../components/ui.js';
+import { isApp } from './native.js';
 
 // =====================================================================
 // Service Worker 등록 + 새 버전 알림
@@ -12,7 +13,8 @@ import { toast } from '../components/ui.js';
 const CHECK_INTERVAL = 60 * 60 * 1000;   // 열어둔 상태에서는 1시간마다 확인
 
 export function setupPWA() {
-  if (!('serviceWorker' in navigator)) return;
+  // 안드로이드 앱은 서비스 워커 없이 화면 묶음 업데이트(lib/native.js)를 씀
+  if (import.meta.env.VITE_APP === '1' || isApp() || !('serviceWorker' in navigator)) return;
 
   const updateSW = registerSW({
     immediate: true,
@@ -36,20 +38,26 @@ export function setupPWA() {
 }
 
 function showUpdateBanner(onReload) {
+  showUpdateBar({ text: '새 버전이 있어요.', action: '새로고침', run: onReload });
+}
+
+// 아래쪽 안내 띠 (웹: 새 버전 / 앱: 새 화면 묶음 · 앱 업데이트 안내)
+export function showUpdateBar({ text, action, run }) {
   let el = document.getElementById('update-banner');
   if (!el) {
     el = document.createElement('div');
     el.id = 'update-banner';
-    el.className = 'fixed left-0 right-0 bottom-20 max-w-md mx-auto px-3 z-[55]';
+    el.className = 'fixed left-0 right-0 max-w-md mx-auto px-3 z-[55]';
+    el.style.bottom = 'calc(5rem + var(--sab))';
     document.body.appendChild(el);
   }
   setHTML(el, html`
     <div class="glass-card bg-night-950/95 border border-neon-cyan/50 rounded-2xl px-3 py-2.5 flex items-center gap-2 shadow-2xl">
       <i class="fa-solid fa-rotate text-neon-cyan"></i>
-      <span class="flex-1 text-xs text-slate-200">새 버전이 있어요.</span>
+      <span class="flex-1 text-xs text-slate-200">${text}</span>
       <button data-later class="text-[11px] text-slate-400 px-2">나중에</button>
-      <button data-reload class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 text-[11px] font-black">새로고침</button>
+      <button data-reload class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 text-[11px] font-black">${action}</button>
     </div>`);
-  el.querySelector('[data-reload]').onclick = () => { el.remove(); onReload(); };
+  el.querySelector('[data-reload]').onclick = () => { el.remove(); run(); };
   el.querySelector('[data-later]').onclick = () => el.remove();
 }

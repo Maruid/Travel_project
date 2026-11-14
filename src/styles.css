@@ -4,6 +4,26 @@
 @import "@fortawesome/fontawesome-free/css/solid.min.css";
 /* 지도 CSS(leaflet, maplibre)는 components/map.js 에서 장소 탭을 열 때만 불러옴 */
 
+/* 글꼴 내장 (웹 · 앱 공통, Google Fonts 서버 안 씀 → 오프라인에서도 처음부터 같은 글꼴)
+   - Noto Sans KR: 가변 글꼴 하나(굵기 100~900), 한글 11,172자 + 자모 + 영문 · 숫자 · 기호 · ①② 등 (약 1.1MB)
+     일본어 · 한자 등 그 밖의 글자는 기기 기본 글꼴로 보임
+   - Outfit(숫자): 영문 · 숫자만 (약 33KB)
+   - 만드는 방법: docs/APP_GUIDE.md "글꼴" */
+@font-face {
+  font-family: "Noto Sans KR";
+  src: url("./fonts/noto-sans-kr.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Outfit";
+  src: url("./fonts/outfit.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* 기존 index.html 의 tailwind.config 를 v4 @theme 로 이전 */
 @theme {
   --color-night-950: #060911;
@@ -132,5 +152,10 @@
 html, body { overflow-x: clip; }
 
 /* PC 크롬은 기본 선택 상자의 펼침 목록 · 날짜 선택 · 스크롤바를 이 값으로 그림 → 흰 바탕에 흰 글씨 방지 */
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  /* 화면 가장자리 여백: 안드로이드 앱(Capacitor)은 --safe-area-inset-* 를 넣어 주고, 웹은 env() */
+  --sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
 select option { background-color: #1e293b; color: #f1f5f9; }

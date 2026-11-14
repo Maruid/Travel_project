@@ -4,3 +4,10 @@ dist
 .env
 .DS_Store
 supabase/.temp
+
+# 안드로이드 앱: 빌드 결과 · 서명 키 (키는 GitHub Secrets 에만)
+dist-app/
+*.jks
+*.keystore
+*.p12
+travel-release.base64.txt

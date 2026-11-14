@@ -6,6 +6,7 @@ import { spinner, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
 import { tripProgress } from '../lib/format.js';
 import { backToHome } from '../lib/back-nav.js';
+import { whenIdle, markOpen, markClosed } from '../lib/prefetch.js';
 
 const TABS = [
   { key: 'places',   label: '장소',   icon: 'fa-map-location-dot', load: () => import('./tabs/places.js') },
@@ -22,6 +23,9 @@ export async function render(app, params) {
   let user;
   try { user = await ensureUser(); } catch (e) { toast(errorText(e), 'error'); }
 
+  // 자동 미리 받기가 이 여행을 받는 중이면 끝날 때까지 기다림 (보낼 변경 목록을 두 곳에서 고치지 않게)
+  markOpen(params.id);
+  await whenIdle(params.id);
   const store = new TripStore(params.id, user?.id);
   try {
     await store.start();
@@ -29,9 +33,13 @@ export async function render(app, params) {
     toast(errorText(e), 'error');
   }
   if (!store.trip) {
+    // 오프라인 · 로그인 확인 전이면 "볼 수 없음"이 아니라 아직 못 받은 것
+    const notYet = !navigator.onLine || store.status === 'offline';
     setHTML(app, html`<main class="p-6 text-center mt-20 space-y-3">
-      <p class="text-sm text-slate-300">이 여행을 볼 수 없습니다. 초대 링크로 다시 참여해 주세요.</p>
+      <p class="text-sm text-slate-300">${notYet ? '이 여행은 이 기기에 아직 저장되지 않았어요.' : '이 여행을 볼 수 없습니다. 초대 링크로 다시 참여해 주세요.'}</p>
+      ${notYet ? html`<p class="text-[11px] text-slate-500">인터넷에 연결된 뒤 다시 열어 주세요.</p>` : ''}
       <button data-action="home" class="btn-ghost">홈으로</button></main>`);
+    store.destroy(); markClosed(params.id);
     return { cleanup: delegate(app, { home: () => navigate('/') }) };
   }
 
@@ -39,7 +47,7 @@ export async function render(app, params) {
 
   setHTML(app, html`
     <!-- 한 줄 헤더: ← 이름 · D-18      [환율] ● -->
-    <header class="px-2 flex items-center gap-1 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + env(safe-area-inset-top)); padding-top:env(safe-area-inset-top)">
+    <header class="px-2 flex items-center gap-1 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + var(--sat)); padding-top:var(--sat)">
       <button data-action="home" class="w-8 h-8 rounded-lg text-slate-400 hover:text-white flex-shrink-0"><i class="fa-solid fa-chevron-left"></i></button>
       <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
         <span id="trip-title"></span><span id="trip-sub" class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan"></span></h1>
@@ -48,8 +56,8 @@ export async function render(app, params) {
         <span id="sync-dot-c" class="w-2.5 h-2.5 rounded-full"></span><span id="sync-count" class="text-[10px] font-mono font-bold text-amber-300"></span>
       </button>
     </header>
-    <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + env(safe-area-inset-bottom))"></section>
-    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + env(safe-area-inset-bottom)); padding-bottom:env(safe-area-inset-bottom)">
+    <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + var(--sab))"></section>
+    <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + var(--sab)); padding-bottom:var(--sab)">
       ${TABS.map((t) => html`
         <button data-action="tab" data-tab="${t.key}" class="tab-btn flex flex-col items-center gap-0.5 py-1 text-slate-400 transition">
           <i class="fa-solid ${t.icon} text-base"></i><span class="text-[10px]">${t.label}</span>
@@ -126,6 +134,7 @@ export async function render(app, params) {
       off(); unsub();
       active?.instance?.destroy?.();
       store.destroy();
+      markClosed(params.id);
     },
   };
 }

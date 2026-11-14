@@ -1,5 +1,6 @@
 import { supabase } from './supabase.js';
 import { APP_URL } from '../config.js';
+import { isApp, appSignIn } from './native.js';
 
 const RETURN_KEY = 'auth:returnTo';
 const LAST_USER_KEY = 'auth:lastUser';
@@ -14,33 +15,91 @@ function lastKnownUser() {
   try { return JSON.parse(localStorage.getItem(LAST_USER_KEY) || 'null'); } catch { return null; }
 }
 
-export async function getUser() {
+// ---------------------------------------------------------------------
+// 로그인 확인은 최대 3초만 기다림
+//  - 토큰(1시간)이 만료된 채 인터넷이 안 되면 supabase-js 가 갱신을 약 25초 동안 재시도하고,
+//    그동안 getSession() 이 끝나지 않음 → 화면이 오래 멈춤
+//  - 확인이 안 돼도 기기에 로그인 정보(갱신용 토큰)가 남아 있으면 그 사용자로 동작 ({ offline: true })
+// ---------------------------------------------------------------------
+const SESSION_TIMEOUT = 3000;
+const TIMEOUT = Symbol('timeout');
+const withTimeout = (p, ms) => Promise.race([
+  Promise.resolve(p).catch(() => null),
+  new Promise((r) => setTimeout(() => r(TIMEOUT), ms)),
+]);
+
+// 기기에 저장된 로그인 정보 (서버 확인 없이 읽기만)
+function storedSession() {
   try {
-    const { data } = await supabase.auth.getSession();
-    const user = data.session?.user ?? null;
-    if (user) rememberUser(user);
-    return user;
-  } catch {
-    return null;
-  }
+    const v = JSON.parse(localStorage.getItem(supabase.auth.storageKey) || 'null');
+    const s = v?.currentSession ?? v;   // 아주 옛 형식 대비
+    return s?.refresh_token ? s : null;
+  } catch { return null; }
+}
+export const hasStoredSession = () => !!storedSession();
+
+function unverifiedUser(stored) {
+  const u = stored?.user || lastKnownUser();
+  return u?.id ? { id: u.id, is_anonymous: !!u.is_anonymous, email: u.email ?? null, offline: true } : null;
+}
+
+// 반환: 확인된 사용자 · 확인 못 한 사용자({ offline: true }) · null(로그인 정보 없음)
+export async function getUser({ timeout = SESSION_TIMEOUT } = {}) {
+  if (!navigator.onLine) return unverifiedUser(storedSession());
+  const r = await withTimeout(supabase.auth.getSession(), timeout);
+  const user = r !== TIMEOUT ? r?.data?.session?.user ?? null : null;
+  if (user) { rememberUser(user); return user; }
+  // 확인 실패(시간 초과 · 일시적 갱신 실패) → 기기에 남아 있으면 그 사용자로. 서버가 거절해 지워졌으면 null
+  return unverifiedUser(storedSession());
+}
+
+// 서버에 "내 이름으로" 보낼 수 있는 상태인지 (유효한 토큰이 있음)
+//  - 재연결 직후 토큰 갱신 전에 보내면 권한 없음으로 거절되고, 예전엔 그 변경을 버렸음 → 보내기 전에 확인
+export async function sessionReady(timeout = SESSION_TIMEOUT) {
+  if (!navigator.onLine) return false;
+  const r = await withTimeout(supabase.auth.getSession(), timeout);
+  const s = r !== TIMEOUT ? r?.data?.session : null;
+  return !!s?.access_token && (s.expires_at ?? 0) * 1000 > Date.now();
 }
 
 // 링크 참여/일반 사용: 세션이 없으면 조용히 익명 로그인
-// 오프라인이면 새로 로그인할 수 없으므로 마지막으로 확인된 사용자로 동작 (읽기 + 변경 큐 쌓기)
+//  - 기기에 로그인 정보가 남아 있으면 절대 새 익명 계정을 만들지 않음 (만들면 이 기기의 참여 기록을 잃음)
+//  - 오프라인이면 마지막으로 확인된 사용자로 동작 (읽기 + 변경 큐 쌓기)
 export async function ensureUser() {
   const existing = await getUser();
   if (existing) return existing;
-
-  const last = lastKnownUser();
-  if (!navigator.onLine && last) return { ...last, offline: true };
+  if (!navigator.onLine) throw new Error('OFFLINE');
 
   const { data, error } = await supabase.auth.signInAnonymously();
-  if (error) {
-    if (last) return { ...last, offline: true };
-    throw error;
-  }
+  if (error) throw error;
   rememberUser(data.user);
   return data.user;
+}
+
+// ---------------------------------------------------------------------
+// 연결 상태에 맞춘 토큰 자동 갱신
+//  - 오프라인: 멈춤 (비행기 모드에서 30초마다 25초짜리 재시도가 도는 것 방지 → 배터리)
+//  - 다시 연결: 직전 실패 기억(60초 동안 재시도 안 함)을 지우고 바로 갱신
+//  - 한 번 직접 관리하기 시작하면 라이브러리의 화면 전환 처리 대신 아래가 담당
+// ---------------------------------------------------------------------
+export function setupAuthConnection() {
+  const auth = supabase.auth;
+  let managed = false;
+  const apply = () => {
+    if (navigator.onLine && document.visibilityState === 'visible') {
+      if ('lastRefreshFailure' in auth) auth.lastRefreshFailure = null;
+      auth.startAutoRefresh().catch(() => {});
+    } else {
+      auth.stopAutoRefresh().catch(() => {});
+    }
+  };
+  const take = () => { managed = true; apply(); };
+  window.addEventListener('online', take);
+  window.addEventListener('offline', take);
+  document.addEventListener('visibilitychange', () => { if (managed) apply(); });
+  if (!navigator.onLine) take();
+  // 시작 처리(initialize)가 끝난 뒤에도 오프라인이면 다시 멈춤 (그 사이 라이브러리가 다시 켰을 수 있음)
+  auth.initializePromise?.then(() => { if (managed) apply(); }).catch(() => {});
 }
 
 // 로그아웃 시 보관 정보도 정리
@@ -65,6 +124,7 @@ export function consumeReturn() {
 
 // 관리자 로그인 (익명 세션이 있으면 대체됨)
 export async function signInWithGoogle() {
+  if (isApp()) return appSignIn(supabase);   // 앱: 크롬 탭 → io.github.maruid.travel://login 으로 복귀
   rememberReturn();
   const { error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
@@ -76,6 +136,7 @@ export async function signInWithGoogle() {
 // 익명 계정에 Google 계정 연결 → 브라우저 데이터를 지워도 owner 권한 유지
 // Supabase 대시보드에서 "Manual linking" 을 켜야 동작
 export async function linkGoogle() {
+  if (isApp()) return appSignIn(supabase, { link: true });
   rememberReturn();
   const { error } = await supabase.auth.linkIdentity({
     provider: 'google',
@@ -101,7 +162,8 @@ export async function signOut() {
   const keys = [];
   for (let i = 0; i < localStorage.length; i++) {
     const k = localStorage.key(i);
-    if (k?.startsWith('trip-cache:v1:') || k?.startsWith('trip-outbox:v1:') || k === LAST_USER_KEY) keys.push(k);
+    if (k?.startsWith('trip-cache:v1:') || k?.startsWith('trip-outbox:v1:') || k?.startsWith('trips-list:v1:')
+      || k === 'trip-sync-index:v1' || k?.startsWith('ai-plan-undo:v1:') || k === LAST_USER_KEY) keys.push(k);
   }
   keys.forEach((k) => { try { localStorage.removeItem(k); } catch {} });
 }

@@ -1,5 +1,9 @@
 import { MAP_STYLE } from '../config.js';
 import { planTiles } from './tile-plan.js';
+import { useAppMapCache, cachedFetch } from './map-cache.js';
+
+// 앱: 기기 저장소에 직접 저장 / 웹: 그냥 받으면 Service Worker 가 map-tiles 캐시에 저장
+const get = (url) => (useAppMapCache() ? cachedFetch(url) : fetch(url));
 
 const CONCURRENCY = 6;
 
@@ -11,11 +15,11 @@ const CONCURRENCY = 6;
 // =====================================================================
 
 async function tileTemplate() {
-  const style = await (await fetch(MAP_STYLE)).json();
+  const style = await (await get(MAP_STYLE)).json();
   const src = Object.values(style.sources || {}).find((s) => s.type === 'vector');
   if (!src) throw new Error('지도 스타일에서 타일 정보를 찾지 못했습니다.');
   if (src.tiles?.length) return { template: src.tiles[0], maxzoom: src.maxzoom ?? 14 };
-  const tj = await (await fetch(src.url)).json();
+  const tj = await (await get(src.url)).json();
   return { template: tj.tiles[0], maxzoom: tj.maxzoom ?? 14 };
 }
 
@@ -24,7 +28,7 @@ async function tileTemplate() {
  * @param {(done:number,total:number)=>void} onProgress
  */
 export async function downloadTripMap(points, onProgress = () => {}) {
-  if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
+  if (!useAppMapCache() && (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller)) {
     throw new Error('앱을 한 번 새로고침한 뒤 다시 시도해 주세요. (오프라인 저장소 준비 중)');
   }
   const { template, maxzoom } = await tileTemplate();
@@ -38,7 +42,7 @@ export async function downloadTripMap(points, onProgress = () => {}) {
       const [z, x, y] = tiles[i++];
       const url = template.replace('{z}', z).replace('{x}', x).replace('{y}', y);
       try {
-        const res = await fetch(url);   // Service Worker 가 가로채 map-tiles 캐시에 저장
+        const res = await get(url);   // 웹: Service Worker 가 map-tiles 캐시에 저장 / 앱: map-cache.js 가 저장
         if (!res.ok) failed++;
       } catch { failed++; }
       onProgress(++done, tiles.length);

@@ -1,0 +1,26 @@
+{
+  "appId": "io.github.maruid.travel",
+  "appName": "여행",
+  "webDir": "dist-app",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "localhost"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": false
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "appReadyTimeout": 15000,
+      "resetWhenUpdate": true,
+      "autoDeleteFailed": true,
+      "autoDeletePrevious": true
+    },
+    "SystemBars": {
+      "insetsHandling": "css"
+    }
+  }
+}

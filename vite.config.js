@@ -4,11 +4,23 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 // GitHub Pages 는 https://<user>.github.io/<repo>/ 로 서비스되므로 base 경로가 필요합니다.
 // deploy.yml 에서 VITE_BASE=/<repo>/ 를 넘겨주고, 로컬 개발은 '/' 로 동작합니다.
+// 안드로이드 앱용 빌드(VITE_APP=1, npm run build:app): 서비스 워커 없음 (앱 안에 화면 파일이 들어 있고,
+// 지도 오프라인 저장은 lib/map-cache.js 가 직접 함). 웹 빌드는 그대로 PWA
+const IS_APP = process.env.VITE_APP === '1';
+
+// 앱 빌드에서는 PWA 플러그인이 없으므로 등록 모듈을 빈 함수로 대신함
+const noPwa = {
+  name: 'travel-no-pwa',
+  resolveId: (id) => (id === 'virtual:pwa-register' ? '\0no-pwa' : null),
+  load: (id) => (id === '\0no-pwa' ? 'export const registerSW = () => () => {};' : null),
+};
+
 export default defineConfig({
   base: process.env.VITE_BASE || '/',
   plugins: [
     tailwindcss(),
-    VitePWA({
+    IS_APP && noPwa,
+    !IS_APP && VitePWA({
       // 새 버전이 배포되면 바로 갈아끼우지 않고, 앱에서 "새로고침" 안내를 띄움 (입력 중 데이터 보호)
       registerType: 'prompt',
       injectRegister: false,          // 등록은 src/lib/pwa.js 에서 직접
@@ -58,20 +70,7 @@ export default defineConfig({
               cacheableResponse: { statuses: [0, 200] },
             },
           },
-          {
-            urlPattern: ({ url }) => url.hostname === 'fonts.googleapis.com',
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'google-fonts-css' },
-          },
-          {
-            urlPattern: ({ url }) => url.hostname === 'fonts.gstatic.com',
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'google-fonts-files',
-              expiration: { maxEntries: 40, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
+          // 글꼴은 빌드에 들어 있어 위 globPatterns(woff2)로 미리 캐시됨 (Google Fonts 안 씀)
           // Supabase API 는 캐시하지 않음: 데이터 오프라인 처리는 TripStore(localStorage + outbox)가 담당
         ],
       },

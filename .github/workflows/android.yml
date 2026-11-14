@@ -1,0 +1,103 @@
+name: Android APK
+
+# 안드로이드 앱(APK) 빌드 → 서명 → GitHub Releases 에 travel.apk 로 올림
+#   실행: Actions → Android APK → Run workflow  (또는 app-v1.2.0 같은 태그 push)
+#   필요한 Secrets: ANDROID_KEYSTORE_BASE64 · ANDROID_KEYSTORE_PASSWORD · ANDROID_KEY_ALIAS · ANDROID_KEY_PASSWORD
+#   받는 주소(항상 최신): https://github.com/<owner>/<repo>/releases/latest/download/travel.apk
+on:
+  push:
+    tags: ['app-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: false
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+      - name: 앱 기본 화면 묶음 (APK 안에 들어감)
+        run: |
+          export VITE_APP_BUNDLE="${GITHUB_SHA::12}"
+          npm run build:app
+        env:
+          VITE_BASE: /
+          VITE_APP: '1'
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools   # 기본값 'tools' 는 SDK 저장소에서 없어져 실패함
+      - name: 안드로이드 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Capacitor 동기화
+        run: npx cap sync android
+
+      - name: 서명 키
+        run: |
+          if [ -z "$KS" ] || [ -z "$KSP" ] || [ -z "$ALIAS" ] || [ -z "$KP" ]; then
+            echo "::error::Settings → Secrets and variables → Actions → Secrets 에 ANDROID_KEYSTORE_BASE64 · ANDROID_KEYSTORE_PASSWORD · ANDROID_KEY_ALIAS · ANDROID_KEY_PASSWORD 를 등록하세요 (docs/APP_GUIDE.md)"
+            exit 1
+          fi
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.p12"
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KSP: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KP: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: 버전
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then
+            NAME="${GITHUB_REF#refs/tags/app-v}"; TAG="${GITHUB_REF#refs/tags/}"
+          else
+            NAME="1.0.${{ github.run_number }}"; TAG="app-v${NAME}"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: APK 빌드
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          APP_VERSION_CODE: ${{ github.run_number }}
+          APP_VERSION_NAME: ${{ steps.ver.outputs.name }}
+
+      - name: Releases 에 올리기
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk travel.apk
+          gh release create "${{ steps.ver.outputs.tag }}" travel.apk \
+            --target "$GITHUB_SHA" --latest \
+            --title "여행 앱 ${{ steps.ver.outputs.name }}" \
+            --notes "안드로이드 앱 ${{ steps.ver.outputs.name }} (빌드 ${{ github.run_number }}). 휴대폰에서 travel.apk 를 받아 설치하세요."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: 서명 키 지우기
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.p12"
