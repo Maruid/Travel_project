@@ -6,7 +6,7 @@ let toastTimer;
 export function toast(msg, kind = 'info') {
   const el = document.getElementById('toast');
   const icon = kind === 'error' ? 'fa-circle-exclamation text-rose-400' : 'fa-circle-check text-neon-cyan';
-  setHTML(el, html`<span class="flex items-center gap-2"><i class="fa-solid ${icon}"></i><span>${msg}</span></span>`);
+  setHTML(el, html`<span class="flex items-start gap-2"><i class="fa-solid ${icon} mt-0.5 flex-shrink-0"></i><span class="min-w-0 break-keep">${msg}</span></span>`);
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
   // 긴 안내 문구는 더 오래 보여줌

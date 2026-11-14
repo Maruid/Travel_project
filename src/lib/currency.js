@@ -66,6 +66,11 @@ export function currencyLabel(code) {
   const info = CURRENCY_INFO[code];
   return info ? `${info[0]} - ${info[1]} (${code})` : code;
 }
+// 좁은 칸용 (지출 입력의 통화 등): "엔 (JPY)"
+export function currencyShort(code) {
+  const info = CURRENCY_INFO[code];
+  return info ? `${info[1]} (${code})` : code;
+}
 
 // <option> 목록
 //  - 지원 목록에 없어도 정상 코드(영문 3글자)면 맨 앞에 유지
@@ -74,5 +79,5 @@ export function currencyOptions(selected, extra = [], fallback = null) {
   if (!isCurrencyCode(selected)) selected = isCurrencyCode(fallback) ? fallback : null;
   const keep = selected && !CURRENCY_INFO[selected] ? [selected] : [];
   const codes = [...new Set([...extra.filter(isCurrencyCode), ...keep, ...CURRENCIES])];
-  return codes.map((c) => ({ code: c, label: currencyLabel(c), selected: c === selected }));
+  return codes.map((c) => ({ code: c, label: currencyLabel(c), short: currencyShort(c), selected: c === selected }));
 }

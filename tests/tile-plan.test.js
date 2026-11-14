@@ -26,3 +26,15 @@ test('여러 나라에 흩어진 장소는 최대 줌을 낮춰 한도를 지킨
 test('좌표가 없으면 빈 계획', () => {
   assert.deepEqual(planTiles([{ lat: null, lng: null }]), { tiles: [], maxZoom: 0 });
 });
+
+test('앱은 더 넉넉하게: 장수 한도 · 주변 범위', async () => {
+  const { planTiles, MAX_TILES, APP_MAX_TILES } = await import('../src/lib/tile-plan.js');
+  // 여러 도시에 흩어진 장소 → 웹 한도에서는 최대 줌이 내려가는데, 앱 한도에서는 더 높은 줌까지
+  const pts = [[34.67, 135.50], [35.01, 135.77], [34.69, 135.19], [34.68, 135.83], [35.18, 136.90], [34.97, 138.38]].map(([lat, lng]) => ({ lat, lng }));
+  const web = planTiles(pts);
+  const app = planTiles(pts, 14, { maxTiles: APP_MAX_TILES, pad: 0.03 });
+  assert.ok(web.tiles.length <= MAX_TILES);
+  assert.ok(app.tiles.length <= APP_MAX_TILES);
+  assert.ok(app.maxZoom >= web.maxZoom);
+  assert.ok(app.tiles.length > web.tiles.length);
+});

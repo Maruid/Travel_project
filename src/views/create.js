@@ -35,7 +35,7 @@ export async function render(app) {
         </div>
         <div><label class="label">현지 시간대 (일정 시간 기준)</label>
           <select name="tz" class="input">${TIMEZONES.map((z) => html`<option ${z === localTz ? 'selected' : ''}>${z}</option>`)}</select></div>
-        <div class="grid grid-cols-2 gap-2">
+        <div class="grid grid-cols-1 gap-2">
           <div><label class="label">내 통화</label>
             <select name="home" class="input">${currencyOptions('KRW').map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`)}</select></div>
           <div><label class="label">현지 통화</label>

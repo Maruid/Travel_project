@@ -23,7 +23,8 @@
   </div>
 
   <!-- 토스트 -->
-  <div id="toast" class="hidden fixed top-16 left-1/2 -translate-x-1/2 bg-night-950/95 text-white border border-neon-cyan/40 text-xs px-4 py-2.5 rounded-full z-[60] shadow-2xl"></div>
+  <!-- 알림: 화면 폭에 맞춰(좌우 12px) 가운데, 짧으면 글자만큼 · 길면 여러 줄 (둥근 사각형) -->
+  <div id="toast" class="hidden fixed left-3 right-3 mx-auto w-fit max-w-sm bg-night-950/95 text-white border border-neon-cyan/40 text-xs leading-snug px-4 py-2.5 rounded-2xl z-[60] shadow-2xl" style="top:calc(3.5rem + var(--sat))"></div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

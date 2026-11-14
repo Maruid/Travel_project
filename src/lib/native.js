@@ -6,9 +6,14 @@
 //   - 웹 화면 업데이트: GitHub Pages 의 app/version.json 을 보고 새 묶음을 받아 "새로고침" 때 적용
 //   - 앱 업데이트 안내: 새 웹 화면이 필요로 하는 앱 기능 버전(min_native_api)보다 앱이 낮으면 APK 받기 안내
 //   - 공유: 앱 WebView 에는 navigator.share 가 없어서 안드로이드 공유 창(@capacitor/share)
-//   - 뒤로가기: Capacitor 기본 동작(웹 기록이 있으면 뒤로, 없으면 종료)이 back-nav.js 의 기록 규칙과 그대로 맞물림
+//   - 초대 · 보기 전용 링크: 웹(안드로이드 크롬)에 [앱에서 열기] → io.github.maruid.travel://join/… 로 앱이 받음
+//   - 화면 켜두기: TravelPlugin.keepAwake (앱 기능 버전 2)
+//   - 뒤로가기: App 플러그인은 기록이 없으면 무시하므로 back-nav.js appBack 이 직접 처리 (홈에서 2초 안에 두 번 → 종료)
 // =====================================================================
 import { registerPlugin, SystemBars } from '@capacitor/core';
+import { appBack } from './back-nav.js';
+import { schemePath, appIntentUrl } from './app-link.js';
+import { html } from './dom.js';
 
 export const APP_SCHEME = 'io.github.maruid.travel';
 export const APP_LOGIN_URL = `${APP_SCHEME}://login`;
@@ -73,6 +78,46 @@ async function handleAuthUrl(url, supabase, toast) {
   return true;
 }
 
+// 앱이 받은 주소: 로그인 복귀 → 초대 · 보기 전용 링크(io.github.maruid.travel://join/… · view/…)
+async function handleAppUrl(url, supabase, toast) {
+  if (await handleAuthUrl(url, supabase, toast)) return true;
+  const path = schemePath(url);
+  if (!path) return false;
+  location.hash = `#${path}`;
+  return true;
+}
+
+// ---- 웹(안드로이드 크롬)의 [앱에서 열기] ----
+//   초대 · 보기 전용 화면 위에. 앱이 없으면 크롬이 이 화면에 그대로 남음 (fallback = 지금 주소)
+export function openInAppHtml(path, { compact = false } = {}) {
+  if (isApp() || !isAndroid()) return '';
+  const href = appIntentUrl(path, location.href);
+  if (!href) return '';
+  if (compact) {
+    return html`<a href="${href}" class="flex-shrink-0 text-[10px] px-2 py-1 rounded-full bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/40 whitespace-nowrap"><i class="fa-solid fa-mobile-screen-button mr-1"></i>앱에서 열기</a>`;
+  }
+  return html`
+    <a href="${href}" class="flex items-center gap-2.5 p-3 rounded-2xl bg-neon-cyan/10 border border-neon-cyan/40">
+      <i class="fa-solid fa-mobile-screen-button text-neon-cyan text-lg"></i>
+      <span class="flex-1 min-w-0">
+        <span class="block text-xs font-bold text-white">여행 앱이 있다면 앱에서 열기</span>
+        <span class="block text-[10px] text-slate-400">앱이 없으면 이 화면에 그대로 있어요.</span>
+      </span>
+      <i class="fa-solid fa-chevron-right text-[10px] text-neon-cyan"></i>
+    </a>`;
+}
+
+// ---- 화면 켜두기 (앱 기능 버전 2부터) ----
+const KEEP_AWAKE_KEY = 'app:keepAwake';
+export const nativeApiCached = () => nativeApi ?? 0;
+export const canKeepAwake = () => isApp() && nativeApiCached() >= 2;
+export function keepAwakeOn() { try { return localStorage.getItem(KEEP_AWAKE_KEY) === '1'; } catch { return false; } }
+export async function setKeepAwake(on) {
+  try { localStorage.setItem(KEEP_AWAKE_KEY, on ? '1' : '0'); } catch {}
+  if (!(await nativeApiLevel() >= 2)) return false;
+  try { await plugin().keepAwake({ on: !!on }); return true; } catch { return false; }
+}
+
 // ---- 웹 화면 묶음 업데이트 ----
 async function checkBundle({ showBar }) {
   if (!navigator.onLine) return;
@@ -134,12 +179,16 @@ export async function initApp({ supabase, toast, showBar, onResume = null }) {
   // 로그인 복귀 (앱이 떠 있을 때 · 꺼져 있다가 열렸을 때)
   try {
     const { App } = await import('@capacitor/app');
-    App.addListener('appUrlOpen', ({ url }) => { handleAuthUrl(url, supabase, toast); })?.catch?.(() => {});
+    App.addListener('appUrlOpen', ({ url }) => { handleAppUrl(url, supabase, toast); })?.catch?.(() => {});
+    // 뒤로가기: 플러그인 기본 동작은 기록이 없으면 아무것도 안 함 → 앱이 직접 처리 (홈에서 두 번이면 종료)
+    App.addListener('backButton', ({ canGoBack }) => appBack({ canGoBack, exit: () => App.exitApp() }))?.catch?.(() => {});
     // 앱 쪽이 답하지 않아도 시작이 멈추지 않게 2초까지만 기다림
     const launch = await Promise.race([App.getLaunchUrl().catch(() => null), new Promise((r) => setTimeout(() => r(null), 2000))]);
-    if (launch?.url) await handleAuthUrl(launch.url, supabase, toast);
+    if (launch?.url) await handleAppUrl(launch.url, supabase, toast);
     // 다시 앱으로 돌아올 때마다 업데이트 확인
     App.addListener('resume', () => { checkBundle({ showBar }); onResume?.(); })?.catch?.(() => {});
   } catch {}
+  // 앱 기능 버전을 미리 알아 둠 (설정 탭의 화면 켜두기 표시) + 켜 둔 상태면 다시 적용
+  nativeApiLevel().then((api) => { if (api >= 2 && keepAwakeOn()) plugin().keepAwake({ on: true }).catch(() => {}); });
   setTimeout(() => checkBundle({ showBar }), 4000);
 }

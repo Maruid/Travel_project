@@ -1,5 +1,5 @@
 import { MAP_STYLE } from '../config.js';
-import { planTiles } from './tile-plan.js';
+import { planTiles, APP_MAX_TILES } from './tile-plan.js';
 import { useAppMapCache, cachedFetch } from './map-cache.js';
 
 // 앱: 기기 저장소에 직접 저장 / 웹: 그냥 받으면 Service Worker 가 map-tiles 캐시에 저장
@@ -32,7 +32,9 @@ export async function downloadTripMap(points, onProgress = () => {}) {
     throw new Error('앱을 한 번 새로고침한 뒤 다시 시도해 주세요. (오프라인 저장소 준비 중)');
   }
   const { template, maxzoom } = await tileTemplate();
-  const { tiles, maxZoom } = planTiles(points, Math.min(14, maxzoom));
+  // 앱은 넉넉하게: 5,000장까지, 장소 주변 약 3km
+  const opts = useAppMapCache() ? { maxTiles: APP_MAX_TILES, pad: 0.03 } : {};
+  const { tiles, maxZoom } = planTiles(points, Math.min(14, maxzoom), opts);
   if (!tiles.length) throw new Error('위치가 등록된 장소가 없거나 범위가 너무 넓습니다.');
 
   let done = 0, failed = 0, i = 0;

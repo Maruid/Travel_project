@@ -24,11 +24,11 @@ export function mount(root, store) {
           </div>
         </div>
         <div class="flex items-center justify-between gap-2">
-          <div class="flex gap-1 overflow-x-auto no-scrollbar text-[11px]">
+          <div class="flex gap-1 overflow-x-auto no-scrollbar text-[11px] min-w-0">
             ${[['all', '전체'], ...Object.entries(KINDS)].map(([k, t]) => html`
-              <button data-action="filter" data-k="${k}" class="px-2.5 py-1 rounded-lg ${filter === k ? 'bg-neon-cyan text-night-950 font-bold' : 'glass-card text-slate-300'}">${t}</button>`)}
+              <button data-action="filter" data-k="${k}" class="px-2.5 py-1 rounded-lg whitespace-nowrap flex-shrink-0 ${filter === k ? 'bg-neon-cyan text-night-950 font-bold' : 'glass-card text-slate-300'}">${t}</button>`)}
           </div>
-          <button data-action="add" class="px-2.5 py-1 rounded-lg bg-neon-cyan text-night-950 font-bold text-xs flex-shrink-0">+ 추가</button>
+          <button data-action="add" class="px-2.5 py-1 rounded-lg bg-neon-cyan text-night-950 font-bold text-xs flex-shrink-0 whitespace-nowrap">+ 추가</button>
         </div>
         <div class="space-y-2">
           ${rows.length ? rows.map((t) => html`

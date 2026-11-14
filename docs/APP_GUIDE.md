@@ -5,18 +5,20 @@
 > 웹(크롬·PWA·아이폰)은 그대로 동작합니다 — 앱 기능은 모두 "앱 안일 때만" 켜집니다.
 > 구조와 코드는 서재 앱(Maruid/seojae)의 방식을 그대로 따릅니다.
 
-## 1. 앱에서 달라지는 것 (앱 기능 버전 1)
+## 1. 앱에서 달라지는 것 (앱 기능 버전 1 · 2)
 | 기능 | 내용 |
 |---|---|
 | 앱 저장 공간 | 여행 데이터·보낼 변경·지도가 크롬과 따로, 앱 안에 저장 (앱 삭제·데이터 지우기 때만 지워짐) |
 | 로그인 | 구글은 앱 안 로그인을 막으므로 **크롬 탭**으로 열고 `io.github.maruid.travel://login` 으로 앱에 돌아옴. 계정 연결(익명 → Google)도 같은 방식 |
 | 처음 실행 안내 | 앱은 "새 기기"로 보이므로 홈 위에 안내: Google 로그인 / 기기 추가 코드 / 초대 링크 붙여넣기. [✕]로 닫으면 다시 안 나옴 |
 | 초대 링크로 참여 | 링크를 누르면 크롬이 열리므로, 홈의 [초대 링크로 참여]에 붙여넣기(메시지와 섞여 있어도 됨). 보기 전용 링크도 됨 |
+| 앱에서 열기 (2단계 APK부터) | 안드로이드 크롬에서 초대 · 보기 전용 링크를 열면 위에 [앱에서 열기]. 누르면 `io.github.maruid.travel://join/…`(view/…)로 앱이 열림. 앱이 없으면(또는 옛 앱이면) 크롬 화면에 그대로 남음 |
+| 화면 켜두기 (앱 기능 버전 2) | 설정 탭 → 앱 → [화면 켜두기] (이 기기만, 기본 끔). 앱이 열려 있는 동안 화면이 꺼지지 않음. 옛 앱에서는 메뉴가 안 보임 |
 | 보내는 링크 | 초대·보기 전용 링크는 앱 안에서도 웹 주소(`https://maruid.github.io/Travel_project/#/…`)로 만듦 |
 | 공유 | 안드로이드 공유 창 (`@capacitor/share`) |
-| 오프라인 지도 | 서비스 워커 대신 `lib/map-cache.js` 가 지도 요청을 기기 저장소(Cache API)로. 설정 탭 "오프라인 지도 저장"도 그대로 |
+| 오프라인 지도 | 서비스 워커 대신 `lib/map-cache.js` 가 지도 요청을 기기 저장소(Cache API)로. 설정 탭 "오프라인 지도 저장"은 앱에서 더 넉넉하게: **5,000장 · 장소 주변 약 3km** (웹은 1,500장 · 약 2km) |
 | 위치 | 처음 [내 위치]를 누를 때 안드로이드 위치 권한 창 |
-| 뒤로가기 | Capacitor 기본 동작(웹 기록이 있으면 뒤로, 없으면 종료) + 기존 `back-nav.js` 규칙 그대로. 홈에서 "한 번 더 누르면 종료" |
+| 뒤로가기 | 앱이 직접 받음(`back-nav.js` `appBack`): 열린 창 닫기 → 다른 화면은 뒤로 → 홈에서 "한 번 더 누르면 종료돼요", 2초 안에 다시 누르면 바로 종료. (`@capacitor/app` 플러그인은 기록이 없으면 뒤로가기를 그냥 무시해서 예전엔 홈에서 꺼지지 않았음) |
 | 화면 자동 업데이트 | 웹을 배포하면 앱이 다음에 열릴 때(또는 앱으로 돌아올 때) 새 화면 묶음을 받아 "새 버전이 있어요 [새로고침]" (APK 다시 설치 불필요) |
 | 앱 업데이트 안내 | 새 화면이 더 새 앱 기능을 필요로 하면 "앱을 업데이트해 주세요 [받기]" |
 | 설치 안내 띠 | 앱에서는 숨김. 웹(안드로이드 크롬)의 설정 → 앱에 [안드로이드 앱 받기] |
@@ -80,8 +82,9 @@ io.github.maruid.travel://login
   - `isApp()` = `window.Capacitor.isNativePlatform()` (앱 WebView 에 안드로이드 브리지가 있을 때)
   - 시작할 때 앱 쪽이 답하지 않아도 2초 뒤 계속 진행 (`getLaunchUrl` 시간 제한)
 - `src/lib/map-cache.js` — 앱의 지도 저장: MapLibre `transformRequest` 로 `https://tiles.openfreemap.org/…` → `tcache://…`, `addProtocol('tcache')` 가 Cache API(`map-style` 최신 우선 4초 / `map-tiles` 저장본 우선)로 처리
-- `src/lib/app-link.js` — 붙여넣은 초대·보기 전용 링크 → 앱 경로 (순수 함수)
-- `android/` — Capacitor 안드로이드 프로젝트. `MainActivity`(플러그인 등록), `TravelPlugin`(기능 버전 `info`), 로그인 딥링크 intent-filter, 위치 권한, 서명은 환경 변수
+- `src/lib/app-link.js` — 붙여넣은 초대·보기 전용 링크 → 앱 경로, 크롬 [앱에서 열기] 주소(`intent://…;S.browser_fallback_url=지금 주소;end`), 앱이 받은 딥링크 → 경로 (순수 함수)
+- `android/` — Capacitor 안드로이드 프로젝트. `MainActivity`(플러그인 등록), `TravelPlugin`(`info` 기능 버전, `keepAwake` 화면 켜두기 — `NATIVE_API` 2), 딥링크 intent-filter(login · join · view), 위치 권한, 서명은 환경 변수
+- 앱 기능 버전: 웹은 `nativeApiLevel()` 로 확인해서 없는 기능은 메뉴를 숨김. 꼭 필요한 기능만 `app-version.json` `min_native_api` 를 올림(지금 1 → 옛 앱도 그대로 동작)
   - `android/app/src/main/assets/public`, `capacitor-cordova-android-plugins` 는 `cap sync` 가 만드는 것이라 저장소에 넣지 않음(`android/.gitignore`)
 - 화면 묶음: Pages 배포 때 `dist/app/bundle-<커밋>.zip` + `dist/app/version.json` 을 함께 올림 (deploy.yml)
 - 화면 가장자리 여백: CSS `--sat` · `--sab` (앱은 Capacitor 가 `--safe-area-inset-*` 를 넣어 줌, 웹은 `env()`)
@@ -103,9 +106,11 @@ io.github.maruid.travel://login
 ## 8. 휴대폰에서 확인할 것 (처음 APK)
 1. 앱 열기 → 처음 실행 안내, 상태바·제스처 바에 화면이 가려지지 않는지
 2. Google 로그인 → 크롬 탭 → 앱으로 돌아와 로그인됨
-3. 뒤로가기: 시트 닫기 → 여행에서 홈 → 홈에서 "한 번 더 누르면 종료"
+3. 뒤로가기: 시트 닫기 → 여행에서 홈 → 홈에서 "한 번 더 누르면 종료돼요" → 2초 안에 다시 누르면 앱이 꺼짐
 4. [내 위치] → 위치 권한 창
 5. 일정·장소의 [길찾기] → 구글 지도 앱으로 열림
 6. 설정 → 오프라인 지도 저장 → 비행기 모드에서 지도 보임
 7. 초대 링크 [공유] → 안드로이드 공유 창
 8. 웹을 한 번 더 배포 → 앱을 다시 열면 "새 버전이 있어요"
+9. (2단계 APK부터) 크롬에서 초대 링크 → [앱에서 열기] → 앱의 참여 화면
+10. (2단계 APK부터) 설정 → 앱 → 화면 켜두기 → 화면이 꺼지지 않음

@@ -1,4 +1,5 @@
 import { html, setHTML, delegate, formValues, $ } from '../lib/dom.js';
+import { openInAppHtml } from '../lib/native.js';
 import { ensureUser } from '../lib/auth.js';
 import { rpc, errorText } from '../lib/supabase.js';
 import { spinner, toast } from '../components/ui.js';
@@ -30,6 +31,7 @@ export async function render(app, { token }) {
 
   setHTML(app, html`
     <main class="p-5 space-y-4">
+      ${openInAppHtml(`/join/${token}`)}
       <div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
         <b>다른 기기에서 이미 이 여행에 참여 중인가요?</b> 새 이름으로 참여하면 같은 사람이 두 명으로 나뉘어요.
         <div class="grid grid-cols-2 gap-2 mt-2">

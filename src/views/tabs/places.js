@@ -860,11 +860,11 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
         <div id="picker-map" class="w-full h-full"></div>
         <div id="picker-hint" class="absolute inset-x-0 bottom-0 z-[500] text-center text-[10px] bg-night-950/80 py-1 text-slate-300">지도를 눌러 위치를 지정하세요</div>
       </div>
-      <div class="flex items-center justify-between text-[10px]">
-        <span id="coord-text" class="font-mono text-slate-400"></span>
-        <div class="flex gap-1.5">
-          <button data-action="here" class="btn-ghost !py-1"><i class="fa-solid fa-location-crosshairs mr-1"></i>현재 위치</button>
-          <button data-action="clear-pos" class="btn-ghost !py-1 text-slate-400">위치 지우기</button>
+      <div class="flex items-center justify-between gap-2 text-[10px]">
+        <span id="coord-text" class="font-mono text-slate-400 min-w-0 break-keep"></span>
+        <div class="flex gap-1.5 flex-shrink-0">
+          <button data-action="here" class="btn-ghost !py-1 whitespace-nowrap"><i class="fa-solid fa-location-crosshairs mr-1"></i>현재 위치</button>
+          <button data-action="clear-pos" class="btn-ghost !py-1 text-slate-400 whitespace-nowrap">위치 지우기</button>
         </div>
       </div>
       <div class="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
@@ -927,7 +927,7 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
       renderCoord(note);
     }
     function renderCoord(note) {
-      $('#coord-text', el).textContent = pos.lat != null ? `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}${note ? ` · ${note}` : ''}` : (note || '위치 없음 (지도에 표시되지 않음)');
+      $('#coord-text', el).textContent = pos.lat != null ? `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}${note ? ` · ${note}` : ''}` : (note || '위치 없음 (지도에 안 보여요)');
       $('#picker-hint', el).classList.toggle('hidden', pos.lat != null);
     }
     if (pos.lat != null) setPos(pos.lat, pos.lng, { fly: false }); else renderCoord();

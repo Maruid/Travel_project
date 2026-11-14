@@ -11,7 +11,7 @@ import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 import { openPlaceImport, openShareCodes } from '../place-import.js';
 import { canInstall, promptInstall, isIOS, screenInfo, SCREEN_LABEL } from '../../lib/install.js';
 import { isStandalone } from '../../lib/back-nav.js';
-import { canShare, shareContent, isApp, isAndroid, APK_URL } from '../../lib/native.js';
+import { canShare, shareContent, isApp, isAndroid, APK_URL, canKeepAwake, keepAwakeOn, setKeepAwake } from '../../lib/native.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
@@ -177,7 +177,13 @@ export function mount(root, store) {
         ${groupTitle('앱')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
           ${isApp() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>안드로이드 앱으로 쓰고 있어요.</p>
-              <p class="text-[10px] text-slate-500">화면은 웹을 고치면 자동으로 받아요. 앱 자체 업데이트가 필요하면 아래쪽에 안내가 떠요.</p>`
+              <p class="text-[10px] text-slate-500">화면은 웹을 고치면 자동으로 받아요. 앱 자체 업데이트가 필요하면 아래쪽에 안내가 떠요.</p>
+              ${canKeepAwake() ? html`
+                <label class="flex items-start gap-2 pt-2 border-t border-white/5 cursor-pointer">
+                  <input type="checkbox" data-action="keep-awake" ${keepAwakeOn() ? 'checked' : ''} class="accent-cyan-400 mt-0.5">
+                  <span class="text-[11px] text-slate-300">화면 켜두기
+                    <span class="block text-[10px] text-slate-500">앱이 열려 있는 동안 화면이 꺼지지 않아요. 길 찾거나 일정 볼 때 편해요. 배터리를 더 써요. 이 기기에만 적용돼요.</span></span>
+                </label>` : ''}`
             : isAndroid() ? html`<button data-action="get-apk" class="btn-primary w-full"><i class="fa-solid fa-download mr-1"></i>안드로이드 앱 받기 (APK)</button>
                 <p class="text-[10px] text-slate-500 leading-relaxed">스토어 없이 설치하는 앱이에요. 받은 뒤 알림을 눌러 설치하고, 처음 한 번 "출처를 알 수 없는 앱 설치"를 허용해 주세요. 앱은 크롬과 저장 공간이 따로라, 앱에서 Google 로그인 또는 기기 추가 코드로 이어서 쓰면 돼요.</p>
                 ${isStandalone() ? html`<p class="text-[10px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>지금은 설치형 웹 앱으로 쓰고 있어요.</p>`
@@ -218,6 +224,13 @@ export function mount(root, store) {
       update();
     },
     'get-apk': () => { location.href = APK_URL; },
+    'keep-awake': async (el) => {
+      const on = el.checked;   // 누른 직후 값 (클릭 위임이 기본 동작을 막으므로 화면은 update() 로 다시 그림)
+      const ok = await setKeepAwake(on);
+      if (!ok) { setKeepAwake(!on); toast('이 앱 버전에서는 쓸 수 없어요. 앱을 업데이트해 주세요.', 'error'); }
+      else toast(on ? '앱이 열려 있는 동안 화면이 켜져 있어요.' : '화면 켜두기를 껐어요.');
+      update();
+    },
     'screen-info': () => {
       const info = screenInfo();
       const text = Object.entries(info).map(([k, v]) => `${SCREEN_LABEL[k]}: ${v}`).join('\n');

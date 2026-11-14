@@ -1,6 +1,8 @@
 // 타일 범위 계산 (순수 함수, node 테스트 가능)
 
-const MAX_TILES = 1500;
+// 웹(크롬)은 1,500장 · 장소 주변 약 2km, 안드로이드 앱은 저장 공간이 넉넉해서 5,000장 · 약 3km (offline-map.js)
+export const MAX_TILES = 1500;
+export const APP_MAX_TILES = 5000;
 const MIN_ZOOM = 10;
 
 const lon2x = (lng, z) => Math.floor(((lng + 180) / 360) * 2 ** z);
@@ -26,7 +28,7 @@ export function bboxOf(points, pad = 0.01) {
 }
 
 // 범위를 너무 넓게 잡지 않도록: 장소가 여러 도시에 흩어져 있으면 장소별 주변(반경 약 2km)만 받음
-export function planTiles(points, maxZoom = 14) {
+export function planTiles(points, maxZoom = 14, { maxTiles = MAX_TILES, pad = 0.02 } = {}) {
   const pts = points.filter((p) => p.lat != null && p.lng != null);
   if (!pts.length) return { tiles: [], maxZoom: 0 };
 
@@ -35,10 +37,10 @@ export function planTiles(points, maxZoom = 14) {
     const whole = bboxOf(pts);
     // 낮은 줌은 전체 범위, 높은 줌(13~)은 장소 주변만
     for (let z = MIN_ZOOM; z <= zMax; z++) {
-      const boxes = z <= 12 ? [whole] : pts.map((p) => bboxOf([p], 0.02));
+      const boxes = z <= 12 ? [whole] : pts.map((p) => bboxOf([p], pad));
       for (const b of boxes) for (const t of tilesFor(b, z)) set.set(t.join('/'), t);
     }
-    if (set.size <= MAX_TILES) return { tiles: [...set.values()], maxZoom: zMax };
+    if (set.size <= maxTiles) return { tiles: [...set.values()], maxZoom: zMax };
   }
   return { tiles: [], maxZoom: 0 };
 }

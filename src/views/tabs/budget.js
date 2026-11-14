@@ -7,7 +7,9 @@ import { currencyOptions, unitOf, CURRENCY_MONEY } from '../../lib/currency.js';
 const unitText = (c) => unitOf(c) ?? c;
 import { fetchRate } from '../../lib/fx.js';
 
-const curOpts = (selected, extra, fallback) => currencyOptions(selected, extra, fallback).map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${o.label}</option>`);
+// short: 좁은 칸(지출 입력)에서는 "엔 (JPY)" 처럼 짧게 → 나라 이름 때문에 잘리지 않게
+const curOpts = (selected, extra, fallback, { short = false } = {}) => currencyOptions(selected, extra, fallback)
+  .map((o) => html`<option value="${o.code}" ${o.selected ? 'selected' : ''}>${short ? o.short : o.label}</option>`);
 
 const EXPENSE_CATS = ['음식', '교통', '쇼핑', '카페', '관광', '숙박', '기타'];
 const METHOD_TEXT = { cash: '현금', card: '카드', other: '기타' };
@@ -185,7 +187,7 @@ function openExpenseEditor(store, id) {
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">금액 *</label><input name="amount" type="number" min="0" step="any" class="input text-sm font-bold font-mono" required value="${e.amount ?? ''}"></div>
         <div><label class="label">통화</label><select name="currency" class="input">
-          ${curOpts(e.currency, [b.local_currency, b.home_currency], b.local_currency)}</select></div>
+          ${curOpts(e.currency, [b.local_currency, b.home_currency], b.local_currency, { short: true })}</select></div>
       </div>
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">항목</label><select name="category" class="input">
@@ -246,8 +248,8 @@ function openBudgetSettings(store) {
     <h3 class="text-base font-black text-white mb-3">예산 & 환율</h3>
     <form id="budget-form" class="glass-card p-3 rounded-2xl space-y-2.5 mb-3">
       <div class="grid grid-cols-2 gap-2">
-        <div><label class="label">현지 통화</label><select name="local_currency" class="input">${curOpts(b.local_currency, [], 'JPY')}</select></div>
-        <div><label class="label">내 통화</label><select name="home_currency" class="input">${curOpts(b.home_currency, [], 'KRW')}</select></div>
+        <div class="col-span-2"><label class="label">현지 통화</label><select name="local_currency" class="input">${curOpts(b.local_currency, [], 'JPY')}</select></div>
+        <div class="col-span-2"><label class="label">내 통화</label><select name="home_currency" class="input">${curOpts(b.home_currency, [], 'KRW')}</select></div>
       </div>
       <div>
         <div class="flex items-center justify-between">

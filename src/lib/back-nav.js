@@ -90,6 +90,21 @@ export function installBackNav({ onExitHint }) {
   armGuard();
 }
 
+// ---------- 안드로이드 앱: 뒤로가기 버튼을 앱이 직접 받음 (native.js) ----------
+//  Capacitor App 플러그인은 웹 기록이 없으면 뒤로가기를 그냥 무시함 → 홈에서 앱이 꺼지지 않던 문제
+//  - 열린 창 · 다른 화면: 웹과 같이 기록 하나 뒤로 (위 popstate 처리가 그대로 동작)
+//  - 홈: 첫 번째는 안내, 2초 안에 두 번째면 기록이 남아 있어도 바로 종료
+export function appBack({ canGoBack, exit }) {
+  if (pickerOpen || sheetOpen || !isHome()) {
+    if (canGoBack) history.back();
+    else if (!isHome()) location.replace(`${location.pathname}${location.search}#/`);
+    return;
+  }
+  if (exitTimer) { clearTimeout(exitTimer); exitTimer = null; exit(); return; }
+  hint('한 번 더 누르면 종료돼요.');
+  exitTimer = setTimeout(() => { exitTimer = null; armGuard(); }, 2000);
+}
+
 // 여행 화면의 [←]: 홈에서 들어왔으면 기록을 되돌리고(쌓이지 않게), 아니면 홈으로 바꿔치기
 const FROM_HOME = 'nav:fromHome';
 export function markFromHome() { try { sessionStorage.setItem(FROM_HOME, '1'); } catch { /* 무시 */ } }

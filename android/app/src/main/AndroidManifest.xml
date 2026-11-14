@@ -22,12 +22,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 구글 로그인 뒤 크롬 탭에서 앱으로 돌아오는 주소: io.github.maruid.travel://login -->
+            <!-- 앱으로 들어오는 주소 (io.github.maruid.travel://…)
+                 login: 구글 로그인 뒤 크롬 탭에서 복귀 / join · view: 웹의 [앱에서 열기] (초대 · 보기 전용 링크) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="@string/custom_url_scheme" android:host="login" />
+                <data android:scheme="@string/custom_url_scheme" />
+                <data android:host="login" />
+                <data android:host="join" />
+                <data android:host="view" />
             </intent-filter>
 
         </activity>

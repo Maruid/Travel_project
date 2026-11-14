@@ -7,6 +7,7 @@ import { rpc, errorText } from '../lib/supabase.js';
 import { spinner, openSheet } from '../components/ui.js';
 import { tripProgress, priceRange, walkInfo } from '../lib/format.js';
 import { color, icon } from '../lib/safe.js';
+import { openInAppHtml } from '../lib/native.js';
 
 const TABS = [
   { key: 'schedule', label: '일정', icon: 'fa-calendar-day' },
@@ -61,7 +62,7 @@ export async function render(app, params) {
     <header class="px-3 flex items-center gap-2 glass-nav sticky top-0 z-40" style="height:calc(2.75rem + var(--sat)); padding-top:var(--sat)">
       <h1 class="flex-1 min-w-0 truncate text-sm font-black text-white">
         ${`${store.trip.cover_emoji || ''} ${store.trip.title}`.trim()}${prog ? html`<span class="ml-1.5 text-[11px] font-bold font-mono text-neon-cyan">· ${prog}</span>` : ''}</h1>
-      <span class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10"><i class="fa-solid fa-eye mr-1"></i>보기 전용</span>
+      ${openInAppHtml(`/view/${params.token}`, { compact: true }) || html`<span class="flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-white/10 whitespace-nowrap"><i class="fa-solid fa-eye mr-1"></i>보기 전용</span>`}
       <button data-action="reload" class="w-8 h-8 rounded-lg text-slate-400 flex-shrink-0" title="새로고침"><i class="fa-solid fa-rotate-right text-sm"></i></button>
     </header>
     <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + var(--sab))"></section>
