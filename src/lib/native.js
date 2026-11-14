@@ -14,6 +14,7 @@ import { registerPlugin, SystemBars } from '@capacitor/core';
 import { appBack } from './back-nav.js';
 import { schemePath, appIntentUrl } from './app-link.js';
 import { html } from './dom.js';
+import { appUpdateState } from './app-update.js';
 
 export const APP_SCHEME = 'io.github.maruid.travel';
 export const APP_LOGIN_URL = `${APP_SCHEME}://login`;
@@ -118,7 +119,20 @@ export async function setKeepAwake(on) {
   try { await plugin().keepAwake({ on: !!on }); return true; } catch { return false; }
 }
 
-// ---- 웹 화면 묶음 업데이트 ----
+// ---- 앱(APK) 업데이트 정보 (설정 탭 표시용, 마지막으로 받은 값을 기기에 보관) ----
+const UPDATE_KEY = 'app:updateInfo';      // { min, latest, apk, at }
+const NOTICED_KEY = 'app:updateNoticed';  // 띠를 이미 보여준 최신 기능 버전
+let appVersion = null;                    // 깔린 APK 버전 이름 (예: 1.0.1)
+const readUpdate = () => { try { return JSON.parse(localStorage.getItem(UPDATE_KEY) || 'null'); } catch { return null; } };
+
+// 설정 탭: { state: required|available|latest|unknown, api, latest, version, apk }
+export function appUpdateInfo() {
+  const u = readUpdate() || {};
+  const api = nativeApiCached();
+  return { state: appUpdateState({ api, min: u.min || 0, latest: u.latest ?? null }), api, latest: u.latest ?? null, version: appVersion, apk: u.apk || APK_URL };
+}
+
+// ---- 웹 화면 묶음 업데이트 + 앱 업데이트 확인 ----
 async function checkBundle({ showBar }) {
   if (!navigator.onLine) return;
   let info;
@@ -128,10 +142,25 @@ async function checkBundle({ showBar }) {
     info = await r.json();
   } catch { return; }
   const api = await nativeApiLevel();
-  // 새 웹 화면이 이 앱보다 새 앱 기능을 필요로 하면 묶음은 바꾸지 않고 앱 업데이트 안내
-  if ((info.min_native_api || 0) > api) {
-    showBar({ text: '앱을 업데이트해 주세요.', action: '받기', run: () => openExternal(info.apk || APK_URL) });
+  const apk = info.apk || APK_URL;
+  try { localStorage.setItem(UPDATE_KEY, JSON.stringify({ min: info.min_native_api || 0, latest: info.latest_native_api ?? null, apk, at: Date.now() })); } catch {}
+  window.dispatchEvent(new Event('app:update-info'));
+  const state = appUpdateState({ api, min: info.min_native_api || 0, latest: info.latest_native_api ?? null });
+  // 새 웹 화면이 이 앱보다 새 앱 기능을 필요로 하면 묶음은 바꾸지 않고 앱 업데이트 안내 (매번)
+  if (state === 'required') {
+    showBar({ text: '앱을 업데이트해 주세요.', action: '받기', run: () => openExternal(apk) });
     return;
+  }
+  // 꼭은 아니지만 새 앱이 있으면: 그 버전마다 한 번만 띠, 이후에는 설정 → 앱에서
+  let noticed = false;
+  if (state === 'available') {
+    let seen = 0;
+    try { seen = Number(localStorage.getItem(NOTICED_KEY) || 0); } catch {}
+    if (seen < info.latest_native_api) {
+      try { localStorage.setItem(NOTICED_KEY, String(info.latest_native_api)); } catch {}
+      showBar({ text: '새 앱 버전이 있어요. 설정 → 앱에서도 받을 수 있어요.', action: '받기', run: () => openExternal(apk) });
+      noticed = true;
+    }
   }
   if (!info.version || !info.url || info.version === BUNDLE) return;
   try {
@@ -142,7 +171,8 @@ async function checkBundle({ showBar }) {
     let b = (listed.bundles || []).find((x) => x.version === info.version && x.status !== 'error');
     if (!b) b = await CapacitorUpdater.download({ url: info.url, version: info.version });
     await CapacitorUpdater.next({ id: b.id });   // 다음에 앱을 열 때 적용
-    showBar({ text: '새 버전이 있어요.', action: '새로고침', run: () => CapacitorUpdater.set({ id: b.id }) });
+    // 앱 업데이트 띠를 방금 보여줬으면 화면 새로고침 띠로 덮지 않음 (화면은 다음에 열 때 자동 적용)
+    if (!noticed) showBar({ text: '새 버전이 있어요.', action: '새로고침', run: () => CapacitorUpdater.set({ id: b.id }) });
   } catch {}
 }
 
@@ -183,12 +213,16 @@ export async function initApp({ supabase, toast, showBar, onResume = null }) {
     // 뒤로가기: 플러그인 기본 동작은 기록이 없으면 아무것도 안 함 → 앱이 직접 처리 (홈에서 두 번이면 종료)
     App.addListener('backButton', ({ canGoBack }) => appBack({ canGoBack, exit: () => App.exitApp() }))?.catch?.(() => {});
     // 앱 쪽이 답하지 않아도 시작이 멈추지 않게 2초까지만 기다림
+    App.getInfo().then((i) => { appVersion = i?.version || null; window.dispatchEvent(new Event('app:update-info')); }).catch(() => {});
     const launch = await Promise.race([App.getLaunchUrl().catch(() => null), new Promise((r) => setTimeout(() => r(null), 2000))]);
     if (launch?.url) await handleAppUrl(launch.url, supabase, toast);
     // 다시 앱으로 돌아올 때마다 업데이트 확인
     App.addListener('resume', () => { checkBundle({ showBar }); onResume?.(); })?.catch?.(() => {});
   } catch {}
   // 앱 기능 버전을 미리 알아 둠 (설정 탭의 화면 켜두기 표시) + 켜 둔 상태면 다시 적용
-  nativeApiLevel().then((api) => { if (api >= 2 && keepAwakeOn()) plugin().keepAwake({ on: true }).catch(() => {}); });
+  nativeApiLevel().then((api) => {
+    window.dispatchEvent(new Event('app:update-info'));
+    if (api >= 2 && keepAwakeOn()) plugin().keepAwake({ on: true }).catch(() => {});
+  });
   setTimeout(() => checkBundle({ showBar }), 4000);
 }

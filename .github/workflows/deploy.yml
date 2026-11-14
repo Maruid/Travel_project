@@ -46,8 +46,10 @@ jobs:
           mkdir -p dist/app
           (cd dist-app && zip -qr "../dist/app/bundle-${VITE_APP_BUNDLE}.zip" .)
           MIN=$(node -p "require('./app-version.json').min_native_api")
+          # 최신 앱 기능 버전: 앱 코드(TravelPlugin.NATIVE_API)에서 읽음 → 옛 앱에 "새 앱 버전이 있어요"
+          LATEST=$(grep -oE 'NATIVE_API = [0-9]+' android/app/src/main/java/io/github/maruid/travel/TravelPlugin.java | grep -oE '[0-9]+$' || echo "$MIN")
           cat > dist/app/version.json <<JSON
-          {"version":"${VITE_APP_BUNDLE}","url":"${PAGES}/app/bundle-${VITE_APP_BUNDLE}.zip","min_native_api":${MIN},"apk":"https://github.com/${{ github.repository }}/releases/latest/download/travel.apk"}
+          {"version":"${VITE_APP_BUNDLE}","url":"${PAGES}/app/bundle-${VITE_APP_BUNDLE}.zip","min_native_api":${MIN},"latest_native_api":${LATEST},"apk":"https://github.com/${{ github.repository }}/releases/latest/download/travel.apk"}
           JSON
           cat dist/app/version.json
         env:

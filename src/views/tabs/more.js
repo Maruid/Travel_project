@@ -11,12 +11,34 @@ import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 import { openPlaceImport, openShareCodes } from '../place-import.js';
 import { canInstall, promptInstall, isIOS, screenInfo, SCREEN_LABEL } from '../../lib/install.js';
 import { isStandalone } from '../../lib/back-nav.js';
-import { canShare, shareContent, isApp, isAndroid, APK_URL, canKeepAwake, keepAwakeOn, setKeepAwake } from '../../lib/native.js';
+import { canShare, shareContent, isApp, isAndroid, APK_URL, canKeepAwake, keepAwakeOn, setKeepAwake, appUpdateInfo, openExternal } from '../../lib/native.js';
+import { newFeatures } from '../../lib/app-update.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
 const CAT_ICONS = ['fa-utensils', 'fa-bowl-food', 'fa-drumstick-bite', 'fa-fish', 'fa-pepper-hot', 'fa-mug-saucer',
   'fa-wine-glass', 'fa-ice-cream', 'fa-landmark', 'fa-tree', 'fa-bag-shopping', 'fa-hotel', 'fa-train-subway', 'fa-star'];
+
+// 설정 → 앱: 깔린 버전과 새 APK 여부
+function appUpdateBlock() {
+  const u = appUpdateInfo();
+  const ver = html`<span class="text-slate-500">${u.version ? `앱 ${u.version}` : '앱'}${u.api ? ` · 기능 ${u.api}` : ''}</span>`;
+  const get = html`<button data-action="get-apk-app" class="flex-shrink-0 px-3 py-1.5 rounded-lg bg-neon-cyan text-night-950 text-[11px] font-black whitespace-nowrap">받기</button>`;
+  if (u.state === 'required' || u.state === 'available') {
+    const feats = newFeatures(u.api, u.latest || u.api);
+    return html`
+      <div class="flex items-center gap-2 p-2.5 rounded-xl ${u.state === 'required' ? 'bg-rose-500/10 border border-rose-500/40' : 'bg-neon-cyan/10 border border-neon-cyan/40'}">
+        <span class="flex-1 min-w-0 text-[11px]">
+          <b class="block ${u.state === 'required' ? 'text-rose-200' : 'text-white'}">${u.state === 'required' ? '앱을 업데이트해 주세요' : '새 앱 버전이 있어요'}</b>
+          <span class="block text-[10px] text-slate-400">${feats.length ? `새로 쓸 수 있어요: ${feats.join(', ')}` : '받아서 설치하면 덮어써져요. 여행 데이터는 그대로예요.'}</span>
+        </span>${get}
+      </div>
+      <p class="text-[10px]">${ver}</p>`;
+  }
+  return html`
+    <p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>안드로이드 앱으로 쓰고 있어요${u.state === 'latest' ? ' · 최신 버전' : ''}.</p>
+    <p class="text-[10px]">${ver}<span class="text-slate-500"> · 화면은 웹을 고치면 자동으로 받아요.</span></p>`;
+}
 
 export function mount(root, store) {
   let anonymous = true;
@@ -176,8 +198,7 @@ export function mount(root, store) {
 
         ${groupTitle('앱')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
-          ${isApp() ? html`<p class="text-[11px] text-emerald-300"><i class="fa-solid fa-check mr-1"></i>안드로이드 앱으로 쓰고 있어요.</p>
-              <p class="text-[10px] text-slate-500">화면은 웹을 고치면 자동으로 받아요. 앱 자체 업데이트가 필요하면 아래쪽에 안내가 떠요.</p>
+          ${isApp() ? html`${appUpdateBlock()}
               ${canKeepAwake() ? html`
                 <label class="flex items-start gap-2 pt-2 border-t border-white/5 cursor-pointer">
                   <input type="checkbox" data-action="keep-awake" ${keepAwakeOn() ? 'checked' : ''} class="accent-cyan-400 mt-0.5">
@@ -224,6 +245,7 @@ export function mount(root, store) {
       update();
     },
     'get-apk': () => { location.href = APK_URL; },
+    'get-apk-app': () => openExternal(appUpdateInfo().apk),
     'keep-awake': async (el) => {
       const on = el.checked;   // 누른 직후 값 (클릭 위임이 기본 동작을 막으므로 화면은 update() 로 다시 그림)
       const ok = await setKeepAwake(on);
@@ -305,8 +327,10 @@ export function mount(root, store) {
       && run(async () => { await rpc('leave_trip', { p_trip: store.tripId }); navigate('/'); }, '여행에서 나왔습니다.'),
   });
 
+  // 앱 버전 · 새 APK 확인 결과가 오면 다시 그림
+  window.addEventListener('app:update-info', update);
   update();
-  return { update, destroy: off };
+  return { update, destroy: () => { off(); window.removeEventListener('app:update-info', update); } };
 }
 
 function openMemberMenu(store, memberId, run) {

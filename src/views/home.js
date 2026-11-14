@@ -157,8 +157,8 @@ export async function render(app) {
         user = await ensureUser();
         if (user.offline) throw new Error('OFFLINE');
         const rows = await rpc('my_trips');
-        trips = rows; listAt = Date.now(); fresh = true; failed = false;
-        saveTripList(user.id, rows, listAt);
+        trips = rows || []; listAt = Date.now(); fresh = true; failed = false;
+        saveTripList(user.id, trips, listAt);
         schedulePrefetch();
       } catch (e) {
         failed = true;

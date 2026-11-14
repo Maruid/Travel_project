@@ -576,6 +576,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - 웹은 그대로, 앱일 때만(`isApp()`) 달라짐: 크롬 탭 로그인·계정 연결, 화면 묶음 자동 업데이트(Pages `app/version.json`), 앱 업데이트 안내, 안드로이드 공유 창, 지도 저장(`map-cache.js`), 설치 안내 띠 숨김, 처음 실행 안내(앱은 "새 기기" → Google 로그인 / 기기 코드 / 초대 링크 붙여넣기), 홈 [초대 링크로 참여].
 - 앱 안 주소는 `https://localhost/` 이므로 **남에게 보내는 링크는 `APP_URL` = 웹 주소**(앱 빌드에서만).
 - 여백은 CSS 변수 `--sat`/`--sab` (앱: Capacitor 의 `--safe-area-inset-*`, 웹: `env()`). 새 화면도 `env(safe-area-inset-*)` 대신 이 변수를 씀.
+- 앱 업데이트 안내(`src/lib/app-update.js` `appUpdateState`): `version.json` 의 `min_native_api` · `latest_native_api`(배포 때 `NATIVE_API` 에서 읽음) ↔ 깔린 앱 기능 버전 → required(띠 매번) / available(띠 버전마다 한 번 + 설정) / latest. 설정 → 앱에 "앱 1.0.1 · 기능 1"(App.getInfo) 표시. 기기 키 `app:updateInfo`, `app:updateNoticed`.
 - 앱 기능 버전: `TravelPlugin.NATIVE_API`(지금 **2**: info · keepAwake) ↔ `app-version.json` `min_native_api`(1). 웹은 `nativeApiLevel()` 로 확인해 없는 기능은 숨김. 꼭 필요한 새 기능만 min 을 올리고 새 APK 먼저.
 - **2단계 (2026-11-14)**: 웹(안드로이드 크롬) 초대 · 보기 전용 화면에 [앱에서 열기](Chrome intent, 앱 없으면 그 화면에 남음) → 앱 딥링크 `io.github.maruid.travel://join/…` · `view/…`. 설정 → 앱 → 화면 켜두기(`app:keepAwake`). 앱 지도 저장 5,000장 · 주변 약 3km(`planTiles` 옵션, 웹은 1,500장 · 2km).
 - **뒤로가기**: `@capacitor/app` 은 웹 기록이 없으면 뒤로가기를 무시함(앱이 꺼지지 않음) → `backButton` 을 받아 `back-nav.js` `appBack` 이 처리: 열린 창 → 다른 화면 → 홈 2초 안 두 번이면 `App.exitApp()`.
@@ -646,6 +647,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `ai-plan-undo:v1:<tripId>` | AI 일정 되돌리기 기록 (24시간) |
 | `app:welcomedAt` | 안드로이드 앱 처음 실행 안내를 닫은 시각 |
 | `app:keepAwake` | 안드로이드 앱 화면 켜두기 (`'1'`/`'0'`) |
+| `app:updateInfo` | 마지막으로 받은 앱 업데이트 정보 `{min, latest, apk, at}` (설정 표시용) |
+| `app:updateNoticed` | "새 앱 버전이 있어요" 띠를 이미 보여준 최신 기능 버전 |
 | 여행별 cache / outbox 키 | store.js (`cacheKey`, `outboxKey`) |
 | 마지막 사용자 | auth.js (`LAST_USER_KEY`) |
 | `trips-list:v1:<userId>` | 홈 여행 목록 `{at, trips}` (my_trips 결과 그대로, 사용자별) |
@@ -708,6 +711,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   - 끝나면 하네스 파일과 `.env.local` 삭제.
 - `npm run build:app` (`VITE_APP=1 VITE_BASE=/`): 안드로이드 앱용 화면(`dist-app`)이 서비스 워커 없이 만들어지는지.
 - 화면 줄바꿈 점검(2026-11-14 방식): 폭 384 · 360 · 320 에서 모든 탭 + 시트를 열고, 버튼 · 칩의 글자 줄 수(텍스트 노드의 줄 위치, 아이콘 제외)와 넘침을 셈. 알림 문구는 소스의 `toast('…')` 를 모아 실제 알림 칸에 넣어 줄 수 확인. 새 버튼 · 칩은 `whitespace-nowrap` + 넘치면 가로 스크롤, 좁은 칸의 선택 상자는 짧은 이름(`currencyShort`).
+- 앱 쪽 동작까지 흉내(2026-11-14): Playwright `addInitScript` 로 ① `window.androidBridge.postMessage` 가 받은 호출에 `window.Capacitor.fromNative({callbackId, pluginId, methodName, success, data})` 로 답하는 가짜 ② `node_modules/@capacitor/android/capacitor/src/main/assets/native-bridge.js` ③ `window.Capacitor.PluginHeaders`(플러그인 · 메서드 목록) 를 넣으면 `Travel.info`, `App.getInfo` 등이 실제처럼 응답 → 업데이트 안내 · 화면 켜두기 표시 확인.
 - 앱 모드 브라우저 확인: `dist-app` 을 `vite preview --outDir dist-app` 으로 띄우고 Playwright `addInitScript` 로 `window.androidBridge = { postMessage(){} }` 를 넣으면 `isApp()` 이 true (플러그인 호출은 응답이 없으므로 화면 동작만 확인). APK 자체는 GitHub Actions 에서 빌드(작업 환경에서 안드로이드 SDK 를 받을 수 없음).
 - `npx vite build`: 청크 크기를 확인합니다. places 청크는 MapLibre 때문에 약 1.2MB이고, more/place-import 청크는 작게 유지되어야 합니다.
 - SQL 검증(작업 환경에 Postgres 16이 있을 때):

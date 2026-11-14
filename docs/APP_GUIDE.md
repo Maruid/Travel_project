@@ -20,7 +20,7 @@
 | 위치 | 처음 [내 위치]를 누를 때 안드로이드 위치 권한 창 |
 | 뒤로가기 | 앱이 직접 받음(`back-nav.js` `appBack`): 열린 창 닫기 → 다른 화면은 뒤로 → 홈에서 "한 번 더 누르면 종료돼요", 2초 안에 다시 누르면 바로 종료. (`@capacitor/app` 플러그인은 기록이 없으면 뒤로가기를 그냥 무시해서 예전엔 홈에서 꺼지지 않았음) |
 | 화면 자동 업데이트 | 웹을 배포하면 앱이 다음에 열릴 때(또는 앱으로 돌아올 때) 새 화면 묶음을 받아 "새 버전이 있어요 [새로고침]" (APK 다시 설치 불필요) |
-| 앱 업데이트 안내 | 새 화면이 더 새 앱 기능을 필요로 하면 "앱을 업데이트해 주세요 [받기]" |
+| 앱 업데이트 안내 | 웹 배포 때 `version.json` 에 `min_native_api`(꼭 필요한 앱 기능 버전, `app-version.json`)와 `latest_native_api`(최신 앱 기능 버전, `TravelPlugin.NATIVE_API` 에서 자동으로 읽음)를 같이 올림. 꼭 필요하면 아래 띠 "앱을 업데이트해 주세요"를 매번, 꼭은 아니지만 새 APK 가 있으면 "새 앱 버전이 있어요" 띠를 그 버전마다 한 번. 설정 → 앱에는 늘 "앱 1.0.1 · 기능 1" + 새 버전 · 새로 쓸 수 있는 기능 · [받기] (최신이면 "최신 버전") |
 | 설치 안내 띠 | 앱에서는 숨김. 웹(안드로이드 크롬)의 설정 → 앱에 [안드로이드 앱 받기] |
 
 ## 2. 처음 한 번 설정
@@ -72,7 +72,9 @@ io.github.maruid.travel://login
 |---|---|
 | 웹 화면(`src/` 등) | 지금처럼 main 에 push → Pages 배포(앱용 화면 묶음도 같이). 앱은 다음에 열 때 자동으로 새 화면 |
 | 앱 쪽 코드(`android/`), 앱 플러그인 추가, 앱 이름·아이콘·권한 | Android APK 워크플로 실행 → 새 APK 설치 |
-| 새 화면이 새 앱 기능을 씀 | `TravelPlugin.NATIVE_API` 와 `app-version.json` 의 `min_native_api` 를 올리고, 새 APK 먼저 → 그다음 웹 배포 (옛 앱은 업데이트 안내) |
+| 새 화면이 새 앱 기능을 씀 | `TravelPlugin.NATIVE_API` 를 올림 → 옛 앱에 "새 앱 버전이 있어요" 자동 안내. 그 기능 없이는 화면이 동작하지 않으면 `app-version.json` 의 `min_native_api` 도 올림(옛 앱은 매번 "업데이트해 주세요"). 새 기능 이름은 `src/lib/app-update.js` `API_FEATURES` 에 추가(설정 안내에 표시) |
+| 순서 | push(웹 배포) 직후 Android APK 워크플로를 바로 실행. 웹이 먼저 "새 앱 버전"을 알리므로, APK 가 올라오기 전 몇 분 동안 [받기]를 누르면 예전 APK 가 받아질 수 있음 |
+| 앱 기능 버전과 상관없는 APK 변경(아이콘·이름·권한) | 자동 안내 없음 → 필요하면 `NATIVE_API` 를 올려서 안내 |
 
 ## 6. 구조 (개발 참고)
 - `capacitor.config.json` — 앱 ID `io.github.maruid.travel`, 이름 "여행", 화면 파일 `dist-app`(`npm run build:app`, `VITE_BASE=/ VITE_APP=1`)
