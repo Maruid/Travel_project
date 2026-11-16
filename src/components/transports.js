@@ -55,10 +55,10 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       <span class="text-[10px] font-bold text-slate-400">${label}</span>
       <input name="${key}_name" class="input" maxlength="60" value="${t[`${key}_name`] || ''}" placeholder="${key === 'dep' ? '예: 인천 ICN' : '예: 간사이 KIX'}">
       <div class="grid grid-cols-[3fr_2fr] gap-1.5">
-          <input type="date" name="${key}_date" class="input" value="${t[`${key}_date`] || ''}">
-          <input type="time" name="${key}_time" class="input" value="${shortT(t[`${key}_time`])}">
+          <input type="date" name="${key}_date" class="input w-full" value="${t[`${key}_date`] || ''}">
+          <input type="time" name="${key}_time" class="input w-full" value="${shortT(t[`${key}_time`])}">
       </div>
-      <input name="${key}_terminal" class="input" maxlength="20" value="${t[`${key}_terminal`] || ''}" placeholder="터미널">
+      <input name="${key}_terminal" class="input w-full" maxlength="20" value="${t[`${key}_terminal`] || ''}" placeholder="터미널">
     </div>`;
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${id ? '이동편 수정' : '이동편 등록'}</h3>
