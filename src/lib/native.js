@@ -8,6 +8,7 @@
 //   - 공유: 앱 WebView 에는 navigator.share 가 없어서 안드로이드 공유 창(@capacitor/share)
 //   - 초대 · 보기 전용 링크: 웹(안드로이드 크롬)에 [앱에서 열기] → io.github.maruid.travel://join/… 로 앱이 받음
 //   - 화면 켜두기: TravelPlugin.keepAwake (앱 기능 버전 2)
+//   - 구글 지도 [공유] 받기: TravelPlugin.getShared + 'shareReceived' (앱 기능 버전 3) → share-in.js
 //   - 뒤로가기: App 플러그인은 기록이 없으면 무시하므로 back-nav.js appBack 이 직접 처리 (홈에서 2초 안에 두 번 → 종료)
 // =====================================================================
 import { registerPlugin, SystemBars } from '@capacitor/core';
@@ -195,6 +196,27 @@ export async function shareContent({ title, text, url }) {
     return;
   }
   await navigator.share?.({ title, text, url }).catch(() => {});
+}
+
+// ---- 다른 앱에서 [공유]로 보낸 글 받기 (앱 기능 버전 3) ----
+//   앱이 꺼져 있다 열려도, 떠 있을 때 받아도 getShared 가 한 번만 돌려줌 (꺼내면 지워짐)
+export async function startShareIntake(handler) {
+  if (!isApp() || (await nativeApiLevel()) < 3) return;
+  let busy = false;
+  const pull = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await plugin().getShared();
+      if (r?.text) await handler(r.text);
+    } catch {} finally { busy = false; }
+  };
+  plugin().addListener('shareReceived', pull)?.catch?.(() => {});
+  try {
+    const { App } = await import('@capacitor/app');
+    App.addListener('resume', pull)?.catch?.(() => {});
+  } catch {}
+  pull();
 }
 
 // ---- 앱 시작 때 (main.js boot) ----

@@ -31,7 +31,7 @@ function aiSection(users, summary) {
         <span class="text-[10px] flex-shrink-0">${status(u)}</span>
       </div>
       ${u.requested_at && !u.active ? html`<p class="text-[10px] text-amber-200"><i class="fa-solid fa-hand mr-1"></i>사용 요청 · ${ago(u.requested_at)}${u.request_message ? ` · ${u.request_message}` : ''}</p>` : ''}
-      <p class="text-[10px] text-slate-400">오늘 추천·일정 ${u.used_today}${u.active && !u.is_admin ? `/${u.daily_limit}` : ''}회 · 7일: 추천 ${u.recommend_7d}회(토큰 ${kTok(u.recommend_tokens_7d)})${u.plan_7d ? ` · 일정 짜기 ${u.plan_7d}회(토큰 ${kTok(u.plan_tokens_7d)})` : ''} · 정보 채우기 ${u.enrich_7d}회(토큰 ${kTok(u.enrich_tokens_7d)})</p>
+      <p class="text-[10px] text-slate-400">오늘 추천·일정·가이드 ${u.used_today}${u.active && !u.is_admin ? `/${u.daily_limit}` : ''}회 · 7일: 추천 ${u.recommend_7d}회(토큰 ${kTok(u.recommend_tokens_7d)})${u.plan_7d ? ` · 일정 짜기 ${u.plan_7d}회(토큰 ${kTok(u.plan_tokens_7d)})` : ''}${u.guide_7d ? ` · 가이드 ${u.guide_7d}회(토큰 ${kTok(u.guide_tokens_7d)})` : ''} · 정보 채우기 ${u.enrich_7d}회(토큰 ${kTok(u.enrich_tokens_7d)})</p>
       ${u.is_admin ? '' : html`
         <div class="flex flex-wrap items-center gap-1">
           <button data-action="ai-grant" data-user="${u.user_id}" data-days="7" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-200">7일</button>

@@ -24,7 +24,7 @@ export class ViewStore {
     this.globalCategories = d.categories || [];
     this.tables = {
       places: d.places || [], itinerary_days: d.itinerary_days || [], itinerary_items: d.itinerary_items || [],
-      guides: d.guides || [], categories: [], place_likes: [],
+      guides: d.guides || [], trip_transports: d.trip_transports || [], categories: [], place_likes: [],
     };
   }
   list(table) {
@@ -45,7 +45,7 @@ export async function render(app, params) {
     data = await rpc('view_trip', { p_token: params.token });
   } catch (e) {
     const offline = !navigator.onLine;
-    setHTML(app, html`<main class="p-6 text-center mt-20 space-y-3">
+    setHTML(app, html`<main class="p-6 text-center mt-20 space-y-3" style="margin-top:calc(5rem + var(--sat))">
       <i class="fa-solid ${offline ? 'fa-wifi' : 'fa-link-slash'} text-2xl text-slate-500"></i>
       <p class="text-sm text-slate-300">${offline ? '인터넷에 연결되어 있지 않아요.' : '이 링크는 꺼졌거나 바뀌었어요.'}</p>
       <p class="text-[11px] text-slate-500">${offline ? '연결된 뒤 다시 열어 주세요.' : '링크를 보낸 사람에게 새 링크를 받아 주세요.'}</p>
@@ -106,22 +106,8 @@ export async function render(app, params) {
 async function openViewPlace(store, id) {
   const p = store.get('places', id);
   if (!p) return;
-  const { placeBadges, googleBlock, googleMapsHref } = await import('./tabs/places.js');
-  const cat = store.category(p.category_id);
-  openSheet(html`
-    <div class="flex items-center gap-1.5 flex-wrap mb-1">${placeBadges(p, cat, store.trip.timezone)}</div>
-    <h3 class="text-lg font-black text-white mt-1">${p.name}</h3>
-    <div class="flex items-center justify-between text-xs text-slate-400 mb-3">
-      <span>${p.zone || ''}</span><span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>
-    </div>
-    ${googleBlock(p, store.trip.timezone)}
-    <div class="space-y-2 text-xs">
-      ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
-      ${p.description ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">상세 안내</span><p class="text-slate-300 leading-relaxed whitespace-pre-line">${p.description}</p></div>` : ''}
-      ${p.visit_tip ? html`<div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30"><span class="text-[10px] font-bold text-amber-400 block mb-0.5">웨이팅 / 방문 팁</span><p class="text-amber-200 font-medium">${p.visit_tip}</p></div>` : ''}
-    </div>
-    <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="btn-primary mt-3 flex items-center justify-center gap-1.5">
-      <i class="fa-solid fa-diamond-turn-right"></i> 구글 맵에서 보기</a>`);
+  const { placeDetailHtml } = await import('./tabs/places.js');
+  openSheet(placeDetailHtml(store, p, { readOnly: true }));
 }
 
 // 장소 탭 (읽기 전용): 위 지도 + 아래 목록, 카테고리 칩으로 거르기

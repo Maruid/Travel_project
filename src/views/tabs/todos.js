@@ -1,7 +1,7 @@
 import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { openSheet, closeSheet, toast, emptyCard } from '../../components/ui.js';
 
-const KINDS = { todo: '🎯 해야 할 것', place: '📍 가야 할 곳', shop: '🛍️ 사야 할 것' };
+const KINDS = { todo: '🎯 할 것', place: '📍 갈 곳', shop: '🛍️ 살 것' };
 
 export function mount(root, store) {
   let filter = 'all';
@@ -16,7 +16,7 @@ export function mount(root, store) {
       <div class="p-4 space-y-3">
         <div class="glass-card p-4 rounded-2xl">
           <div class="flex items-center justify-between mb-1.5">
-            <span class="text-xs font-bold text-slate-400">미션 & 위시리스트</span>
+            <span class="text-xs font-bold text-slate-400">할 일</span>
             <span class="text-xs font-mono font-bold text-neon-cyan">${done}/${all.length} (${pct}%)</span>
           </div>
           <div class="w-full h-2 rounded-full bg-slate-800 overflow-hidden">

@@ -23,13 +23,17 @@ export function mount(root, store, { readOnly = false } = {}) {
       <div class="p-4 space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="text-xs font-bold text-white"><i class="fa-solid fa-lightbulb text-neon-cyan mr-1"></i>가이드 카드</h2>
-          ${readOnly ? '' : html`<button data-action="add" class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> 카드 추가</button>`}
+          ${readOnly ? '' : html`<div class="flex gap-1.5">
+            <button data-action="ai-guide" class="px-3 py-1.5 rounded-xl bg-purple-500/20 border border-purple-400/50 text-purple-100 font-bold text-xs"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 가이드</button>
+            <button data-action="add" class="px-3 py-1.5 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> 카드 추가</button>
+          </div>`}
         </div>
         ${guides.length ? guides.map((g) => html`
           <article class="glass-card p-4 rounded-2xl border-l-4" style="border-left-color:${color(g.color)}">
             <div class="flex items-center justify-between mb-1.5 gap-2">
               <h3 class="text-xs font-bold flex items-center gap-1.5 min-w-0" style="color:${color(g.color)}">
                 <i class="fa-solid ${icon(g.icon, 'fa-lightbulb')}"></i><span class="truncate">${g.title}</span>
+                ${g.ai_guide ? html`<span class="flex-shrink-0 text-[8px] px-1 rounded bg-purple-500/25 text-purple-200 font-bold">AI</span>` : ''}
               </h3>
               <div class="flex items-center gap-1 flex-shrink-0">
                 ${g.pinned ? html`<i class="fa-solid fa-thumbtack text-[10px] text-amber-300"></i>` : ''}
@@ -44,6 +48,7 @@ export function mount(root, store, { readOnly = false } = {}) {
 
   const off = readOnly ? () => {} : delegate(root, {
     add: () => pickTemplate(store),
+    'ai-guide': async () => (await import('../ai-guide.js')).openAiGuide(store),
     edit: (el) => openGuideEditor(store, el.dataset.id),
   });
   update();

@@ -261,7 +261,7 @@ async function run(req: Request, send: (o: unknown) => void) {
     destination: str(body.destination, 80),
     scope: anchor ? 'anchor' : 'all',
     anchor,
-    count: body.count === 10 ? 10 : 5,
+    count: 10,   // 앱은 10곳으로 고정 (2026-11-15)
     dates: str(body.dates, 40),
     existing: Array.isArray(body.existing) ? body.existing.map((x: unknown) => str(x, 60)).filter(Boolean).slice(0, 150) as string[] : [],
     currency: str(body.currency, 3),

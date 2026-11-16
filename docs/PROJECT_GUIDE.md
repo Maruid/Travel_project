@@ -161,7 +161,8 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | categories | trip_id null = 전역 기본 8종, 값 있음 = 여행 커스텀 |
 | places | 기본 칸 + 구글 칸(google_place_id, opening_hours jsonb, rating, rating_count, business_status, phone, website, google_synced_at) + is_anchor + geo_review jsonb + visited_at |
 | itinerary_days / itinerary_items | 날짜 헤더(stay_place_id = 오늘 묵는 숙소) / 시간 항목(place_id 연결, ai_plan = AI 가 넣은 일정의 실행 id) |
-| guides | 마크다운 카드 (day_date 지정 시 일정에도 노출) |
+| guides | 마크다운 카드 (day_date 지정 시 일정에도 노출). ai_guide = AI 가이드 카드 종류 weather/landmark/entry/stay (016) |
+| trip_transports | 이동편 (015): direction out/back/other, mode flight/train/ship/bus, code, carrier, dep_/arr_ name · date · time · terminal, note |
 | budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
 | todos | kind todo/place/shop |
 | place_likes | 찜: place_id, member_id, liked. id = (장소, 멤버)로 계산한 고정 UUID (011) |
@@ -172,7 +173,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | ai_usage / places_api_usage | 사용량 카운터 |
 | admins | 사이트 관리자 |
 
-**여행당 행 수 제한**: categories 50, places 500, itinerary_days 60, itinerary_items 1000, guides 200, budget_topups 200, expenses 3000, todos 1000. 넘으면 `ROW_LIMIT` 에러가 납니다.
+**여행당 행 수 제한**: categories 50, places 500, itinerary_days 60, itinerary_items 1000, guides 200, budget_topups 200, expenses 3000, todos 1000, trip_transports 30. 넘으면 `ROW_LIMIT` 에러가 납니다.
 
 ### 마이그레이션 순서
 
@@ -192,6 +193,8 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 014_stay_none | itinerary_days.stay_none (이 날 밤 숙소 없음: 귀국 · 야간 이동) |
 | 013_day_stay | itinerary_days.stay_place_id (날짜별 오늘 묵는 숙소, 같은 여행 장소만, 장소 삭제 시 비움) |
 | 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
+| 016_ai_guides | AI 가이드 카드: ai_calls.kind 에 guide + `sub`(카드 종류), 하루 한도 추천 · 일정과 합산, 카드마다 여행당 `ai_guide_card_limit()`(3), `begin_ai_guide`, `ai_guide_status`, guides.ai_guide, admin_ai_users 에 가이드 통계 |
+| 015_transports | 이동편 `trip_transports`(콘텐츠 표, 멤버 RLS, 행 30, Realtime) + `view_trip` 에 이동편 추가 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
 Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 새 테이블과 함수에는 **GRANT를 명시**해야 합니다. 함수는 `revoke all ... from public, anon` 후 `grant execute ... to authenticated`로 엽니다.
@@ -522,6 +525,22 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - **날짜 정보 → 오늘 묵는 숙소**: 고르기 창. 맨 위 "앞 날과 같음(마지막 날은 자동)" · "이 날 밤 숙소 없음", 아래 숙소 목록.
 - PC 크롬에서 기본 선택 상자 목록이 흰 바탕 + 흰 글씨로 보이던 문제: 투명 선택 상자에 배경색이 없어서. `:root { color-scheme: dark }` + option 배경색으로 전체 방지.
 
+### 7-7-12. 정리 · 장소 상세 · 공유 · 이동편 · AI 가이드 (2026-11-15, 015 · 016)
+
+- **정리**: 앱 세로 고정. 머리줄 없는 화면(참여 · 여행 첫 화면 · 보기 전용)에 `--sat` 위 여백. 체크박스는 `delegate` 가 기본 동작을 막지 않음(`dom.js`, 막으면 체크 표시가 되돌아감). 가계부 머리줄: 환율은 글자만 + ⚙(예산 관리). 할 일 이름 "할 일"(할 것 · 갈 곳 · 살 것). 홈 ⚙ = 앱 설정 시트(`components/app-settings.js`, 설정 탭과 같은 블록 공유). 운영자 윤홍준 · hj.travel@gmail.com(privacy · terms).
+- **장소 상세** (`places.js` `placeDetailHtml` — 보기 전용 화면도 같이 씀): 위험 띠(폐업) → 뱃지 → 이름 · 거리 → ★ · 가격 · 동네 한 줄 → 동그란 동작 줄 [길찾기 · 찜 n · 일정에 · 다녀옴 · 더보기] → 찜한 사람 → 대표 메뉴 · 소개 · 팁 → "오늘 hh:mm" 접힌 영업시간(누르면 한 주) → 전화 · 웹사이트. ⋯ 더보기(고르기 창): 수정 · 기준점 지정/해제 · 구글 정보 (다시) 가져오기 · 유튜브 · 삭제.
+- **AI 정보 채우기 검수**: `enrich-place` 가 장소 종류별 안내(`KIND_GUIDE`: 식당 · 교통 · 숙소 · 명소 · 쇼핑)로 묻고, 교통 · 쇼핑은 가격을 비움. 앱은 `enrich-check.js` `checkEnrich` 로 알고 있는 종류(구글 · 카테고리)와 AI 가 답한 종류를 비교 → 다르면 넣지 않고 안내 + [그래도 넣기]. (미리보기 단계는 두지 않음)
+- **AI 추천 개수**: 10곳 고정.
+- **구글 지도 [공유] → 장소 추가** (앱 기능 버전 3): `docs/APP_GUIDE.md` §1 · §6, `lib/share-in.js`.
+- **일정 탭**: 고른 날짜 칩은 cyan, 날짜 머리 카드 왼쪽 줄도 cyan. 제목이 없으면 흐린 "이 날의 제목을 정해보세요". 일정 카드 사이에 이동 한 줄(`segmentInfo`: 도보 n분 / 1.5km 넘으면 전철 권장 + [길찾기]).
+- **이동편** (015, `lib/transport.js`, `components/transports.js`): 출발 · 도착 날짜의 일정 탭에 하늘색 카드. 첫날에 가는 편 · 마지막 날에 오는 편이 없으면 점선 [등록]. AI 일정 짜기는 `dayWindow`: 도착 + 여유(항공 120분 · 기차 30분 · 배 60분 · 버스 30분) 뒤 시작, 출발 - 여유(항공 210분 · 기차 45분 · 배 90분 · 버스 40분) 전 끝 → 요청 날짜에 `from` · `until` · `move`. 서버에 표가 아직 없으면(SQL 전) store 가 빈 표로 두고 Realtime 구독에서 뺌(`OPTIONAL_TABLES`).
+- **AI 가이드 카드** (016, `guide-cards`, `views/ai-guide.js`, `lib/ai-guide.js`): 가이드 탭 [AI 가이드] → 네 카드.
+  - 날씨 · 옷차림: Open-Meteo 지난 3년 같은 날짜(최대 14일) 실제 기록 표(평균 최고 · 최저 · 가장 더운/추운 날 · 비 온 날 %) + 출발 16일 안이면 예보 표 → AI(검색 없음)가 옷차림 · 챙길 것. 위치는 숙소 → 기준점 → 아무 장소 좌표.
+  - 명소 체크포인트: '명소' 카테고리(찜 많은 순 12곳)별 꼭 볼 것 · 예약 · 붐비는 시간 (구글 검색).
+  - 입국 · 출국: 가는 편 도착지 · 시각 + 오는 편 출발지 · 시각 + 숙소 → 공항 ↔ 숙소 방법 · 나설 시각 · 체크리스트 (구글 검색).
+  - 숙소 정보: 일정 탭 묵는 곳(없으면 숙소 카테고리) 6곳까지 체크인 · 아웃 · 짐 · 가까운 역 (구글 검색).
+  - 필요한 정보가 없으면 버튼이 막히고 "먼저 등록: …". 권한은 AI 추천과 같음, 하루 한도 같이, 카드마다 여행당 3번(관리자 무제한). 결과는 가이드 카드(`ai_guide`)로 저장 — 같은 종류는 그 카드를 덮어씀(확인 창), 제목 옆 AI 표시, 맨 아래 "AI 가 YYYY-MM-DD 에 만든 안내" + 출처 링크. 표는 `.md table` 스타일.
+
 ### 7-8. 설정 탭 (more.js) 구성
 
 1. **함께하기**: 초대 링크(복사, 공유, owner는 재발급), 멤버 목록(이름 변경, 멤버 메뉴), 동행자 추가
@@ -577,7 +596,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - 앱 안 주소는 `https://localhost/` 이므로 **남에게 보내는 링크는 `APP_URL` = 웹 주소**(앱 빌드에서만).
 - 여백은 CSS 변수 `--sat`/`--sab` (앱: Capacitor 의 `--safe-area-inset-*`, 웹: `env()`). 새 화면도 `env(safe-area-inset-*)` 대신 이 변수를 씀.
 - 앱 업데이트 안내(`src/lib/app-update.js` `appUpdateState`): `version.json` 의 `min_native_api` · `latest_native_api`(배포 때 `NATIVE_API` 에서 읽음) ↔ 깔린 앱 기능 버전 → required(띠 매번) / available(띠 버전마다 한 번 + 설정) / latest. 설정 → 앱에 "앱 1.0.1 · 기능 1"(App.getInfo) 표시. 기기 키 `app:updateInfo`, `app:updateNoticed`.
-- 앱 기능 버전: `TravelPlugin.NATIVE_API`(지금 **2**: info · keepAwake) ↔ `app-version.json` `min_native_api`(1). 웹은 `nativeApiLevel()` 로 확인해 없는 기능은 숨김. 꼭 필요한 새 기능만 min 을 올리고 새 APK 먼저.
+- 앱 기능 버전: `TravelPlugin.NATIVE_API`(지금 **3**: info · keepAwake · getShared(공유 받기)) ↔ `app-version.json` `min_native_api`(1). 웹은 `nativeApiLevel()` 로 확인해 없는 기능은 숨김. 꼭 필요한 새 기능만 min 을 올리고 새 APK 먼저.
 - **2단계 (2026-11-14)**: 웹(안드로이드 크롬) 초대 · 보기 전용 화면에 [앱에서 열기](Chrome intent, 앱 없으면 그 화면에 남음) → 앱 딥링크 `io.github.maruid.travel://join/…` · `view/…`. 설정 → 앱 → 화면 켜두기(`app:keepAwake`). 앱 지도 저장 5,000장 · 주변 약 3km(`planTiles` 옵션, 웹은 1,500장 · 2km).
 - **뒤로가기**: `@capacitor/app` 은 웹 기록이 없으면 뒤로가기를 무시함(앱이 꺼지지 않음) → `backButton` 을 받아 `back-nav.js` `appBack` 이 처리: 열린 창 → 다른 화면 → 홈 2초 안 두 번이면 `App.exitApp()`.
 - **시트 닫고 이동 주의**: `closeSheet()` 뒤에 `navigate()` 하면 시트 기록을 지우는 `history.back()` 이 이동을 되돌림 → 시트에서 다른 화면으로 갈 때는 `navigate()` 만 부름(이동하면서 시트가 닫힘). 기기 추가 코드 입력·로그아웃에 있던 같은 문제도 고침.
@@ -608,10 +627,11 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | enrich-place | AI 정보 채우기(2단계) | GEMINI_API_KEY, (GEMINI_MODEL) |
 | place-details | 구글 Places 조회 + 한도 차감·환불 | GOOGLE_PLACES_API_KEY |
 | recommend-places | 키워드 → 장소 후보 추천 (스트리밍) | GEMINI_API_KEY, (GEMINI_MODEL) |
-| plan-itinerary | AI 일정 짜기: 장소 번호로 하루 순서 (스트리밍, 검색 없음, 생각 LOW) | GEMINI_API_KEY, (GEMINI_MODEL) |
+| plan-itinerary | AI 일정 짜기: 장소 번호로 하루 순서 (스트리밍, 검색 없음, 생각 LOW). 날짜별 이동편 시간대(from · until · move) 반영 | GEMINI_API_KEY, (GEMINI_MODEL) |
+| guide-cards | AI 가이드 카드 4종 (스트리밍). 날씨는 Open-Meteo(키 없음) + 글쓰기, 나머지는 구글 검색. `begin_ai_guide` | GEMINI_API_KEY, (GEMINI_MODEL) |
 
-- `enrich-place`, `recommend-places`, `plan-itinerary`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
-- 세 AI 함수 모두 `begin_ai_call` → `finish_ai_call`로 호출마다 토큰 수와 걸린 시간을 기록합니다.
+- `enrich-place`, `recommend-places`, `plan-itinerary`, `guide-cards`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
+- AI 함수는 `begin_ai_call`(가이드는 `begin_ai_guide`) → `finish_ai_call`로 호출마다 토큰 수와 걸린 시간을 기록합니다.
 - 대시보드에서 붙여넣어 배포하므로 각 함수는 **파일 하나로 완결**됩니다(공용 모듈 없이 helper를 복사해 둠). 한쪽 helper를 고치면 다른 쪽도 같이 고칩니다.
 
 - 모든 함수가 **Verify JWT OFF**입니다(`supabase/config.toml`). 함수 안에서 사용자 세션과 멤버 여부를 직접 검증합니다.
@@ -644,6 +664,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `schedule:routeHotel` | 동선에 숙소 출발·복귀 포함 (값이 없으면 그날 숙소를 정했을 때 켬) |
 | `install:dismissedAt` | 설치 안내 띠 닫은 시각 (30일) |
 | `nav:fromHome` (sessionStorage) | 여행을 홈에서 열었는지 ([←] 동작) |
+| `share:pending` (sessionStorage) | 앱 [공유]로 받은 구글 지도 링크 `{tripId, url, at}` (장소 탭이 열릴 때 한 번 꺼냄, 10분) |
 | `ai-plan-undo:v1:<tripId>` | AI 일정 되돌리기 기록 (24시간) |
 | `app:welcomedAt` | 안드로이드 앱 처음 실행 안내를 닫은 시각 |
 | `app:keepAwake` | 안드로이드 앱 화면 켜두기 (`'1'`/`'0'`) |
@@ -698,6 +719,11 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | 확인 전에는 보내지 않고, 토큰 · 확인 불가 권한 오류는 버리지 않음 | 재연결 직후 anon 으로 나간 요청이 RLS 에 막혀 변경이 사라지던 문제 |
 | 저장된 로그인 정보가 있으면 새 익명 계정 금지 | 약한 신호에서 확인 실패 → 익명 가입 성공 시 이 기기의 참여 기록을 잃음 |
 | 자동 미리 받기는 출발 7일 전부터, 앱이 열려 있을 때만 | 데이터 사용량과 효과의 균형. 백그라운드 동기화는 크롬 설치 앱에서만 가끔 돌아 신뢰 불가 |
+| AI 가이드 날씨는 실제 기록 + AI 는 옷차림만 | AI 가 기온을 지어내지 않게. 숫자 표는 서버가 직접 만들고 AI 에는 "숫자를 다시 쓰지 말라" |
+| AI 가이드는 카드마다 여행당 3번 · 같은 종류는 덮어쓰기 | 여행 정보가 바뀌면 다시 만들 수 있게, 카드가 쌓이지 않게 |
+| AI 정보 채우기 검수는 종류 비교만 (미리보기 없음) | 역을 식당으로 답하는 식의 큰 실수만 막고, 한 번 더 누르는 단계는 늘리지 않음 |
+| 이동편은 별도 표 (일정 항목 아님) | 출발 · 도착 두 날짜 · 터미널 등 칸이 다르고 AI 일정 · 가이드가 구조화된 값으로 써야 함 |
+| 고르기 창 → 다른 화면 이동은 popstate 뒤 | 고르기 창을 닫는 history.back 이 먼저 한 이동을 되돌림 (시트와 같은 문제) |
 | AI 진행 표시는 스트리밍 | 요청을 둘로 나누면 한도 없이 정리 단계만 부를 틈이 생김, 시간으로 흉내 내면 실제와 안 맞음 |
 
 ---
@@ -716,7 +742,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - `npx vite build`: 청크 크기를 확인합니다. places 청크는 MapLibre 때문에 약 1.2MB이고, more/place-import 청크는 작게 유지되어야 합니다.
 - SQL 검증(작업 환경에 Postgres 16이 있을 때):
   1. Supabase 흉내 객체 만들기: `anon` / `authenticated` 역할, `auth` 스키마(`auth.users`, `auth.uid()`는 `request.jwt.claim.sub`에서 읽기), `extensions` 스키마의 pgcrypto, `supabase_realtime` publication
-  2. `schema.sql` → `migration_002` ~ `007` 순서로 적용
+  2. `schema.sql` → `migration_002` ~ `016` 순서로 적용 (`auth`, `extensions` 스키마에 anon · authenticated usage 권한, DB `search_path = public, extensions`. 파일은 postgres 사용자가 읽을 수 있는 곳(/tmp)에 복사)
   3. `set request.jwt.claim.sub = '<uuid>'`로 사용자를 바꿔 가며 RPC를 호출해 확인
 
 ---
@@ -732,7 +758,6 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   4. MapLibre(약 1.2MB)와 WebGL 렌더링, 장소 탭 첫 진입
   5. 글꼴: Noto Sans KR 6굵기 + 2종
   - 사용자에게 증상 확인을 요청한 상태: 스크롤 버벅임 / 누를 때 멈칫 / 첫 진입 느림
-- `public/privacy.html`, `terms.html`의 `[운영자 이름]`, `[연락처 이메일]` 채우기 (Google OAuth 심사용)
 - 다른 탭(일정, 할 일 등)의 이모지 뱃지도 장소 카드처럼 높이 고정이 필요한지 확인
 - 지출을 쓸 때마다 환율을 기록하는 방식(지출별 환율)은 필요해지면 검토
 

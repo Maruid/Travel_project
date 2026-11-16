@@ -4,16 +4,29 @@ import { dateRange, dayLabel, shortTime, todayIn, distanceKm } from '../../lib/f
 import { openPicker, placeItem } from '../../components/picker.js';
 import { renderMarkdown } from '../../lib/markdown.js';
 import { openPlaceDetail, loadMapLib } from './places.js';
-import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays, segColor, HOTEL_COLOR } from '../../lib/route-plan.js';
+import { buildRoute, directionsHref, nearestAnchor, totalText, circled, dayStays, segColor, segmentInfo, HOTEL_COLOR } from '../../lib/route-plan.js';
 import { loadUndo, undoPlan, clearUndo } from '../../lib/ai-plan.js';
 import { getPref, setPref, getPrefStr, PREF_ROUTE_OPEN, PREF_ROUTE_HOTEL } from '../../lib/prefs.js';
 import { esc } from '../../lib/dom.js';
 import { color } from '../../lib/safe.js';
 import { hoursIssueAt } from '../../lib/hours.js';
+import { transportCardsHtml, openTransportEditor } from '../../components/transports.js';
 
 const ICONS = ['fa-location-dot', 'fa-utensils', 'fa-mug-saucer', 'fa-train-subway', 'fa-taxi', 'fa-plane-departure',
   'fa-plane-arrival', 'fa-hotel', 'fa-bed', 'fa-hot-tub-person', 'fa-camera', 'fa-bag-shopping', 'fa-tree', 'fa-landmark',
   'fa-person-walking', 'fa-ticket', 'fa-gamepad', 'fa-beer-mug-empty', 'fa-sun', 'fa-moon'];
+
+// 일정 카드 사이 이동 한 줄: "↓ 약 도보 8분 (600m)  길찾기" (두 곳 다 위치가 있고 다른 장소일 때만)
+function moveLine(a, b) {
+  if (!a || !b || a.id === b.id || a.lat == null || b.lat == null) return '';
+  const seg = segmentInfo(a, b);
+  return html`
+    <div class="pl-4 flex items-center gap-2 text-[10px] text-slate-500">
+      <i class="fa-solid ${seg.transit ? 'fa-train-subway' : 'fa-person-walking'} w-3 text-center"></i>
+      <span class="truncate">${seg.text}</span>
+      <a href="${directionsHref(a, b, seg.transit)}" target="_blank" rel="noopener" class="flex-shrink-0 text-neon-cyan/80 font-bold">길찾기</a>
+    </div>`;
+}
 
 // opts.readOnly: 읽기 전용 공유 화면 (추가·수정 없음), opts.onPlace(id): 장소 버튼을 눌렀을 때
 export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
@@ -70,16 +83,20 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
             <button data-action="ai-undo-close" class="flex-shrink-0 w-6 h-6 text-slate-400" title="닫기"><i class="fa-solid fa-xmark"></i></button>
           </div>` : ''}
         ${selected ? html`
-          <div data-action="${readOnly ? 'none' : 'edit-day'}" class="glass-card p-3.5 rounded-2xl border-l-4 border-rose-500 ${readOnly ? '' : 'cursor-pointer'}">
+          <div data-action="${readOnly ? 'none' : 'edit-day'}" class="glass-card p-3.5 rounded-2xl border-l-4 border-neon-cyan ${readOnly ? '' : 'cursor-pointer'}">
             <div class="flex items-center gap-1.5 mb-0.5">
               <span class="text-xs font-bold text-white">${dayLabel(selected)}</span>
               ${header?.badge ? html`<span class="text-[10px] px-2 rounded-full bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30">${header.badge}</span>` : ''}
               ${readOnly ? '' : html`<i class="fa-solid fa-pen text-[9px] text-slate-500 ml-auto"></i>`}
             </div>
-            <h4 class="text-sm font-extrabold text-white">${header?.title || (readOnly ? dayLabel(selected) : '이 날의 제목을 정해보세요')}</h4>
+            ${header?.title
+              ? html`<h4 class="text-sm font-extrabold text-white">${header.title}</h4>`
+              : html`<h4 class="text-sm font-medium ${readOnly ? 'text-white' : 'text-slate-500'}">${readOnly ? dayLabel(selected) : '이 날의 제목을 정해보세요'}</h4>`}
             ${header?.summary ? html`<p class="text-[11px] text-slate-400 mt-0.5">${header.summary}</p>` : ''}
             ${stayLine(store, selected, readOnly)}
           </div>
+
+          ${transportCardsHtml(store, selected, { readOnly, firstDay: all[0], lastDay: all[all.length - 1] })}
 
           ${guides.map((g) => html`
             <div class="glass-card p-3.5 rounded-2xl border-l-4" style="border-left-color:${color(g.color)}">
@@ -88,10 +105,11 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
             </div>`)}
 
           <div class="space-y-2.5">
-            ${items.length ? items.map((it) => {
+            ${items.length ? items.map((it, idx) => {
               const place = store.get('places', it.place_id);
+              const gap = idx ? moveLine(store.get('places', items[idx - 1].place_id), place) : '';
               const no = route.open ? plan.stops.find((st) => st.itemIds.includes(it.id))?.no : null;
-              return html`
+              return html`${gap}
               <div class="glass-card p-3 rounded-2xl flex items-start gap-3">
                 <div class="relative w-8 h-8 rounded-xl bg-slate-800/80 border border-white/10 flex items-center justify-center text-neon-cyan text-xs flex-shrink-0 mt-0.5">
                   <i class="fa-solid ${it.icon || 'fa-location-dot'}"></i>
@@ -145,7 +163,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     // 선택 표시만 바꿈 (줄을 다시 만들지 않음)
     box.querySelectorAll('.day-chip').forEach((b) => {
       const on = b.dataset.day === selected;
-      b.classList.toggle('bg-rose-500', on); b.classList.toggle('text-white', on); b.classList.toggle('shadow-lg', on);
+      b.classList.toggle('bg-neon-cyan', on); b.classList.toggle('text-night-950', on); b.classList.toggle('shadow-lg', on);
       b.classList.toggle('glass-card', !on); b.classList.toggle('text-slate-400', !on);
     });
     if (lastCentered !== selected) {
@@ -366,6 +384,8 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     add: () => openItemEditor(store, null, selected),
     edit: (el) => openItemEditor(store, el.dataset.id, selected),
     'edit-day': () => openDayEditor(store, selected),
+    transport: (el) => openTransportEditor(store, el.dataset.id),
+    'transport-add': (el) => openTransportEditor(store, null, { direction: el.dataset.dir }),
     'add-day': () => {
       const d = prompt('추가할 날짜 (YYYY-MM-DD)');
       if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;

@@ -35,7 +35,7 @@ export async function render(app, params) {
   if (!store.trip) {
     // 오프라인 · 로그인 확인 전이면 "볼 수 없음"이 아니라 아직 못 받은 것
     const notYet = !navigator.onLine || store.status === 'offline';
-    setHTML(app, html`<main class="p-6 text-center mt-20 space-y-3">
+    setHTML(app, html`<main class="p-6 text-center mt-20 space-y-3" style="margin-top:calc(5rem + var(--sat))">
       <p class="text-sm text-slate-300">${notYet ? '이 여행은 이 기기에 아직 저장되지 않았어요.' : '이 여행을 볼 수 없습니다. 초대 링크로 다시 참여해 주세요.'}</p>
       ${notYet ? html`<p class="text-[11px] text-slate-500">인터넷에 연결된 뒤 다시 열어 주세요.</p>` : ''}
       <button data-action="home" class="btn-ghost">홈으로</button></main>`);

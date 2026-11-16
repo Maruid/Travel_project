@@ -1,4 +1,4 @@
-import { html, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
+import { html, raw, setHTML, delegate, formValues, $, esc } from '../../lib/dom.js';
 // 지도 라이브러리(MapLibre, 약 1.2MB)는 따로 불러옴: 장소 리스트를 먼저 보여주고 지도는 준비되는 대로 붙임
 let L = null; let createMap = null; let pinIcon = null; let pinSize = null; let draggablePin = null;
 let mapLibPromise = null;
@@ -17,6 +17,7 @@ import { isCurrencyCode } from '../../lib/currency.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { progressTicker, timingText, sourceLabel } from '../../lib/ai-stream.js';
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
+import { takePendingShare } from '../../lib/share-in.js';
 import { color, icon } from '../../lib/safe.js';
 import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
@@ -26,6 +27,7 @@ import { getPref, setPref, getPrefStr, setPrefStr, PREF_MAP_COLLAPSED, PREF_ANCH
 import { openPicker, placeItem } from '../../components/picker.js';
 import { parseFilter, filterToString, activeCount, pruneFilter, passesFilter, searchPlaces, groupCategories, EMPTY_FILTER } from '../../lib/place-filter.js';
 import { hoursStatus } from '../../lib/hours.js';
+import { checkEnrich } from '../../lib/enrich-check.js';
 import { todayIn, dateRange } from '../../lib/format.js';
 
 // 지도 높이 세 단계 (장소 탭 높이 대비 %)
@@ -681,10 +683,19 @@ export function mount(root, store) {
     if (el) el.textContent = '지도를 불러오지 못했어요. 온라인 상태에서 다시 열어주세요.';
   });
 
+  // 구글 지도 [공유]로 들어온 링크 → 새 장소 추가 창 (앱)
+  const takeShare = () => {
+    const link = takePendingShare(store.tripId);
+    if (link) openPlaceEditor(store, null, { near: anchorPoint(), link });
+  };
+  window.addEventListener('share:place', takeShare);
+  setTimeout(takeShare, 0);
+
   return {
     update,
     destroy: () => {
       off();
+      window.removeEventListener('share:place', takeShare);
       window.removeEventListener('resize', onResize);
       root.style.height = prevStyle.height;
       root.style.paddingBottom = prevStyle.paddingBottom;
@@ -698,19 +709,6 @@ export function mount(root, store) {
 // =====================================================================
 // 찜 (❤️)
 // =====================================================================
-// 상세 시트: 찜한 사람 이름 + 내 찜 버튼
-function likeRow(store, placeId) {
-  const ids = store.likeMap().get(placeId) || [];
-  const mine = store.likedByMe(placeId);
-  const names = likeNames(store, ids);
-  return html`
-    <div class="flex items-center gap-2 mb-3 p-2.5 rounded-2xl bg-rose-500/5 border border-rose-500/20">
-      <i class="fa-solid fa-heart text-rose-400 text-xs"></i>
-      <span class="flex-1 min-w-0 text-[11px] ${names.length ? 'text-rose-100' : 'text-slate-500'} truncate">${names.length ? names.join(', ') : '아직 찜한 사람이 없어요'}</span>
-      <button data-action="like" class="flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${mine ? 'bg-rose-500/20 text-rose-200 border-rose-500/50' : 'bg-slate-800 text-slate-200 border-white/10'}">
-        ${mine ? '찜 취소' : '찜하기'}</button>
-    </div>`;
-}
 
 // 카드 오른쪽 작은 하트: 내가 찜했으면 빨강, 누가 찜했으면 숫자
 function likeButton(memberIds, meId, placeId) {
@@ -736,61 +734,80 @@ export function toggleLikeWithToast(store, placeId) {
 // =====================================================================
 // 상세 시트
 // =====================================================================
+// 상세 본문 (보기 전용 화면도 같이 씀)
+//  위: 상태 뱃지 · 이름 · 별점 · 가격 · 동네  → 동그란 동작 줄 → 대표 메뉴 · 소개 · 팁 → 오늘 영업시간(펼치기)
+//  가끔 쓰는 동작(수정 · 기준점 · 구글 다시 가져오기 · 유튜브 · 삭제)은 ⋯ 안에
+export function placeDetailHtml(store, p, { from = null, readOnly = false } = {}) {
+  const cat = store.category(p.category_id);
+  const walk = walkInfo(from, p);
+  const tz = store.trip?.timezone;
+  const likeIds = readOnly ? [] : store.likeMap().get(p.id) || [];
+  const mine = !readOnly && store.likedByMe(p.id);
+  const names = readOnly ? [] : likeNames(store, likeIds);
+  const meta = [
+    p.rating ? html`<span class="text-amber-300 font-bold">★${Number(p.rating).toFixed(1)}${p.rating_count ? html`<span class="text-slate-400 font-normal"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : null,
+    priceRange(p) ? html`<span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="text-slate-400"> (${priceInHome(p, store.budget)})</span>` : ''}` : null,
+    p.zone ? html`<span>${p.zone}</span>` : null,
+  ].filter(Boolean);
+  const act = (attrs, iconCls, label, on = false, extra = '') => html`
+    <span class="flex flex-col items-center gap-1 min-w-0">
+      <span class="w-11 h-11 rounded-full flex items-center justify-center border ${on ? 'bg-neon-cyan/15 text-neon-cyan border-neon-cyan/50' : 'bg-slate-800 text-slate-200 border-white/10'}">${raw(iconCls)}</span>
+      <span class="text-[10px] ${on ? 'text-neon-cyan font-bold' : 'text-slate-400'} whitespace-nowrap">${label}${extra}</span>
+    </span>`;
+  const hours = p.opening_hours?.weekday || [];
+  const today = todayIndexMondayFirst(tz);
+  const site = safeUrl(p.website);
+  return html`
+    ${readOnly ? '' : geoReviewCard(p)}
+    ${STATUS_TEXT[p.business_status] ? html`<p class="p-2 mb-2 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-[11px] font-bold">⚠️ ${STATUS_TEXT[p.business_status]}</p>` : ''}
+    <div class="flex items-center gap-1.5 flex-wrap">${placeBadges(p, cat, tz)}</div>
+    <div class="flex items-start justify-between gap-2 mt-1.5">
+      <h3 class="text-lg font-black text-white leading-snug min-w-0 break-keep">${p.name}</h3>
+      ${walk.text ? html`<span class="flex-shrink-0 mt-1 text-[11px] font-bold text-emerald-400 whitespace-nowrap">${walk.text}</span>` : ''}
+    </div>
+    ${meta.length ? html`<p class="text-[11px] text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-1.5">${meta.map((m, i) => html`${i ? html`<span class="text-slate-600">·</span>` : ''}${m}`)}</p>` : ''}
+
+    <div class="grid ${readOnly ? 'grid-cols-1' : 'grid-cols-5'} gap-1 my-3">
+      <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="flex justify-center">${act('', '<i class="fa-solid fa-diamond-turn-right"></i>', '길찾기', true)}</a>
+      ${readOnly ? '' : html`
+        <button data-action="like" class="flex justify-center" aria-pressed="${mine ? 'true' : 'false'}">${act('', `<i class="fa-solid fa-heart ${mine ? 'text-rose-400' : ''}"></i>`, '찜', false, likeIds.length ? ` ${likeIds.length}` : '')}</button>
+        <button data-action="to-schedule" class="flex justify-center">${act('', '<i class="fa-solid fa-calendar-plus"></i>', '일정에')}</button>
+        <button data-action="toggle-visited" class="flex justify-center">${act('', '<i class="fa-solid fa-check"></i>', p.visited_at ? '다녀옴 ✓' : '다녀옴', !!p.visited_at)}</button>
+        <button data-action="more" class="flex justify-center">${act('', '<i class="fa-solid fa-ellipsis"></i>', '더보기')}</button>`}
+    </div>
+    ${names.length ? html`<p class="-mt-1 mb-2 text-[11px] text-rose-200 truncate"><i class="fa-solid fa-heart text-rose-400 mr-1"></i>${names.join(', ')}</p>` : ''}
+
+    <div class="space-y-2 text-xs">
+      ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
+      ${p.description ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">소개</span><p class="text-slate-300 leading-relaxed whitespace-pre-line">${p.description}</p></div>` : ''}
+      ${p.visit_tip ? html`<div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30"><span class="text-[10px] font-bold text-amber-400 block mb-0.5">웨이팅 / 방문 팁</span><p class="text-amber-200 font-medium">${p.visit_tip}</p></div>` : ''}
+      ${hours.length ? html`
+        <details class="p-3 rounded-2xl glass-card group">
+          <summary class="flex items-center justify-between cursor-pointer list-none">
+            <span class="min-w-0 truncate"><i class="fa-solid fa-clock text-slate-400 mr-1.5"></i><span class="text-slate-400">오늘</span> <b class="text-white">${String(hours[today] || '').replace(/^[^:：]+[:：]\s*/, '') || '-'}</b></span>
+            <i class="fa-solid fa-chevron-down text-[10px] text-slate-500 group-open:rotate-180 transition"></i>
+          </summary>
+          <ul class="mt-2 space-y-0.5">${hours.map((h, i) => html`<li class="${i === today ? 'text-white font-bold' : 'text-slate-400'}">${h}</li>`)}</ul>
+          <p class="text-[10px] text-slate-500 mt-1">공휴일 · 연말연시 특별 휴무는 구글 지도에서 확인하세요.</p>
+        </details>` : ''}
+      ${p.phone || site ? html`<div class="flex gap-4 text-[11px] px-1">
+        ${p.phone ? html`<a href="tel:${p.phone.replace(/[^\d+]/g, '')}" class="text-neon-cyan"><i class="fa-solid fa-phone mr-1"></i>${p.phone}</a>` : ''}
+        ${site ? html`<a href="${site}" target="_blank" rel="noopener" class="text-neon-cyan truncate"><i class="fa-solid fa-globe mr-1"></i>웹사이트</a>` : ''}
+      </div>` : ''}
+    </div>`;
+}
+
 export function openPlaceDetail(store, id, from) {
   const p = store.get('places', id);
   if (!p) return;
-  const cat = store.category(p.category_id);
-  const walk = walkInfo(from, p);
-  const yt = safeUrl(p.youtube_url);
-
-  openSheet(html`
-    <div class="flex items-center justify-between mb-1">
-      <div class="flex items-center gap-1.5 flex-wrap">
-        ${placeBadges(p, cat, store.trip?.timezone)}
-      </div>
-      <span class="text-xs font-bold text-emerald-400">${walk.text}</span>
-    </div>
-    <h3 class="text-lg font-black text-white mt-1">${p.name}</h3>
-    <div class="flex items-center justify-between text-xs text-slate-400 mb-3">
-      <span>${p.zone || ''}</span>
-      <span class="text-right"><span class="font-mono text-emerald-400 font-bold">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="block text-[10px] text-slate-400">${priceInHome(p, store.budget)}</span>` : ''}</span>
-    </div>
-    ${likeRow(store, id)}
-    ${geoReviewCard(p)}
-    ${googleBlock(p, store.trip.timezone)}
-    <div class="space-y-2 text-xs">
-      ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
-      ${p.description ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">상세 안내</span><p class="text-slate-300 leading-relaxed whitespace-pre-line">${p.description}</p></div>` : ''}
-      ${p.visit_tip ? html`<div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30"><span class="text-[10px] font-bold text-amber-400 block mb-0.5">웨이팅 / 방문 팁</span><p class="text-amber-200 font-medium">${p.visit_tip}</p></div>` : ''}
-    </div>
-    ${yt ? html`<a href="${yt}" target="_blank" rel="noopener" class="w-full mt-3 py-2.5 rounded-xl bg-red-600/20 text-red-300 border border-red-500/40 font-bold text-xs flex items-center justify-center gap-2">
-      <i class="fa-brands fa-youtube text-red-500 text-sm"></i> 유튜브 영상 보기</a>` : ''}
-    <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="btn-primary mt-2 flex items-center justify-center gap-1.5">
-      <i class="fa-solid fa-diamond-turn-right"></i> 구글 맵에서 길찾기</a>
-    <button data-action="google-refresh" class="btn-ghost w-full py-2.5 mt-2">
-      <i class="fa-brands fa-google mr-1"></i>${p.google_place_id ? '구글 정보 다시 가져오기' : '구글 정보 가져오기'}
-      ${p.google_synced_at ? html`<span class="text-[10px] text-slate-500 font-normal ml-1">(${String(p.google_synced_at).slice(0, 10)})</span>` : ''}
-    </button>
-    ${p.lat != null ? html`
-      <button data-action="toggle-anchor" class="w-full mt-2 py-2.5 rounded-xl text-xs font-bold border ${p.is_anchor ? 'bg-amber-500/15 text-amber-200 border-amber-500/40' : 'bg-slate-800 text-slate-200 border-white/10'}">
-        <i class="fa-solid fa-house-flag mr-1"></i>${p.is_anchor ? '기준점 해제' : '거리 계산 기준점으로 지정'}</button>` : ''}
-    <div class="grid grid-cols-2 gap-2 mt-2">
-      <button data-action="to-schedule" class="btn-ghost py-2.5"><i class="fa-solid fa-calendar-plus mr-1"></i>일정에 넣기</button>
-      <button data-action="toggle-visited" class="py-2.5 rounded-xl text-[11px] font-bold border ${p.visited_at ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/40' : 'bg-slate-800 text-slate-200 border-white/10'}">
-        <i class="fa-solid fa-check mr-1"></i>${p.visited_at ? '다녀옴 취소' : '다녀옴'}</button>
-    </div>
-    <div class="grid grid-cols-2 gap-2 mt-2">
-      <button data-action="edit" class="btn-ghost py-2.5"><i class="fa-solid fa-pen mr-1"></i>수정</button>
-      <button data-action="delete" class="btn-ghost py-2.5 text-rose-300"><i class="fa-solid fa-trash-can mr-1"></i>삭제</button>
-    </div>
-  `, (el) => delegate(el, {
-    like: () => { toggleLikeWithToast(store, id); openPlaceDetail(store, id, from); },
-    edit: () => openPlaceEditor(store, id, { near: from }),
-    'geo-open': () => openGeoReview(store, geoReviewOf(p).type, { startId: id, onDone: () => openPlaceDetail(store, id, from) }),
+  const reopen = () => openPlaceDetail(store, id, from);
+  openSheet(placeDetailHtml(store, p, { from }), (el) => delegate(el, {
+    like: () => { toggleLikeWithToast(store, id); reopen(); },
+    'geo-open': () => openGeoReview(store, geoReviewOf(p).type, { startId: id, onDone: reopen }),
     'geo-keep': () => {
       store.update('places', id, { geo_review: null });
       toast('지금 위치를 그대로 두었어요.');
-      openPlaceDetail(store, id, from);
+      reopen();
     },
     'to-schedule': async () => {
       const { openItemEditor } = await import('./schedule.js');
@@ -800,43 +817,56 @@ export function openPlaceDetail(store, id, from) {
       const on = !p.visited_at;
       store.update('places', id, { visited_at: on ? new Date().toISOString() : null });
       toast(on ? '다녀온 곳으로 표시했어요.' : '다녀옴 표시를 지웠어요.');
-      openPlaceDetail(store, id, from);
+      reopen();
     },
-    'toggle-anchor': () => {
-      const on = !p.is_anchor;
-      store.update('places', id, { is_anchor: on });
-      toast(on ? `"${p.name}" 을(를) 기준점으로 지정했어요. 지도 위 기준 목록에서 고를 수 있어요.` : '기준점에서 해제했어요.');
-      openPlaceDetail(store, id, from);
-    },
-    'google-refresh': async (b) => {
-      if (b.dataset.busy) return;
-      b.dataset.busy = '1';
-      b.textContent = '구글 정보 가져오는 중...';
-      try {
-        const r = await refreshFromGoogle(store, p);
-        toast(r.review
-          ? `구글 위치가 기존 핀과 ${r.review.distance}m 떨어져 있어 위치는 바꾸지 않았어요. 다른 지점인지 확인해 주세요.`
-          : '구글 정보를 반영했어요.', r.review ? 'error' : 'info');
-        openPlaceDetail(store, id, from);
-      } catch (e) {
-        toast(e.message, 'error');
-        delete b.dataset.busy;
-        b.textContent = '구글 정보 가져오기';
+    more: () => openPlaceMore(store, p, from, reopen),
+  }));
+}
+
+// ⋯ 더보기: 상세 위에 한 겹 (뒤로가기는 이 창만 닫음)
+function openPlaceMore(store, p, from, reopen) {
+  const yt = safeUrl(p.youtube_url);
+  const items = [
+    { id: 'edit', title: '수정', icon: 'fa-pen' },
+    p.lat != null ? { id: 'anchor', title: p.is_anchor ? '기준점 해제' : '거리 계산 기준점으로 지정', sub: '숙소 · 역처럼 거리를 재는 기준', icon: 'fa-house-flag', color: '#f59e0b' } : null,
+    { id: 'google', title: p.google_place_id ? '구글 정보 다시 가져오기' : '구글 정보 가져오기', sub: p.google_synced_at ? `마지막 ${String(p.google_synced_at).slice(0, 10)}` : '영업시간 · 평점 · 정확한 좌표', icon: 'fa-rotate' },
+    yt ? { id: 'youtube', title: '유튜브 영상 보기', icon: 'fa-circle-play', color: '#ef4444' } : null,
+    { id: 'delete', title: '삭제', icon: 'fa-trash-can', color: '#f43f5e' },
+  ].filter(Boolean);
+  openPicker({
+    title: p.name,
+    sections: [{ items }],
+    onPick: async (act) => {
+      if (act === 'edit') openPlaceEditor(store, p.id, { near: from });
+      else if (act === 'anchor') {
+        const on = !p.is_anchor;
+        store.update('places', p.id, { is_anchor: on });
+        toast(on ? `"${p.name}" 을(를) 기준점으로 지정했어요. 지도 위 기준 목록에서 고를 수 있어요.` : '기준점에서 해제했어요.');
+        reopen();
+      } else if (act === 'google') {
+        toast('구글 정보 가져오는 중...');
+        try {
+          const r = await refreshFromGoogle(store, store.get('places', p.id) || p);
+          toast(r.review
+            ? `구글 위치가 기존 핀과 ${r.review.distance}m 떨어져 있어 위치는 바꾸지 않았어요. 다른 지점인지 확인해 주세요.`
+            : '구글 정보를 반영했어요.', r.review ? 'error' : 'info');
+          reopen();
+        } catch (e) { toast(e.message, 'error'); }
+      } else if (act === 'youtube') window.open(yt, '_blank', 'noopener');
+      else if (act === 'delete') {
+        if (!confirmAction(`"${p.name}" 을(를) 삭제할까요?`)) return;
+        store.remove('places', p.id);
+        closeSheet();
+        toast('삭제했습니다.');
       }
     },
-    delete: () => {
-      if (!confirmAction(`"${p.name}" 을(를) 삭제할까요?`)) return;
-      store.remove('places', id);
-      closeSheet();
-      toast('삭제했습니다.');
-    },
-  }));
+  });
 }
 
 // =====================================================================
 // 추가/수정 시트: 링크 붙여넣기 → 좌표 자동 추출 → 미니 지도에서 핀 확인
 // =====================================================================
-export async function openPlaceEditor(store, id, { near, prefill = null } = {}) {
+export async function openPlaceEditor(store, id, { near, prefill = null, link = null } = {}) {
   await loadMapLib();   // 위치 선택 미니 지도용
   const p = id ? store.get('places', id) : {};
   const cats = store.categories();
@@ -1101,6 +1131,39 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
       }
     }
 
+    // AI 결과를 빈 칸에 넣기 (검수를 통과했거나 [그래도 넣기])
+    function applyAi(r) {
+      const f = r.fields || {};
+      // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
+      const textKeys = r.grounded ? ['signature', 'description', 'visit_tip', 'warn_badge', 'zone'] : ['signature', 'description', 'zone'];
+      const filled = textKeys.filter((k) => fill(k, f[k], 'ai'));
+      if (r.grounded) {
+        if (fill('price_min', f.price_min, 'ai')) filled.push('price_min');
+        if (fill('price_max', f.price_max, 'ai')) filled.push('price_max');
+        if (f.price_currency) fill('price_currency', f.price_currency, 'ai');
+      }
+      // 카테고리: 비어 있거나 자동으로 고른 값이면 AI 가 고른 것으로 (없으면 같은 종류의 기본 카테고리)
+      const catSel = form.elements.category_id;
+      if (!catSel.value || catSel.dataset.auto === '1') {
+        const pick = (f.category_id && store.category(f.category_id) ? f.category_id : null)
+          || (!catSel.value && f.kind ? store.globalCategories.find((x) => x.kind === f.kind)?.id : null);
+        if (pick && pick !== catSel.value) { catSel.value = pick; catSel.dataset.auto = '1'; filled.push('category'); }
+      }
+      renderAiResult(r, filled.length);
+      toast(filled.length ? `${filled.length}개 항목을 채웠어요. 확인 후 저장하세요.` : '새로 채울 수 있는 정보가 없었어요.');
+    }
+    // 종류가 맞지 않는 결과: 넣지 않고 이유 + [그래도 넣기]
+    function renderAiMismatch(r, message, force) {
+      const box = $('#ai-result', el);
+      setHTML(box, html`
+        <p class="text-amber-200"><i class="fa-solid fa-triangle-exclamation mr-1"></i><b>넣지 않았어요</b> · ${message}</p>
+        ${r.fields?.description ? html`<p class="text-slate-300">AI 답: ${r.fields.description}</p>` : ''}
+        <button type="button" data-action="ai-force" class="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 font-bold text-amber-100">그래도 빈 칸에 넣기</button>
+        ${aiEvidence(r)}`);
+      box._force = () => { box._force = null; force(); };
+      box.classList.remove('hidden');
+    }
+
     const off = delegate(el, {
       'fetch-link': fetchLink,
       search,
@@ -1128,8 +1191,11 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
         b.dataset.busy = '1';
         const label = b.innerHTML;
         const ticker = progressTicker((text) => { b.textContent = text; });
+        // 이 장소의 종류 (구글 분류 → 직접 고른 카테고리): AI 에게 알려 주고, 결과가 다르면 넣지 않음
+        const knownKind = google?.kind || store.category(form.elements.category_id.value)?.kind || null;
         try {
           const r = await enrichPlace({
+            knownKind,
             tripId: store.tripId, name,
             zone: form.elements.zone.value.trim() || null,
             destination: store.trip.destination || null,
@@ -1145,23 +1211,13 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
             categories: store.categories().map((c) => ({ id: c.id, name: c.name, kind: c.kind })).slice(0, 40),
           }, ticker.onEvent);
           const f = r.fields || {};
-          // 검색 근거가 없으면 틀리기 쉬운 값(가격·휴무·팁)은 자동으로 넣지 않고 "추정"으로만 보여줌
-          const textKeys = r.grounded ? ['signature', 'description', 'visit_tip', 'warn_badge', 'zone'] : ['signature', 'description', 'zone'];
-          const filled = textKeys.filter((k) => fill(k, f[k], 'ai'));
-          if (r.grounded) {
-            if (fill('price_min', f.price_min, 'ai')) filled.push('price_min');
-            if (fill('price_max', f.price_max, 'ai')) filled.push('price_max');
-            if (f.price_currency) fill('price_currency', f.price_currency, 'ai');
+          const chk = checkEnrich({ knownKind, aiKind: f.kind });
+          if (!chk.ok) {
+            renderAiMismatch(r, chk.message, () => applyAi(r));
+            toast('AI 결과가 이 장소와 맞지 않아 넣지 않았어요. 아래에서 확인해 주세요.', 'error');
+            return;
           }
-          // 카테고리: 비어 있거나 자동으로 고른 값이면 AI 가 고른 것으로 (없으면 같은 종류의 기본 카테고리)
-          const catSel = form.elements.category_id;
-          if (!catSel.value || catSel.dataset.auto === '1') {
-            const pick = (f.category_id && store.category(f.category_id) ? f.category_id : null)
-              || (!catSel.value && f.kind ? store.globalCategories.find((x) => x.kind === f.kind)?.id : null);
-            if (pick && pick !== catSel.value) { catSel.value = pick; catSel.dataset.auto = '1'; filled.push('category'); }
-          }
-          renderAiResult(r, filled.length);
-          toast(filled.length ? `${filled.length}개 항목을 채웠어요. 확인 후 저장하세요.` : '새로 채울 수 있는 정보가 없었어요.');
+          applyAi(r);
         } catch (e) {
           toast(e.message, 'error');
           renderAiError(e);
@@ -1171,6 +1227,7 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
           b.innerHTML = label;
         }
       },
+      'ai-force': () => $('#ai-result', el)._force?.(),
       'ai-apply-estimate': () => {
         const est = $('#ai-result', el)._estimate || {};
         const done = ['price_min', 'price_max', 'price_currency', 'visit_tip', 'warn_badge'].filter((k) => est[k] != null && fill(k, est[k], 'ai'));
@@ -1178,6 +1235,8 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
       },
     });
     $('#link-input', el).addEventListener('paste', () => setTimeout(fetchLink, 0));
+    // 공유로 받은 링크: 넣고 바로 가져오기
+    if (link && !id) { $('#link-input', el).value = link; setTimeout(fetchLink, 0); }
     // 사용자가 기준점 체크를 직접 바꿨으면 자동 체크하지 않음
     form.elements.is_anchor.addEventListener('change', (e) => { e.target.dataset.touched = '1'; });
     // 사용자가 카테고리를 직접 고르면 자동 선택이 덮어쓰지 않음
@@ -1236,32 +1295,6 @@ export async function openPlaceEditor(store, id, { near, prefill = null } = {}) 
 
     return () => { off(); pm.remove(); };
   });
-}
-
-// =====================================================================
-// 구글 지도 정보 표시 (영업시간 · 평점 · 폐업 · 연락처)
-// =====================================================================
-export function googleBlock(p, timezone) {
-  const hours = p.opening_hours?.weekday || [];
-  if (!p.google_place_id && !hours.length && !p.rating) return '';
-  const today = todayIndexMondayFirst(timezone);
-  const site = safeUrl(p.website);
-  return html`
-    <div class="p-3 rounded-2xl glass-card text-xs mb-2 space-y-2">
-      <div class="flex items-center justify-between">
-        <span class="text-[10px] font-bold text-slate-400"><i class="fa-brands fa-google mr-1"></i>구글 지도 정보</span>
-        ${p.rating ? html`<span class="text-amber-300 font-bold">★ ${Number(p.rating).toFixed(1)}
-          ${p.rating_count ? html`<span class="text-slate-400 font-normal">(${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : ''}
-      </div>
-      ${STATUS_TEXT[p.business_status] ? html`<p class="p-2 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-200 font-bold">⚠️ ${STATUS_TEXT[p.business_status]}</p>` : ''}
-      ${hours.length ? html`<ul class="space-y-0.5">${hours.map((h, i) => html`
-        <li class="${i === today ? 'text-white font-bold' : 'text-slate-400'}">${i === today ? '▶ ' : ''}${h}</li>`)}</ul>
-        <p class="text-[10px] text-slate-500">공휴일·연말연시 등 특별 휴무는 구글 지도에서 확인하세요.</p>` : ''}
-      ${p.phone || site ? html`<div class="flex gap-3 text-[11px]">
-        ${p.phone ? html`<a href="tel:${p.phone.replace(/[^\d+]/g, '')}" class="text-neon-cyan"><i class="fa-solid fa-phone mr-1"></i>${p.phone}</a>` : ''}
-        ${site ? html`<a href="${site}" target="_blank" rel="noopener" class="text-neon-cyan truncate"><i class="fa-solid fa-globe mr-1"></i>웹사이트</a>` : ''}
-      </div>` : ''}
-    </div>`;
 }
 
 // "일정에 넣기" 기본 날짜: 여행 중이면 오늘, 아니면 여행 첫날

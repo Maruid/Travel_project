@@ -307,6 +307,7 @@ export async function openAiPlan(store, { dates, day = null, onApplied = () => {
         dates: chosen, mode: state.mode, keepIds: state.keep || new Set(),
         density: state.density, likeMode: state.likeMode, likes, text: state.text,
         start: state.start, end: state.end, skipVisited: state.skipVisited, cats: state.cats, tripLast: tripLastDate(store),
+        transports: store.list('trip_transports'),
       });
       if (!body.places.some((p) => !p.anchor)) { toast('후보 장소가 없어요. 후보 카테고리를 골라 주세요.', 'error'); return; }
       state.busy = true;

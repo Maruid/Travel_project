@@ -1,10 +1,10 @@
 import './styles.css';
-import { route, startRouter } from './router.js';
+import { route, startRouter, navigate, currentPath } from './router.js';
 import { supabase } from './lib/supabase.js';
 import { consumeReturn, readAuthError, setupAuthConnection } from './lib/auth.js';
 import { startAutoPrefetch } from './lib/prefetch.js';
 import { setupPWA, showUpdateBar } from './lib/pwa.js';
-import { initApp } from './lib/native.js';
+import { initApp, startShareIntake } from './lib/native.js';
 import { toast } from './components/ui.js';
 import { installBackNav } from './lib/back-nav.js';
 import { setupInstall } from './lib/install.js';
@@ -44,6 +44,11 @@ async function boot() {
   await startRouter();
   installBackNav({ onExitHint: (text) => toast(text) });
   startAutoPrefetch();     // 진행 중 · 곧 출발 여행 미리 받기 + 저장된 여행 최신화
+  // 앱: 구글 지도 [공유] → 장소 추가
+  startShareIntake(async (text) => {
+    const { handleSharedText } = await import('./lib/share-in.js');
+    await handleSharedText(text, { toast, navigate, currentPath });
+  });
 }
 
 boot().catch((e) => {

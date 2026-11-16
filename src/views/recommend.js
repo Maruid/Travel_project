@@ -51,7 +51,7 @@ export async function openRecommend(store, { anchor = null } = {}) {
   const state = {
     keyword: '',
     scope: anchor ? 'anchor' : 'all',
-    count: 5,
+    count: 10,   // 5곳과 토큰 차이가 크지 않아 10곳으로 고정 (2026-11-15)
     busy: false,
     result: lastResult.get(store.tripId) || null,
     recent: null,
@@ -113,8 +113,7 @@ export async function openRecommend(store, { anchor = null } = {}) {
             ${anchor ? html`<label class="flex items-center gap-1"><input type="radio" name="rc-scope" value="anchor" ${state.scope === 'anchor' ? 'checked' : ''} class="accent-cyan-400">${anchor.name || '기준점'} 근처</label>` : ''}
             <label class="flex items-center gap-1"><input type="radio" name="rc-scope" value="all" ${state.scope === 'all' ? 'checked' : ''} class="accent-cyan-400">${store.trip.destination || '여행지'} 전체</label>
             <span class="flex-1"></span>
-            <label class="flex items-center gap-1"><input type="radio" name="rc-count" value="5" ${state.count === 5 ? 'checked' : ''} class="accent-cyan-400">5곳</label>
-            <label class="flex items-center gap-1"><input type="radio" name="rc-count" value="10" ${state.count === 10 ? 'checked' : ''} class="accent-cyan-400">10곳</label>
+            <span class="text-[10px] text-slate-500">10곳 추천</span>
           </div>
         </div>`;
     }
@@ -336,7 +335,6 @@ export async function openRecommend(store, { anchor = null } = {}) {
       if (!keyword) { toast('찾고 싶은 것을 입력해 주세요.', 'error'); return; }
       state.keyword = keyword;
       state.scope = el.querySelector('input[name="rc-scope"]:checked')?.value || state.scope;
-      state.count = Number(el.querySelector('input[name="rc-count"]:checked')?.value || state.count);
       state.busy = true;
       const btn = el.querySelector('[data-action="run"]');
       if (btn) btn.disabled = true;

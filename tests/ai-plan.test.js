@@ -122,3 +122,15 @@ test('날짜별 숙소를 번호로 넘기고, 숙소는 후보에서 빠지지 
   assert.equal(body.days[0].stayEnd, n('ph'));
   assert.ok(body.places.find((p) => p.name === '호젠지').anchor);
 });
+
+test('요청: 이동편 도착 · 출발 시각으로 그날 시간대', () => {
+  const transports = [
+    { direction: 'out', mode: 'flight', code: 'KE723', arr_name: '간사이', arr_date: '2026-11-10', arr_time: '11:05' },
+    { direction: 'back', mode: 'flight', code: 'KE724', dep_name: '간사이', dep_date: '2026-11-11', dep_time: '18:30' },
+  ];
+  const { body } = buildPlanRequest({ ...base, dates: ['2026-11-10', '2026-11-11'], transports });
+  assert.deepEqual([body.days[0].from, body.days[0].until, body.days[0].move], ['13:05', null, '11:05 간사이 도착(항공 KE723)']);
+  assert.deepEqual([body.days[1].from, body.days[1].until], [null, '15:00']);
+  const none = buildPlanRequest({ ...base, dates: ['2026-11-10'] });
+  assert.equal('move' in none.body.days[0], false);
+});

@@ -2,7 +2,7 @@ import { supabase } from './supabase.js';
 import { SUPABASE_URL, SUPABASE_KEY } from '../config.js';
 
 // =====================================================================
-// 스트리밍 Edge Function 호출 (enrich-place, recommend-places, plan-itinerary)
+// 스트리밍 Edge Function 호출 (enrich-place, recommend-places, plan-itinerary, guide-cards)
 //  - 응답은 NDJSON: 한 줄에 JSON 하나
 //      {"t":"stage","stage":"check|search|extract","state":"start|done","ms":...}  → onEvent
 //      {"t":"result", ...}  → 반환값
@@ -12,14 +12,17 @@ import { SUPABASE_URL, SUPABASE_KEY } from '../config.js';
 export const AI_ERRORS = {
   AI_LIMIT: '오늘 사용 한도를 모두 썼어요. 내일 다시 시도해 주세요.',
   AI_BUSY: 'AI 사용량이 잠시 몰렸어요. 1분 뒤 다시 시도해 주세요.',
-  AI_NOT_ALLOWED: 'AI 추천·일정 짜기는 관리자가 허용한 사람만 쓸 수 있어요.',
+  AI_NOT_ALLOWED: 'AI 추천·일정 짜기·가이드는 관리자가 허용한 사람만 쓸 수 있어요.',
   GOOGLE_REQUIRED: 'Google 로그인 후 사용할 수 있어요.',
   NO_API_KEY: 'AI 키가 아직 설정되지 않았어요. (관리자: Edge Function Secrets 에 GEMINI_API_KEY 등록)',
   FORBIDDEN: '이 여행의 멤버만 사용할 수 있어요.',
   AUTH_REQUIRED: '로그인이 필요해요.',
   AI_PARSE: 'AI 응답을 해석하지 못했어요. 다시 시도해 주세요. (횟수는 차감되지 않아요)',
-  AI_EMPTY: 'AI 가 일정을 만들지 못했어요. 조건을 바꿔 다시 시도해 주세요. (횟수는 차감되지 않아요)',
+  AI_EMPTY: 'AI 가 결과를 만들지 못했어요. 조건을 바꿔 다시 시도해 주세요. (횟수는 차감되지 않아요)',
   AI_PLAN_LIMIT: '이 여행의 AI 일정 짜기 횟수를 모두 썼어요.',
+  AI_GUIDE_LIMIT: '이 여행에서 이 AI 가이드 카드 횟수를 모두 썼어요.',
+  GUIDE_MISSING: '이 카드에 필요한 정보가 아직 등록되지 않았어요.',
+  WEATHER_FAILED: '기상 기록을 받아오지 못했어요. 잠시 후 다시 시도해 주세요. (횟수는 차감되지 않아요)',
   BAD_REQUEST: '요청 내용이 올바르지 않아요.',
   OFFLINE: '온라인 상태에서만 사용할 수 있어요.',
 };
@@ -83,7 +86,7 @@ export async function streamFunction(name, body, onEvent) {
 }
 
 // 진행 표시: 단계 이름 + 경과 초. render(text) 를 0.5초마다 호출, stop() 으로 끝
-const STAGE_TEXT = { check: '확인 중', search: '구글 검색 중', extract: '결과 정리 중', plan: 'AI 가 일정 짜는 중' };
+const STAGE_TEXT = { check: '확인 중', search: '구글 검색 중', extract: '결과 정리 중', plan: 'AI 가 일정 짜는 중', weather: '기상 기록 받는 중', write: 'AI 가 쓰는 중' };
 export function progressTicker(render) {
   const t0 = Date.now();
   let label = '시작하는 중';

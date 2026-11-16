@@ -43,7 +43,11 @@ export function delegate(root, actions, eventName = 'click') {
     const link = e.target.closest('a[href]');
     if (link && link !== el && el.contains(link)) return;
     const fn = actions[el.dataset.action];
-    if (fn) { e.preventDefault(); fn(el, e); }
+    if (!fn) return;
+    // 체크박스 · 라디오는 기본 동작(체크 바뀜)을 막지 않음 — 막으면 눌러도 화면의 체크 표시가 되돌아감
+    const toggle = el.matches?.('input[type="checkbox"], input[type="radio"]');
+    if (!toggle) e.preventDefault();
+    fn(el, e);
   };
   root.addEventListener(eventName, handler);
   return () => root.removeEventListener(eventName, handler);

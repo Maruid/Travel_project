@@ -31,6 +31,48 @@ const MODELS = [...new Set([
 ].filter((m): m is string => !!m && m.trim() !== '').map((m) => m.trim()))];
 const KINDS = ['food', 'cafe', 'bar', 'spot', 'shop', 'lodging', 'transit', 'etc'];
 
+// 종류별로 무엇을 찾고 어떤 칸에 무엇을 쓸지 (예전엔 모든 장소를 식당처럼 물어서, 식당가에 있는 역(기타신치역)이
+//  주변 식당 정보로 채워졌음). knownKind: 구글 분류 또는 사용자가 고른 카테고리의 종류
+type KindGuide = { label: string; queries: (n: string, w: string) => string[]; research: string[]; signature: string; price: string; tip: string; warn: string };
+const EAT: KindGuide = {
+  label: '식당/카페/술집',
+  queries: (n, w) => [`${n} ${w} 메뉴 가격`, `${n} ${w} 정기휴무 영업시간`],
+  research: ['대표 메뉴', '1인 기준 가격대 (현지 통화)', '영업시간과 정기 휴무일', '예약·웨이팅·결제 방법 같은 방문 팁', '어떤 곳인지 한두 문장 소개'],
+  signature: '대표 메뉴 1~3개', price: '1인 기준 일반적인 식사·이용 비용', tip: '웨이팅·예약·결제·추천 시간대 같은 실용 팁', warn: '정기 휴무일이나 주의점 (예: "화요 휴무", "현금만")',
+};
+const KIND_GUIDE: Record<string, KindGuide> = {
+  food: EAT, cafe: EAT, bar: EAT,
+  transit: {
+    label: '역/교통 거점',
+    queries: (n, w) => [`${n} ${w} 노선 출구`, `${n} ${w} 환승`],
+    research: ['지나는 노선과 운영 회사', '주요 출구와 가까운 랜드마크', '다른 노선·역과의 환승 방법', '이 역을 이용할 때 알아두면 좋은 점', '어떤 역인지 한두 문장 소개'],
+    signature: '지나는 노선 이름 1~3개 (예: "JR 도자이선")', price: '항상 null (역은 가격 없음)', tip: '가까운 출구·환승·혼잡 시간 같은 이용 팁', warn: '공사·폐쇄 출구 같은 꼭 알아야 할 주의점만',
+  },
+  lodging: {
+    label: '숙소',
+    queries: (n, w) => [`${n} ${w} 체크인 체크아웃`, `${n} ${w} 가까운 역`],
+    research: ['체크인·체크아웃 시간', '가까운 역과 도보 시간', '짐 보관·대욕장·조식 같은 시설', '이용 팁', '어떤 숙소인지 한두 문장 소개'],
+    signature: '시설 특징 1~3개 (예: "대욕장, 무료 야식 라멘")', price: '1박 기준 객실 요금 (모르면 null)', tip: '체크인·짐 보관·가까운 출구 같은 이용 팁', warn: '꼭 알아야 할 주의점만',
+  },
+  spot: {
+    label: '명소/관광지',
+    queries: (n, w) => [`${n} ${w} 입장료 운영시간`, `${n} ${w} 볼거리`],
+    research: ['꼭 볼 것과 사진 포인트', '입장료 (현지 통화)', '운영시간과 휴관일', '예약·혼잡 시간대 같은 방문 팁', '어떤 곳인지 한두 문장 소개'],
+    signature: '꼭 볼 것 1~3개', price: '성인 1명 입장료 (무료면 null)', tip: '예약·혼잡 시간·추천 시간대 같은 실용 팁', warn: '휴관일이나 주의점 (예: "월요 휴관", "예약 필수")',
+  },
+  shop: {
+    label: '쇼핑',
+    queries: (n, w) => [`${n} ${w} 영업시간`, `${n} ${w} 면세`],
+    research: ['대표 상품이나 매장 특징', '영업시간과 휴무일', '면세·결제 방법', '방문 팁', '어떤 곳인지 한두 문장 소개'],
+    signature: '대표 상품·매장 1~3개', price: '항상 null', tip: '면세·결제·혼잡 시간 같은 실용 팁', warn: '휴무일이나 주의점',
+  },
+};
+const guideOf = (k: unknown) => KIND_GUIDE[typeof k === 'string' ? k : ''] || EAT;
+// 종류를 알고 있으면 그 종류라는 사실을 AI 에게 분명히 알림
+const kindLine = (p: Record<string, unknown>) => (typeof p.knownKind === 'string' && KIND_GUIDE[p.knownKind]
+  ? `이 장소의 종류: ${guideOf(p.knownKind).label} (구글 지도 분류 또는 사용자가 고른 값). 같은 이름의 동네·주변 가게 정보가 아니라 이 ${guideOf(p.knownKind).label} 자체의 정보만 쓰세요.`
+  : '');
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
 }
@@ -82,10 +124,12 @@ function buildPrompt(p: Record<string, unknown>, grounded: boolean, forceSearch 
     p.destination ? `여행지: ${p.destination}` : '',
     p.lat != null ? `좌표: ${p.lat}, ${p.lng}` : '',
     p.mapsUrl ? `구글 맵 링크: ${p.mapsUrl}` : '',
+    kindLine(p),
   ].filter(Boolean).join('\n');
 
+  const g = guideOf(p.knownKind);
   const where = [p.zone, p.destination].filter(Boolean).join(' ');
-  const queries = [`${p.name} ${where} 메뉴 가격`, `${p.name} ${where} 정기휴무 영업시간`]
+  const queries = g.queries(String(p.name), where)
     .map((q) => `"${q.replace(/\s+/g, ' ').trim()}"`).join(', ');
   const intro = grounded
     ? `당신은 여행 가이드북 편집자입니다. 아는 가게라도 기억에 의존하지 말고, 답하기 전에 반드시 Google 검색 도구로 ${queries} 를 검색하세요. 검색으로 확인된 정보만으로 JSON 하나를 만드세요.${forceSearch ? ' (이전 응답에서 검색을 하지 않았습니다. 이번에는 검색을 먼저 실행해야 합니다.)' : ''}`
@@ -98,12 +142,12 @@ ${lines}
 - 이름이 같은 다른 지점·다른 도시의 가게와 혼동하지 말고, 위 지역/좌표에 있는 바로 그 장소 기준으로 작성.
 - 확인되지 않는 값은 절대 추측하지 말고 null.
 - 모든 문장은 자연스러운 한국어.
-- price_min, price_max: 1인 기준 일반적인 식사·이용 비용. 숫자만 (통화 기호·쉼표 없이). 무료 명소는 0이 아니라 null.
+- price_min, price_max: ${g.price}. 숫자만 (통화 기호·쉼표 없이). 무료면 0이 아니라 null.
 - currency: 가격의 ISO 통화 코드 (예: ${p.currency || 'JPY'}).
-- signature: 대표 메뉴 또는 볼거리 1~3개, 60자 이내.
+- signature: ${g.signature}, 60자 이내.
 - description: 이 장소의 특징 2문장 이내, 150자 이내.
-- visit_tip: 웨이팅·예약·결제·추천 시간대 같은 실용 팁, 80자 이내.
-- warn_badge: 정기 휴무일이나 꼭 알아야 할 주의점을 아주 짧게 (예: "화요 휴무", "현금만", "예약 필수"). 없으면 null. 12자 이내.
+- visit_tip: ${g.tip}, 80자 이내.
+- warn_badge: ${g.warn}. 아주 짧게, 없으면 null. 12자 이내.
 - zone: 동네나 가까운 역 이름, 15자 이내.
 - kind: ${KINDS.join(' | ')} 중 하나.
 ${categoryRule((p.cats as Cat[]) || [])}
@@ -117,12 +161,9 @@ ${categoryRule((p.cats as Cat[]) || [])}
 // 1단계: AI Studio 에서 검색이 잘 되던 것처럼 자연스러운 질문으로 조사 (자유 서술, JSON 요구 없음)
 function researchPrompt(p: Record<string, unknown>) {
   const where = [p.zone, p.destination].filter(Boolean).join(' ');
-  return `${p.name}${where ? ` (${where})` : ''} 를 Google 에서 검색해서 아래 내용을 한국어로 정리해줘.
-- 대표 메뉴나 볼거리
-- 1인 기준 가격대 (현지 통화)
-- 영업시간과 정기 휴무일
-- 예약·웨이팅·결제 방법 같은 방문 팁
-- 어떤 곳인지 한두 문장 소개
+  const g = guideOf(p.knownKind);
+  return `${p.name}${where ? ` (${where})` : ''} 를 Google 에서 검색해서 아래 내용을 한국어로 정리해줘.${kindLine(p) ? `\n${kindLine(p)}` : ''}
+${g.research.map((x) => `- ${x}`).join('\n')}
 같은 이름의 다른 지점과 헷갈리지 않게 ${where || '해당 지역'}에 있는 곳 기준으로 찾아줘.${p.mapsUrl ? `\n참고 구글 맵 링크: ${p.mapsUrl}` : ''}`;
 }
 
@@ -133,9 +174,11 @@ function extractPrompt(p: Record<string, unknown>, memo: string) {
 ${p.facts}
 - price_min, price_max, currency, warn_badge 는 확정 정보에 값이 있으면 그 값을 그대로 쓰세요.
 ` : '';
+  const g = guideOf(p.knownKind);
   return `아래 조사 메모에 적힌 내용만 사용해서 JSON 하나를 만드세요. 메모에 없는 내용은 추측하지 말고 null.
 
 장소: ${p.name}
+${kindLine(p)}
 ${facts}
 ----- 조사 메모 시작 -----
 ${memo.slice(0, 6000)}
@@ -143,12 +186,12 @@ ${memo.slice(0, 6000)}
 
 규칙
 - 모든 문장은 자연스러운 한국어.
-- price_min, price_max: 1인 기준 가격. 숫자만. 메모에 가격이 없으면 null.
+- price_min, price_max: ${g.price}. 숫자만. 메모에 가격이 없으면 null.
 - currency: ISO 통화 코드 (예: ${p.currency || 'JPY'}).
-- signature: 대표 메뉴 또는 볼거리 1~3개, 60자 이내.
+- signature: ${g.signature}, 60자 이내.
 - description: 특징 2문장 이내, 150자 이내.
-- visit_tip: 웨이팅·예약·결제·추천 시간대 같은 실용 팁, 80자 이내.
-- warn_badge: 정기 휴무일이나 꼭 알아야 할 주의점을 아주 짧게 (예: "화요 휴무", "현금만"). 없으면 null. 12자 이내.
+- visit_tip: ${g.tip}, 80자 이내.
+- warn_badge: ${g.warn}. 아주 짧게, 없으면 null. 12자 이내.
 - zone: 동네나 가까운 역 이름, 15자 이내.
 - kind: ${KINDS.join(' | ')} 중 하나.
 ${categoryRule((p.cats as Cat[]) || [])}
@@ -340,6 +383,7 @@ async function run(req: Request, send: (o: unknown) => void) {
     currency: str(body.currency, 3),
     facts: factsText(body.facts),
     cats: readCategories(body.categories),
+    knownKind: typeof body.knownKind === 'string' && KINDS.includes(body.knownKind) ? body.knownKind : null,
   };
   const attempts: Attempt[] = [];
   const usage: Usage = { prompt: 0, output: 0, tool: 0, thoughts: 0, total: 0 };
@@ -395,6 +439,8 @@ async function run(req: Request, send: (o: unknown) => void) {
   const currency = typeof raw.currency === 'string' && /^[A-Za-z]{3}$/.test(raw.currency.trim()) ? raw.currency.trim().toUpperCase() : null;
   const kind = typeof raw.kind === 'string' && KINDS.includes(raw.kind) ? raw.kind : null;
 
+  // 서버 검수: 가격이 없는 종류인데 가격이 오면 버림 (주변 식당 정보가 섞인 경우)
+  if (info.knownKind === 'transit' || info.knownKind === 'shop') { priceMin = null; priceMax = null; }
   const fields = {
     signature: str(raw.signature, 200),
     description: str(raw.description, 500),

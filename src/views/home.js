@@ -9,6 +9,7 @@ import { loadTripList, saveTripList, tripsFromCaches, readSyncIndex, hasCache, a
 import { onConnectionChange } from '../lib/net.js';
 import { schedulePrefetch } from '../lib/prefetch.js';
 import { isApp } from '../lib/native.js';
+import { openAppSettings } from '../components/app-settings.js';
 import { parseAppLink } from '../lib/app-link.js';
 
 const WELCOME_KEY = 'app:welcomedAt';
@@ -35,6 +36,7 @@ export async function render(app) {
       </div>
       <div class="flex items-center gap-2">
         <span id="chip-slot"></span>
+        <button data-action="app-settings" title="앱 설정" aria-label="앱 설정" class="w-8 h-8 rounded-lg text-slate-400 hover:text-white flex items-center justify-center"><i class="fa-solid fa-gear text-sm"></i></button>
         <button data-action="admin" class="text-[10px] text-slate-500 hover:text-slate-300">관리자</button>
       </div>
     </header>
@@ -190,6 +192,8 @@ export async function render(app) {
     'account-offline': () => toast(navigator.onLine ? '로그인 상태를 확인하는 중이에요. 잠시 후 다시 눌러 주세요.' : '오프라인이에요. 계정 메뉴는 인터넷에 연결된 뒤 쓸 수 있어요.'),
     'device-code': () => openDeviceCodeEntry(),
     'paste-link': () => openLinkEntry(),
+    // 앱 받기 · 업데이트 · 화면 켜두기 · 화면 정보 (여행이 있는 사람만 앱 받기)
+    'app-settings': () => openAppSettings({ hasTrips: trips.length > 0 }),
     'welcome-close': () => {
       try { localStorage.setItem(WELCOME_KEY, String(Date.now())); } catch {}
       drawWelcome();

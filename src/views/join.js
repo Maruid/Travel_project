@@ -15,7 +15,7 @@ export async function render(app, { token }) {
     preview = await rpc('preview_invite', { p_token: token });
   } catch (e) {
     setHTML(app, html`
-      <main class="p-6 text-center space-y-4 mt-20">
+      <main class="p-6 text-center space-y-4 mt-20" style="margin-top:calc(5rem + var(--sat))">
         <i class="fa-solid fa-link-slash text-3xl text-rose-400"></i>
         <p class="text-sm text-slate-300">${errorText(e)}</p>
         <button data-action="home" class="btn-ghost">홈으로</button>
@@ -30,7 +30,7 @@ export async function render(app, { token }) {
   }
 
   setHTML(app, html`
-    <main class="p-5 space-y-4">
+    <main class="p-5 space-y-4" style="padding-top:calc(1.25rem + var(--sat))">
       ${openInAppHtml(`/join/${token}`)}
       <div class="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
         <b>다른 기기에서 이미 이 여행에 참여 중인가요?</b> 새 이름으로 참여하면 같은 사람이 두 명으로 나뉘어요.

@@ -62,8 +62,10 @@ export function mount(root, store) {
         <div class="glass-card p-4 rounded-2xl">
           <div class="flex items-center justify-between mb-2">
             <span class="text-xs font-bold text-slate-400">여행 가계부</span>
-            <button data-action="settings" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-emerald-300 border border-emerald-500/30 font-mono font-bold">
-              ${rateText(b)} · 예산 관리</button>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-[10px] text-emerald-300 font-mono font-bold truncate">환율 ${rateText(b)}</span>
+              <button data-action="settings" title="예산 · 환율 관리" aria-label="예산 · 환율 관리" class="flex-shrink-0 w-8 h-8 -my-1 rounded-lg bg-slate-800 text-slate-300 border border-white/10 flex items-center justify-center"><i class="fa-solid fa-gear text-xs"></i></button>
+            </div>
           </div>
           <div class="grid grid-cols-2 gap-2 mb-3">
             <div class="p-2.5 rounded-xl bg-night-950/60 border border-white/5">

@@ -15,6 +15,7 @@
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:screenOrientation="portrait"
             android:exported="true">
 
             <intent-filter>
@@ -32,6 +33,13 @@
                 <data android:host="login" />
                 <data android:host="join" />
                 <data android:host="view" />
+            </intent-filter>
+
+            <!-- 다른 앱의 [공유] → 여행 (구글 지도 장소 링크 → 장소 추가). 글(text/plain)만 받음 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
             </intent-filter>
 
         </activity>

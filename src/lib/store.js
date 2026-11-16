@@ -19,7 +19,11 @@ export const CONTENT_TABLES = [
   'categories', 'places', 'itinerary_days', 'itinerary_items',
   'guides', 'budget_topups', 'expenses', 'todos',
   'place_likes',   // migration_011
+  'trip_transports',   // migration_015
 ];
+// 나중 migration 으로 생긴 표: 서버에 아직 없으면(SQL 적용 전) 빈 표로 두고 나머지는 그대로 동기화
+const OPTIONAL_TABLES = new Set(['trip_transports']);
+const missingTable = (err) => /42P01|PGRST205|does not exist|Could not find the table/i.test(`${err?.code} ${err?.message}`);
 
 const LOCAL_ONLY = ['created_at', 'updated_at', 'updated_by', 'created_by'];
 const stripMeta = (row) => Object.fromEntries(Object.entries(row).filter(([k]) => !LOCAL_ONLY.includes(k)));
@@ -92,6 +96,7 @@ export class TripStore {
     this.viewLink = null;     // 읽기 전용 공유 링크 { token, enabled } (migration_011)
     this.globalCategories = [];
     this.tables = Object.fromEntries(CONTENT_TABLES.map((t) => [t, new Map()]));
+    this.missing = new Set();   // 서버에 아직 없는 선택 표 (OPTIONAL_TABLES)
     this.cursors = {};
     this.outbox = [];
 
@@ -261,7 +266,12 @@ export class TripStore {
       supabase.from('trip_view_links').select('token, enabled').eq('trip_id', id).maybeSingle(),
       ...contentQ,
     ]);
-    for (const r of [trip, budget, members, invite, globals, ...contents]) if (r.error) throw r.error;
+    for (const r of [trip, budget, members, invite, globals]) if (r.error) throw r.error;
+    contents.forEach((r, i) => {
+      if (!r.error) return;
+      if (OPTIONAL_TABLES.has(CONTENT_TABLES[i]) && missingTable(r.error)) { this.missing.add(CONTENT_TABLES[i]); r.data = []; return; }
+      throw r.error;
+    });
     if (!trip.data) throw new Error('FORBIDDEN');
 
     // 받아오는 사이 저장된 더 새 값(저장 응답·실시간 알림)을 옛날 응답으로 덮어쓰지 않도록 수정 시각 비교
@@ -316,6 +326,7 @@ export class TripStore {
     const id = this.tripId;
     let ch = supabase.channel(`trip:${id}`);
     for (const t of CONTENT_TABLES) {
+      if (this.missing.has(t)) continue;   // 서버에 없는 표를 구독하면 채널 전체가 실패함
       ch = ch.on('postgres_changes', { event: '*', schema: 'public', table: t, filter: `trip_id=eq.${id}` },
         (p) => { if (p.new?.id) this.applyRemote(t, p.new); });
     }
