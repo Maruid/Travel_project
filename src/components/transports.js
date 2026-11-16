@@ -3,9 +3,10 @@
 //   카드: 출발하거나 도착하는 날에 보임 (보통 첫날 · 마지막 날)
 //   첫날에 가는 편이 없으면 / 마지막 날에 오는 편이 없으면 [등록] 한 줄
 // =====================================================================
-import { html, raw, delegate, formValues, $ } from '../lib/dom.js';
+import { html, delegate, formValues, $ } from '../lib/dom.js';
 import { openSheet, closeSheet, toast, confirmAction } from './ui.js';
 import { MODES, DIRECTIONS, modeOf, transportsOn, routeText, titleText } from '../lib/transport.js';
+import { openPicker } from './picker.js';
 import { AIRPORTS } from '../lib/airports.js';
 
 const shortT = (t) => (t ? String(t).slice(0, 5) : '');
@@ -54,9 +55,13 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
   const side = (key, label) => html`
     <div class="p-2.5 rounded-2xl glass-card space-y-2 min-w-0">
       <span class="text-[10px] font-bold text-slate-400">${label}</span>
-      <input name="${key}_name" class="input" maxlength="60" autocomplete="off"            
-            ${raw(t.mode === 'flight' ? 'list="airport-list"' : '')}
-            value="${t[`${key}_name`] || ''}" placeholder="${key === 'dep' ? '예: 인천 ICN' : '예: 간사이 KIX'}">
+      <div class="flex gap-1.5 min-w-0">
+        <input name="${key}_name" class="input min-w-0 flex-1" maxlength="60" autocomplete="off"
+              value="${t[`${key}_name`] || ''}" placeholder="${key === 'dep' ? '예: 인천 ICN' : '예: 간사이 KIX'}">
+        <button type="button" data-action="pick-airport" data-key="${key}"
+                class="flex-shrink-0 px-2.5 rounded-xl bg-slate-800 border border-white/10 text-[11px] text-sky-200 font-bold whitespace-nowrap">
+          <i class="fa-solid fa-magnifying-glass mr-1"></i>찾기</button>
+      </div>
       <div class="grid grid-cols-2 gap-1.5 min-w-0">
         <input type="date" name="${key}_date" class="input min-w-0 w-full appearance-none" value="${t[`${key}_date`] || ''}">
         <input type="time" name="${key}_time" class="input min-w-0 w-full appearance-none" value="${shortT(t[`${key}_time`])}">
@@ -65,8 +70,7 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
     </div>`;
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${id ? '이동편 수정' : '이동편 등록'}</h3>
-    <form id="tr-form" class="space-y-2.5">
-      <datalist id="airport-list">${AIRPORTS.map((a) => html`<option value="${a.value}">${a.label}</option>`)}</datalist>
+    <form id="tr-form" class="space-y-2.5">      
       <div class="flex gap-1.5">${Object.entries(DIRECTIONS).map(([k, v]) => radio('direction', k, v, t.direction))}</div>
       <div class="flex gap-1.5">${Object.entries(MODES).map(([k, v]) => radio('mode', k, v.label, t.mode))}</div>
       <div class="grid grid-cols-2 gap-2">
@@ -86,19 +90,26 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       const d = form.elements.dep_date.value; const a = form.elements.arr_date;
       if (d && (!a.value || a.value < d)) a.value = d;
     });
-    // 항공일 때만 공항 추천
-    const syncList = () => {
-      const flight = form.elements.mode.value === 'flight';
-      ['dep_name', 'arr_name'].forEach((n) => {
-        if (flight) form.elements[n].setAttribute('list', 'airport-list');
-        else form.elements[n].removeAttribute('list');
-      });
-    };
     form.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncList));
     const off = delegate(el, {
       delete: () => {
         if (!confirmAction('이 이동편을 삭제할까요?')) return;
         store.remove('trip_transports', id); closeSheet(); toast('삭제했습니다.');
+      },
+      'pick-airport': (b) => {
+        const key = b.dataset.key;
+        const mode = form.elements.mode.value;
+        if (mode !== 'flight') { toast('항공편일 때만 공항을 고를 수 있어요. 직접 입력해 주세요.'); return; }
+        openPicker({
+          title: key === 'dep' ? '출발 공항' : '도착 공항',
+          selected: AIRPORTS.find((a) => a.value === form.elements[`${key}_name`].value)?.value,
+          sections: [{ items: AIRPORTS.map((a) => ({
+            id: a.value, title: a.value, sub: a.label.split(' · ')[1], icon: 'fa-plane',
+            place: { name: a.value, zone: a.label, signature: '' },
+          })) }],
+          emptyText: '없는 공항은 입력칸에 직접 써 주세요.',
+          onPick: (v) => { form.elements[`${key}_name`].value = v; },
+        });
       },
     });
     form.addEventListener('submit', (e) => {
