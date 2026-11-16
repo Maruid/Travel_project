@@ -3,9 +3,10 @@
 //   카드: 출발하거나 도착하는 날에 보임 (보통 첫날 · 마지막 날)
 //   첫날에 가는 편이 없으면 / 마지막 날에 오는 편이 없으면 [등록] 한 줄
 // =====================================================================
-import { html, delegate, formValues, $ } from '../lib/dom.js';
+import { html, raw, delegate, formValues, $ } from '../lib/dom.js';
 import { openSheet, closeSheet, toast, confirmAction } from './ui.js';
 import { MODES, DIRECTIONS, modeOf, transportsOn, routeText, titleText } from '../lib/transport.js';
+import { AIRPORTS } from '../lib/airports.js';
 
 const shortT = (t) => (t ? String(t).slice(0, 5) : '');
 
@@ -51,18 +52,21 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
     <label class="flex-1"><input type="radio" name="${name}" value="${value}" class="peer sr-only" ${cur === value ? 'checked' : ''}>
       <span class="block text-center py-2 rounded-xl text-[11px] font-bold border border-white/10 bg-slate-800 text-slate-300 peer-checked:bg-sky-500/20 peer-checked:text-sky-200 peer-checked:border-sky-400/50">${label}</span></label>`;
   const side = (key, label) => html`
-    <div class="p-2.5 rounded-2xl glass-card space-y-2">
+    <div class="p-2.5 rounded-2xl glass-card space-y-2 min-w-0">
       <span class="text-[10px] font-bold text-slate-400">${label}</span>
-      <input name="${key}_name" class="input" maxlength="60" value="${t[`${key}_name`] || ''}" placeholder="${key === 'dep' ? '예: 인천 ICN' : '예: 간사이 KIX'}">
-      <div class="grid grid-cols-[3fr_2fr] gap-1.5">
-          <input type="date" name="${key}_date" class="input w-full" value="${t[`${key}_date`] || ''}">
-          <input type="time" name="${key}_time" class="input w-full" value="${shortT(t[`${key}_time`])}">
+      <input name="${key}_name" class="input" maxlength="60" autocomplete="off"            
+            ${raw(t.mode === 'flight' ? 'list="airport-list"' : '')}
+            value="${t[`${key}_name`] || ''}" placeholder="${key === 'dep' ? '예: 인천 ICN' : '예: 간사이 KIX'}">
+      <div class="grid grid-cols-2 gap-1.5 min-w-0">
+        <input type="date" name="${key}_date" class="input min-w-0 w-full appearance-none" value="${t[`${key}_date`] || ''}">
+        <input type="time" name="${key}_time" class="input min-w-0 w-full appearance-none" value="${shortT(t[`${key}_time`])}">
       </div>
-      <input name="${key}_terminal" class="input w-full" maxlength="20" value="${t[`${key}_terminal`] || ''}" placeholder="터미널">
+      <input name="${key}_terminal" class="input" maxlength="20" value="${t[`${key}_terminal`] || ''}" placeholder="터미널 (선택)">
     </div>`;
   openSheet(html`
     <h3 class="text-base font-black text-white mb-3">${id ? '이동편 수정' : '이동편 등록'}</h3>
     <form id="tr-form" class="space-y-2.5">
+      <datalist id="airport-list">${AIRPORTS.map((a) => html`<option value="${a.value}">${a.label}</option>`)}</datalist>
       <div class="flex gap-1.5">${Object.entries(DIRECTIONS).map(([k, v]) => radio('direction', k, v, t.direction))}</div>
       <div class="flex gap-1.5">${Object.entries(MODES).map(([k, v]) => radio('mode', k, v.label, t.mode))}</div>
       <div class="grid grid-cols-2 gap-2">
@@ -82,6 +86,15 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       const d = form.elements.dep_date.value; const a = form.elements.arr_date;
       if (d && (!a.value || a.value < d)) a.value = d;
     });
+    // 항공일 때만 공항 추천
+    const syncList = () => {
+      const flight = form.elements.mode.value === 'flight';
+      ['dep_name', 'arr_name'].forEach((n) => {
+        if (flight) form.elements[n].setAttribute('list', 'airport-list');
+        else form.elements[n].removeAttribute('list');
+      });
+    };
+    form.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncList));
     const off = delegate(el, {
       delete: () => {
         if (!confirmAction('이 이동편을 삭제할까요?')) return;
