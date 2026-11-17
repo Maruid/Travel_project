@@ -24,7 +24,7 @@ export class ViewStore {
     this.globalCategories = d.categories || [];
     this.tables = {
       places: d.places || [], itinerary_days: d.itinerary_days || [], itinerary_items: d.itinerary_items || [],
-      guides: d.guides || [], trip_transports: d.trip_transports || [], categories: [], place_likes: [],
+      guides: d.guides || [], trip_transports: d.trip_transports || [], trip_images: [], categories: [], place_likes: [],
     };
   }
   list(table) {

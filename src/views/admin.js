@@ -5,6 +5,56 @@ import { spinner, toast, copyText, confirmAction, emptyCard } from '../component
 import { navigate } from '../router.js';
 
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const LEVEL_TEXT = { ok: '정상', warn: '70% 넘음 · 경고', thumbs: '85% 넘음 · 썸네일과 문서만', blocked: '한도 도달 · 사진 받기 막힘' };
+const LEVEL_CLS = { ok: 'text-emerald-300', warn: 'text-amber-300', thumbs: 'text-orange-300', blocked: 'text-rose-300' };
+const bar = (v, max, cls = 'bg-neon-cyan') => html`<div class="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+  <div class="h-full ${cls}" style="width:${Math.min(100, max ? (v / max) * 100 : 0).toFixed(1)}%"></div></div>`;
+const md = (d) => (d ? `${Number(String(d).slice(5, 7))}/${Number(String(d).slice(8, 10))}` : '-');
+
+// 사진 저장공간 · 이번 주기 전송량(추정) · 설정 (migration_017)
+function imageSection(st) {
+  if (!st) return html`<section class="glass-card p-4 rounded-2xl"><h3 class="text-xs font-bold text-white mb-1">사진</h3>
+    <p class="text-[11px] text-slate-500">migration_017 을 적용하면 사진 저장공간 · 전송량이 여기에 보여요.</p></section>`;
+  const sLim = st.storage_limit_mb * 1048576; const eLim = st.egress_limit_mb * 1048576;
+  const ePct = eLim ? st.period_bytes / eLim : 0;
+  return html`
+    <section class="glass-card p-4 rounded-2xl space-y-2">
+      <div class="flex items-center justify-between">
+        <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-image text-sky-300 mr-1"></i>사진</h3>
+        <span class="text-[10px] font-bold ${LEVEL_CLS[st.level] || ''}">${LEVEL_TEXT[st.level] || st.level}</span>
+      </div>
+      <div>
+        <div class="flex justify-between text-[11px] text-slate-300 mb-1"><span>저장공간</span><span class="font-mono">${mb(st.storage_bytes)} / ${st.storage_limit_mb} MB · ${st.objects}개 파일</span></div>
+        ${bar(st.storage_bytes, sLim, st.storage_bytes >= sLim * 0.9 ? 'bg-rose-400' : 'bg-neon-cyan')}
+      </div>
+      <div>
+        <div class="flex justify-between text-[11px] text-slate-300 mb-1"><span>사진 받기 (추정 · ${md(st.period)}~${md(st.next_period)})</span><span class="font-mono">${mb(st.period_bytes)} / ${st.egress_limit_mb} MB</span></div>
+        ${bar(st.period_bytes, eLim, ePct >= 0.85 ? 'bg-rose-400' : ePct >= 0.7 ? 'bg-amber-400' : 'bg-emerald-400')}
+        <p class="text-[10px] text-slate-500 mt-1">기기에 없어서 실제로 받은 사진만 셈 (${st.period_files}번). 일정 동기화 등 데이터 전송은 빠져 있어요. 정확한 값은 Supabase 대시보드 Usage 에서 확인하세요.</p>
+      </div>
+      <p class="text-[10px] text-slate-400">7일 안에 보관 기간이 끝나 삭제될 사진: ${mb(st.expiring_7d_bytes)} · 마지막 정리 ${st.last_gc_at ? ago(st.last_gc_at) : '없음'}</p>
+      ${st.trips?.length ? html`
+        <details>
+          <summary class="text-[11px] text-slate-400 cursor-pointer">여행별 사용량 (상위 ${st.trips.length})</summary>
+          <div class="space-y-1 mt-1.5">${st.trips.map((t) => html`
+            <div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60 text-[11px] gap-2">
+              <span class="truncate text-white">${t.title}</span>
+              <span class="flex-shrink-0 font-mono text-slate-400">${t.images}장 · ${mb(t.bytes)} · ${md(t.purge_date)} 삭제</span>
+            </div>`)}</div>
+        </details>` : ''}
+      <details>
+        <summary class="text-[11px] text-slate-400 cursor-pointer">한도 설정</summary>
+        <form id="image-form" class="grid grid-cols-2 gap-2 mt-2">
+          <label class="text-[10px] text-slate-400">월 받기 한도 (MB)<input name="egress" type="number" min="100" class="input mt-0.5" value="${st.egress_limit_mb}"></label>
+          <label class="text-[10px] text-slate-400">저장공간 한도 (MB)<input name="storage" type="number" min="50" class="input mt-0.5" value="${st.storage_limit_mb}"></label>
+          <label class="text-[10px] text-slate-400">결제 주기 시작일 (1~28)<input name="cycle" type="number" min="1" max="28" class="input mt-0.5" value="${st.cycle_day}"></label>
+          <label class="text-[10px] text-slate-400">여행 종료 후 보관 (일)<input name="keep" type="number" min="1" max="365" class="input mt-0.5" value="${st.keep_days}"></label>
+          <p class="col-span-2 text-[10px] text-slate-500">무료 플랜 기준: 전송 5GB · 저장 1GB. 데이터 전송 몫을 남기려고 받기 한도는 실제의 80% 정도로 두세요. 70% 경고 · 85% 썸네일과 문서만 · 100% 막음.</p>
+          <button class="btn-primary col-span-2">저장</button>
+        </form>
+      </details>
+    </section>`;
+}
 const kTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0));
 const day = (ts) => (ts ? String(ts).slice(0, 10) : '');
 
@@ -122,7 +172,7 @@ export async function render(app) {
   }
 
   async function load() {
-    const [stats, trips, codes, places, aiUsers, aiSummary] = await Promise.all([
+    const [stats, trips, codes, places, aiUsers, aiSummary, images] = await Promise.all([
       rpc('admin_stats'),
       rpc('admin_list_trips'),
       supabase.from('creation_codes').select('*').order('created_at', { ascending: false }).then((r) => {
@@ -131,6 +181,7 @@ export async function render(app) {
       rpc('places_quota_status').catch(() => null),   // migration_003 이전이면 없음
       rpc('admin_ai_users').catch(() => null),        // migration_009 이전이면 없음
       rpc('admin_ai_summary').catch(() => null),
+      rpc('admin_image_stats').catch(() => null),     // migration_017 이전이면 없음
     ]);
 
     // 생성 코드: 사용 가능 / 지난 코드(만료·소진·폐기)
@@ -191,6 +242,8 @@ export async function render(app) {
 
         ${aiSection(aiUsers, aiSummary)}
 
+        ${imageSection(images)}
+
         <section class="glass-card p-4 rounded-2xl space-y-2">
           <h3 class="text-xs font-bold text-white">전체 여행 ${trips.length}개</h3>
           ${trips.map((t) => html`
@@ -203,6 +256,17 @@ export async function render(app) {
             </div>`)}
         </section>
       </main>`);
+
+    $('#image-form', app)?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const v = formValues(e.target);
+      try {
+        await rpc('admin_set_image_settings', {
+          p_egress_mb: Number(v.egress), p_storage_mb: Number(v.storage), p_cycle_day: Number(v.cycle), p_keep_days: Number(v.keep),
+        });
+        toast('저장했어요.'); load();
+      } catch (err) { toast(errorText(err), 'error'); }
+    });
 
     $('#code-form', app).addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -275,6 +339,8 @@ export async function render(app) {
       },
       'delete-trip': async (el) => {
         if (!confirmAction(`"${el.dataset.title}" 여행과 모든 데이터를 삭제할까요? 되돌릴 수 없습니다.`)) return;
+        const { removeTripFiles } = await import('../lib/images.js');
+        await removeTripFiles(el.dataset.id);
         const { error } = await supabase.from('trips').delete().eq('id', el.dataset.id);
         if (error) toast(errorText(error), 'error'); else { toast('삭제했습니다.'); load(); }
       },

@@ -15,3 +15,6 @@ verify_jwt = false
 
 [functions.plan-itinerary]
 verify_jwt = false
+
+[functions.cleanup-images]
+verify_jwt = false

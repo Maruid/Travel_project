@@ -59,7 +59,15 @@ async function syncOne(id, userId) {
   try {
     s.loadCache();
     const ok = await s.sync();
-    if (ok) s.saveCacheNow();
+    if (ok) {
+      s.saveCacheNow();
+      // 출발 7일 전 ~ 여행 중: 사진 썸네일 · 문서 원본도 받아 둠 (오프라인 대비, 이미 있으면 건너뜀)
+      const imgs = s.list('trip_images');
+      if (imgs.length) {
+        const { prefetchWindow, prefetchTripImages } = await import('./images.js');
+        if (prefetchWindow(s.trip, localDate())) await prefetchTripImages(id, imgs).catch(() => {});
+      }
+    }
     return ok;
   } catch (e) {
     console.warn('prefetch failed', id, e);

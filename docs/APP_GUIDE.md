@@ -5,7 +5,7 @@
 > 웹(크롬·PWA·아이폰)은 그대로 동작합니다 — 앱 기능은 모두 "앱 안일 때만" 켜집니다.
 > 구조와 코드는 서재 앱(Maruid/seojae)의 방식을 그대로 따릅니다.
 
-## 1. 앱에서 달라지는 것 (앱 기능 버전 1 · 2 · 3)
+## 1. 앱에서 달라지는 것 (앱 기능 버전 1 · 2 · 3 · 4)
 | 기능 | 내용 |
 |---|---|
 | 앱 저장 공간 | 여행 데이터·보낼 변경·지도가 크롬과 따로, 앱 안에 저장 (앱 삭제·데이터 지우기 때만 지워짐) |
@@ -15,6 +15,7 @@
 | 앱에서 열기 (2단계 APK부터) | 안드로이드 크롬에서 초대 · 보기 전용 링크를 열면 위에 [앱에서 열기]. 누르면 `io.github.maruid.travel://join/…`(view/…)로 앱이 열림. 앱이 없으면(또는 옛 앱이면) 크롬 화면에 그대로 남음 |
 | 구글 지도 [공유]로 장소 추가 (앱 기능 버전 3) | 구글 지도 앱에서 장소 → [공유] → **여행**. 진행 중 · 다가오는 여행이 하나면 바로, 여럿이면 고르기 창 → 그 여행 장소 탭의 [새 장소 추가]에 링크가 들어가고 자동으로 가져오기. 구글 지도 링크가 아니면 안내만. 앱이 꺼져 있다 열려도, 떠 있을 때 받아도 됨 |
 | 화면 세로 고정 (3번 APK부터) | 휴대폰을 돌려도 화면이 세로로 유지 (`android:screenOrientation="portrait"`) |
+| 사진 저장 (앱 기능 버전 4) | 사진 크게 보기 [저장] · 삭제 임박 띠 [모두 저장] → 기기 앨범 **Pictures/여행** (안드로이드 10 이상은 권한 없이, 그 아래는 앱 전용 사진 폴더). 옛 앱은 "앱을 업데이트해 주세요" 안내 |
 | 화면 켜두기 (앱 기능 버전 2) | 설정 탭 → 앱 → [화면 켜두기] (이 기기만, 기본 끔). 앱이 열려 있는 동안 화면이 꺼지지 않음. 옛 앱에서는 메뉴가 안 보임 |
 | 보내는 링크 | 초대·보기 전용 링크는 앱 안에서도 웹 주소(`https://maruid.github.io/Travel_project/#/…`)로 만듦 |
 | 공유 | 안드로이드 공유 창 (`@capacitor/share`) |
@@ -89,7 +90,7 @@ io.github.maruid.travel://login
 - `src/lib/map-cache.js` — 앱의 지도 저장: MapLibre `transformRequest` 로 `https://tiles.openfreemap.org/…` → `tcache://…`, `addProtocol('tcache')` 가 Cache API(`map-style` 최신 우선 4초 / `map-tiles` 저장본 우선)로 처리
 - `src/lib/share-in.js` — 공유 글 처리: 첫 주소 꺼내기(`extractUrl`), 넣을 여행 고르기(`shareTargets`: 진행 중 → 다가오는, `my_trips` 의 `trip_id` 도 받음), `sessionStorage` `share:pending` 에 맡기고 장소 탭이 `takePendingShare` 로 꺼내 `openPlaceEditor({ link })`. 고르기 창을 닫는 `history.back()` 이 끝난 뒤 이동(먼저 이동하면 되돌려짐). 웹 쪽 시작은 `native.js` `startShareIntake`(main.js 가 라우터 시작 뒤 연결, 앱 기능 버전 3 이상, 시작 · 알림 · 앱 복귀 때 꺼냄)
 - `src/lib/app-link.js` — 붙여넣은 초대·보기 전용 링크 → 앱 경로, 크롬 [앱에서 열기] 주소(`intent://…;S.browser_fallback_url=지금 주소;end`), 앱이 받은 딥링크 → 경로 (순수 함수)
-- `android/` — Capacitor 안드로이드 프로젝트. `MainActivity`(플러그인 등록 + [공유]로 받은 글을 `TravelPlugin.onShared` 에 맡김), `TravelPlugin`(`info` 기능 버전, `keepAwake` 화면 켜두기, `getShared` 받은 공유 글 꺼내기(꺼내면 지움) + `shareReceived` 알림 — `NATIVE_API` **3**), 딥링크 intent-filter(login · join · view), 공유 intent-filter(`ACTION_SEND` `text/plain`), 세로 고정, 위치 권한, 서명은 환경 변수
+- `android/` — Capacitor 안드로이드 프로젝트. `MainActivity`(플러그인 등록 + [공유]로 받은 글을 `TravelPlugin.onShared` 에 맡김), `TravelPlugin`(`info` 기능 버전, `keepAwake` 화면 켜두기, `getShared` 받은 공유 글 꺼내기(꺼내면 지움) + `shareReceived` 알림, `saveImage` 사진을 앨범에 저장 — `NATIVE_API` **4**), 딥링크 intent-filter(login · join · view), 공유 intent-filter(`ACTION_SEND` `text/plain`), 세로 고정, 위치 권한, 서명은 환경 변수
 - 앱 기능 버전: 웹은 `nativeApiLevel()` 로 확인해서 없는 기능은 메뉴를 숨김. 꼭 필요한 기능만 `app-version.json` `min_native_api` 를 올림(지금 1 → 옛 앱도 그대로 동작)
   - `android/app/src/main/assets/public`, `capacitor-cordova-android-plugins` 는 `cap sync` 가 만드는 것이라 저장소에 넣지 않음(`android/.gitignore`)
 - 화면 묶음: Pages 배포 때 `dist/app/bundle-<커밋>.zip` + `dist/app/version.json` 을 함께 올림 (deploy.yml)

@@ -20,9 +20,10 @@ export const CONTENT_TABLES = [
   'guides', 'budget_topups', 'expenses', 'todos',
   'place_likes',   // migration_011
   'trip_transports',   // migration_015
+  'trip_images',       // migration_017
 ];
 // 나중 migration 으로 생긴 표: 서버에 아직 없으면(SQL 적용 전) 빈 표로 두고 나머지는 그대로 동기화
-const OPTIONAL_TABLES = new Set(['trip_transports']);
+const OPTIONAL_TABLES = new Set(['trip_transports', 'trip_images']);
 const missingTable = (err) => /42P01|PGRST205|does not exist|Could not find the table/i.test(`${err?.code} ${err?.message}`);
 
 const LOCAL_ONLY = ['created_at', 'updated_at', 'updated_by', 'created_by'];

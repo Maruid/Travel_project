@@ -4,6 +4,7 @@ import { renderMarkdown, GUIDE_TEMPLATES } from '../../lib/markdown.js';
 import { dateRange, dayLabel } from '../../lib/format.js';
 import { color, icon } from '../../lib/safe.js';
 import { applyFormat } from '../../lib/md-edit.js';
+import { photoThumbsHtml, hydratePhotos, openPhotoViewer, mountPhotoEditor } from '../../components/photos.js';
 
 const FORMAT_BUTTONS = [
   { kind: 'bold', icon: 'fa-bold', label: '굵게', title: '굵게 (**글자**)' },
@@ -42,14 +43,17 @@ export function mount(root, store, { readOnly = false } = {}) {
               </div>
             </div>
             <div class="md">${renderMarkdown(g.body_md)}</div>
+            ${photoThumbsHtml(store, 'guide', g.id, { size: 'w-14 h-14' })}
           </article>`) : emptyCard(readOnly ? '가이드 카드가 없습니다.' : '가이드 카드가 없습니다. 날씨, 교통, 현지어 쇼잉 카드 등을 만들어 보세요.')}
       </div>`);
+    hydratePhotos(root, store);
   }
 
   const off = readOnly ? () => {} : delegate(root, {
     add: () => pickTemplate(store),
     'ai-guide': async () => (await import('../ai-guide.js')).openAiGuide(store),
     edit: (el) => openGuideEditor(store, el.dataset.id),
+    photo: (el) => openPhotoViewer(store, el.dataset.img),
   });
   update();
   return { update, destroy: off };
@@ -70,6 +74,7 @@ function pickTemplate(store) {
 }
 
 function openGuideEditor(store, id, tpl = null) {
+  const newId = id || crypto.randomUUID();   // 새 카드도 저장 전에 사진을 붙일 수 있게 미리 정함
   const g = id ? store.get('guides', id) : {
     title: tpl?.title || '', body_md: tpl?.body || '', color: tpl?.color || COLORS[0], icon: tpl?.icon || 'fa-lightbulb',
   };
@@ -108,6 +113,7 @@ function openGuideEditor(store, id, tpl = null) {
         <div class="flex gap-1.5">${COLORS.map((c) => html`
           <button type="button" data-action="color" data-color="${c}" class="w-7 h-7 rounded-full border-2 ${c === g.color ? 'border-white' : 'border-transparent'}" style="background:${c}"></button>`)}</div>
         <input type="hidden" name="color" value="${color(g.color)}"></div>
+      <div data-photos></div>
       <button class="btn-primary">${id ? '수정 저장' : '카드 추가'}</button>
       ${id ? html`<button type="button" data-action="delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">삭제</button>` : ''}
     </form>`, (el) => {
@@ -126,6 +132,7 @@ function openGuideEditor(store, id, tpl = null) {
       ta.focus();
       ta.setSelectionRange(r.start, r.end);
     });
+    const offPhotos = mountPhotoEditor($('[data-photos]', el), store, 'guide', newId);
     const off = delegate(el, {
       // 편집 ↔ 미리보기: 미리보기는 누를 때만 한 번 그림 (입력 중에는 그리지 않아 가벼움)
       mode: (b) => {
@@ -156,9 +163,9 @@ function openGuideEditor(store, id, tpl = null) {
         day_date: v.day_date, pinned: !!form.elements.pinned.checked,
       };
       if (id) store.update('guides', id, data);
-      else store.insert('guides', { ...data, sort_order: store.nextSortOrder('guides') });
+      else store.insert('guides', { ...data, id: newId, sort_order: store.nextSortOrder('guides') });
       closeSheet();
     });
-    return off;
+    return () => { off(); offPhotos(); };
   });
 }

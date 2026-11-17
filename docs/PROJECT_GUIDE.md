@@ -194,6 +194,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 013_day_stay | itinerary_days.stay_place_id (날짜별 오늘 묵는 숙소, 같은 여행 장소만, 장소 삭제 시 비움) |
 | 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
 | 016_ai_guides | AI 가이드 카드: ai_calls.kind 에 guide + `sub`(카드 종류), 하루 한도 추천 · 일정과 합산, 카드마다 여행당 `ai_guide_card_limit()`(3), `begin_ai_guide`, `ai_guide_status`, guides.ai_guide, admin_ai_users 에 가이드 통계 |
+| 017_images | 사진: `trip_images`(콘텐츠 표, 여행당 100 · 항목당 4, 보관 기간 지난 여행은 추가 막음), Storage 버킷 `trip-images`(비공개, 1.5MB, webp/jpeg) + 객체 RLS(멤버 · 받기 단계 · 저장공간 예산), `image_settings` · `image_usage`(월 받기 추정), `note_image_download` · `image_status` · `admin_image_stats` · `admin_set_image_settings`, 정리용 `image_gc_*`(service_role 전용) |
 | 015_transports | 이동편 `trip_transports`(콘텐츠 표, 멤버 RLS, 행 30, Realtime) + `view_trip` 에 이동편 추가 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
@@ -541,6 +542,19 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   - 숙소 정보: 일정 탭 묵는 곳(없으면 숙소 카테고리) 6곳까지 체크인 · 아웃 · 짐 · 가까운 역 (구글 검색).
   - 필요한 정보가 없으면 버튼이 막히고 "먼저 등록: …". 권한은 AI 추천과 같음, 하루 한도 같이, 카드마다 여행당 3번(관리자 무제한). 결과는 가이드 카드(`ai_guide`)로 저장 — 같은 종류는 그 카드를 덮어씀(확인 창), 제목 옆 AI 표시, 맨 아래 "AI 가 YYYY-MM-DD 에 만든 안내" + 출처 링크. 표는 `.md table` 스타일.
 
+### 7-7-13. 사진 붙이기 (017, 2026-11-18)
+
+- **어디에**: 일정 항목 · 가이드 카드 · 할 일. 편집 창 맨 아래 사진 칸(`components/photos.js` `mountPhotoEditor`), 카드에는 작은 썸네일 줄(`photoThumbsHtml`, 누르면 크게 보기). 할 일은 ✎ 버튼으로 수정 창(사진 포함). 새 항목도 저장 전에 붙일 수 있게 편집 창이 id 를 미리 정함(저장 안 하면 7일 뒤 서버 정리가 지움). 보기 전용 링크에는 사진 없음.
+- **줄이기** (`lib/image-resize.js`, 기기에서): 사진 긴 변 1280px · 품질 0.75(약 100~200KB), **문서 · 바우처** 2400px · 0.85(A4 약 205dpi, 글자 위주 300~600KB), 썸네일 320px. WebP(못 만들면 JPEG), 1.4MB 넘으면 품질을 낮춰 다시. 사진/문서는 편집 창에서 고름(`photo:kind`).
+- **경로**: `trip-images/{trip}/{id}.webp` · `{id}_t.webp`. 한 번 올린 경로는 내용이 안 바뀜.
+- **기기 캐시** (`lib/images.js`): Cache Storage `trip-images-v1` 에 경로를 키로 저장 → 한 번 본 사진은 다시 받지 않음(웹 · 앱 둘 다, 서명 URL 은 매번 달라서 안 씀). 올린 사람은 올릴 때 캐시에 넣음. 출발 7일 전 ~ 여행 중에는 썸네일 + 문서 원본을 미리 받아 둠(`prefetchTripImages`, 여행 열 때 · 자동 미리 받기).
+- **받기 한도**: 서버에서 실제로 받을 때만 `note_image_download` 로 크기를 더함(주기는 `cycle_day` 기준). `image_settings.egress_limit_mb`(기본 4000MB = 무료 5GB 의 80%) 대비 70% 경고 · 85% 썸네일과 문서만 · 100% 막음. 서버(Storage 객체 RLS `image_read_allowed`)와 앱(`canFetch`)이 같은 기준. 막혀도 기기 캐시에 있는 사진은 보임.
+- **저장공간**: `storage_limit_mb`(기본 900MB) 넘으면 올리기 막음(객체 RLS `image_upload_allowed`).
+- **보관 기간**: 여행 종료일 + `keep_days`(기본 30일). 편집 창 안내 문구에 삭제일, 처음 [추가] 때 한 번 확인 창, 삭제 7일 전부터 여행 화면 위 띠(`photoNoticeHtml`, [모두 저장] · 닫기는 세션 동안), 지난 뒤에는 휴지통 자리 표시 + 기기 캐시도 비움(`purgeExpiredCache`).
+- **기기에 저장**: 크게 보기 [저장] · [모두 저장]. 앱은 `Travel.saveImage`(앱 기능 4, Pictures/여행), 웹은 내려받기. 앱 기능 4 미만이면 "앱을 업데이트해 주세요".
+- **정리** (`cleanup-images`, keepalive 3일마다): 끝난 여행(보관 기간 지남 → 행은 `purged_at`) · 지운 여행 · 지운 사진/항목(7일 뒤) · 기록 없는 파일(하루 뒤). 1시간 안에 다시 부르면 건너뜀. 여행 삭제 버튼(설정 · 관리자)은 파일을 먼저 지워 봄.
+- **관리자 화면**: 저장공간 · 이번 주기 받기(추정) · 단계 · 7일 안 삭제 예정 · 여행별 사용량 · 한도 설정.
+
 ### 7-8. 설정 탭 (more.js) 구성
 
 1. **함께하기**: 초대 링크(복사, 공유, owner는 재발급), 멤버 목록(이름 변경, 멤버 메뉴), 동행자 추가
@@ -628,6 +642,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | place-details | 구글 Places 조회 + 한도 차감·환불 | GOOGLE_PLACES_API_KEY |
 | recommend-places | 키워드 → 장소 후보 추천 (스트리밍) | GEMINI_API_KEY, (GEMINI_MODEL) |
 | plan-itinerary | AI 일정 짜기: 장소 번호로 하루 순서 (스트리밍, 검색 없음, 생각 LOW). 날짜별 이동편 시간대(from · until · move) 반영 | GEMINI_API_KEY, (GEMINI_MODEL) |
+| cleanup-images | 사진 정리 (keepalive 가 3일마다 호출). 지울 목록은 DB(`image_gc_candidates`)가 정하고 서비스 키로 Storage 삭제 → `image_gc_done` | — (자동으로 들어 있는 SUPABASE_SERVICE_ROLE_KEY) |
 | guide-cards | AI 가이드 카드 4종 (스트리밍). 날씨는 Open-Meteo(키 없음) + 글쓰기, 나머지는 구글 검색. `begin_ai_guide` | GEMINI_API_KEY, (GEMINI_MODEL) |
 
 - `enrich-place`, `recommend-places`, `plan-itinerary`, `guide-cards`는 **스트리밍(NDJSON)** 으로 응답합니다: `{"t":"stage",...}` 여러 줄 → `{"t":"result",...}` 또는 `{"t":"error","error":"코드"}`. 클라이언트는 `src/lib/ai-stream.js`의 `streamFunction()`으로 받습니다(`supabase.functions.invoke`는 스트림을 못 받음).
@@ -669,6 +684,10 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `app:welcomedAt` | 안드로이드 앱 처음 실행 안내를 닫은 시각 |
 | `app:keepAwake` | 안드로이드 앱 화면 켜두기 (`'1'`/`'0'`) |
 | `app:updateInfo` | 마지막으로 받은 앱 업데이트 정보 `{min, latest, apk, at}` (설정 표시용) |
+| `photo:kind` | 사진 칸에서 마지막으로 고른 종류 (`photo`/`doc`) |
+| `photo:notice-seen` | 처음 사진 추가 때 보관 기간 안내를 본 적 있음 |
+| `img-status:v1:<tripId>` | 사진 단계 · 보관 일수 · 삭제일 (`image_status`, 10분) |
+| `photo:notice:<tripId>:<삭제일>` (sessionStorage) | 삭제 임박 띠 닫음 |
 | `app:updateNoticed` | "새 앱 버전이 있어요" 띠를 이미 보여준 최신 기능 버전 |
 | 여행별 cache / outbox 키 | store.js (`cacheKey`, `outboxKey`) |
 | 마지막 사용자 | auth.js (`LAST_USER_KEY`) |

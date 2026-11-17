@@ -29,6 +29,7 @@ export const isAndroid = () => typeof navigator !== 'undefined' && /Android/i.te
 
 let travel = null;
 const plugin = () => (travel ||= registerPlugin('Travel'));
+export const nativePlugin = () => plugin();
 
 // ---- 앱 쪽 기능 버전 ----
 let nativeApi = null;

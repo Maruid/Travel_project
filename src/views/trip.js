@@ -4,9 +4,11 @@ import { rpc, errorText } from '../lib/supabase.js';
 import { TripStore } from '../lib/store.js';
 import { spinner, toast } from '../components/ui.js';
 import { navigate } from '../router.js';
-import { tripProgress } from '../lib/format.js';
+import { tripProgress, todayIn } from '../lib/format.js';
 import { backToHome } from '../lib/back-nav.js';
 import { whenIdle, markOpen, markClosed } from '../lib/prefetch.js';
+import { photoNoticeHtml, dismissPhotoNotice, saveAllPhotos, purgeExpiredCache } from '../components/photos.js';
+import { refreshStatus, prefetchWindow, prefetchTripImages } from '../lib/images.js';
 
 const TABS = [
   { key: 'places',   label: '장소',   icon: 'fa-map-location-dot', load: () => import('./tabs/places.js') },
@@ -56,6 +58,7 @@ export async function render(app, params) {
         <span id="sync-dot-c" class="w-2.5 h-2.5 rounded-full"></span><span id="sync-count" class="text-[10px] font-mono font-bold text-amber-300"></span>
       </button>
     </header>
+    <div id="photo-notice"></div>
     <section id="tab-root" class="flex-1 flex flex-col" style="padding-bottom:calc(3.5rem + var(--sab))"></section>
     <nav class="glass-nav fixed bottom-0 left-0 right-0 max-w-md mx-auto flex items-center justify-around px-1 z-40" style="height:calc(3.5rem + var(--sab)); padding-bottom:var(--sab)">
       ${TABS.map((t) => html`
@@ -79,6 +82,11 @@ export async function render(app, params) {
     const dot = { idle: 'bg-emerald-400', syncing: 'bg-neon-cyan animate-pulse', offline: 'bg-amber-400', error: 'bg-rose-500' };
     $('#sync-dot-c', app).className = `w-2.5 h-2.5 rounded-full ${dot[store.status] || dot.idle}`;
     $('#sync-count', app).textContent = pending ? String(pending) : '';
+    // 사진 보관 기간 안내 (삭제 7일 전부터)
+    const notice = photoNoticeHtml(store);
+    const box = $('#photo-notice', app);
+    const sig = notice ? notice.s : '';
+    if (box.dataset.sig !== sig) { box.dataset.sig = sig; setHTML(box, notice || html``); }
   }
 
   async function showTab(key) {
@@ -103,10 +111,21 @@ export async function render(app, params) {
     if (kind !== 'status') active?.instance?.update?.();
   });
   renderHeader();
+  // 사진: 보관 일수 · 한도 단계 받아 두기, 기간이 지난 여행은 기기 캐시도 비움
+  const onImageStatus = (e) => { if (e.detail?.tripId === params.id) renderHeader(); };
+  window.addEventListener('app:image-status', onImageStatus);
+  refreshStatus(params.id).finally(() => {
+    purgeExpiredCache(store);
+    // 출발 7일 전 ~ 여행 중이면 썸네일 · 문서 원본을 받아 둠 (오프라인 대비)
+    const imgs = store.list('trip_images');
+    if (imgs.length && prefetchWindow(store.trip, todayIn(store.trip.timezone))) prefetchTripImages(params.id, imgs).catch(() => {});
+  });
   await showTab(params.tab || 'places');
 
   const off = delegate(app, {
     home: () => backToHome(navigate),
+    'photo-save-all': () => saveAllPhotos(store),
+    'photo-notice-close': () => { dismissPhotoNotice(store); renderHeader(); },
     fx: async () => { (await import('../components/fx-calc.js')).openFxCalc(store); },
     'sync-info': () => {
       const pending = store.pendingCount;
@@ -131,7 +150,7 @@ export async function render(app, params) {
       showTab(p.tab || 'places');
     },
     cleanup: () => {
-      off(); unsub();
+      off(); unsub(); window.removeEventListener('app:image-status', onImageStatus);
       active?.instance?.destroy?.();
       store.destroy();
       markClosed(params.id);

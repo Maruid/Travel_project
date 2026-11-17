@@ -11,6 +11,7 @@ import { esc } from '../../lib/dom.js';
 import { color } from '../../lib/safe.js';
 import { hoursIssueAt } from '../../lib/hours.js';
 import { transportCardsHtml, openTransportEditor } from '../../components/transports.js';
+import { photoThumbsHtml, hydratePhotos, openPhotoViewer, mountPhotoEditor } from '../../components/photos.js';
 
 const ICONS = ['fa-location-dot', 'fa-utensils', 'fa-mug-saucer', 'fa-train-subway', 'fa-taxi', 'fa-plane-departure',
   'fa-plane-arrival', 'fa-hotel', 'fa-bed', 'fa-hot-tub-person', 'fa-camera', 'fa-bag-shopping', 'fa-tree', 'fa-landmark',
@@ -102,6 +103,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
             <div class="glass-card p-3.5 rounded-2xl border-l-4" style="border-left-color:${color(g.color)}">
               <h4 class="text-xs font-bold mb-1 flex items-center gap-1.5" style="color:${color(g.color)}"><i class="fa-solid ${g.icon || 'fa-lightbulb'}"></i>${g.title}</h4>
               <div class="md">${renderMarkdown(g.body_md)}</div>
+              ${photoThumbsHtml(store, 'guide', g.id)}
             </div>`)}
 
           <div class="space-y-2.5">
@@ -121,6 +123,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
                   </div>
                   ${it.description ? html`<p class="text-[11px] text-slate-300 leading-relaxed whitespace-pre-line">${it.description}</p>` : ''}
                   ${it.alert ? html`<div class="mt-1.5 p-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[10px] text-amber-300">${it.alert}</div>` : ''}
+                  ${photoThumbsHtml(store, 'item', it.id)}
                   ${place && hoursIssueAt(place.opening_hours, it.day_date, shortTime(it.start_time)) ? html`
                     <div class="mt-1.5 p-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-[10px] text-rose-200">
                       <i class="fa-solid fa-clock mr-1"></i>${place.name}: ${hoursIssueAt(place.opening_hours, it.day_date, shortTime(it.start_time))}</div>` : ''}
@@ -139,6 +142,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
             </div>`}
         ` : emptyCard('여행 날짜가 없습니다. 설정 탭에서 여행 정보를 설정하거나 날짜를 추가하세요.')}
     `);
+    hydratePhotos(root, store);
   }
 
   // ---------- 하루 동선 지도 ----------
@@ -381,6 +385,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     seg: (el, e) => { if (e?.target?.closest('a')) return; focusSegment(Number(el.dataset.i)); },
     day: (el) => { selected = el.dataset.day; route.focus = null; update(); },
     place: (el) => (onPlace ? onPlace(el.dataset.id) : openPlaceDetail(store, el.dataset.id, null)),
+    photo: (el) => openPhotoViewer(store, el.dataset.img),
     add: () => openItemEditor(store, null, selected),
     edit: (el) => openItemEditor(store, el.dataset.id, selected),
     'edit-day': () => openDayEditor(store, selected),
@@ -542,6 +547,7 @@ function pickPlaceForItem(store, { day, itemId, selected, onPick }) {
 // 장소 카드의 "일정에 넣기"에서도 씀: place 를 주면 제목·연결 장소·아이콘을 미리 채움
 const KIND_ICON = { food: 'fa-utensils', cafe: 'fa-mug-saucer', bar: 'fa-beer-mug-empty', spot: 'fa-camera', shop: 'fa-bag-shopping', lodging: 'fa-hotel', transit: 'fa-train-subway' };
 export function openItemEditor(store, id, day, { place = null } = {}) {
+  const newId = id || crypto.randomUUID();   // 새 일정도 저장 전에 사진을 붙일 수 있게 미리 정함
   const it = id ? store.get('itinerary_items', id)
     : { day_date: day, icon: KIND_ICON[store.category(place?.category_id)?.kind] || 'fa-location-dot', title: place?.name || '', place_id: place?.id || null };
   const placeName = (pid) => store.get('places', pid)?.name || '';
@@ -566,11 +572,13 @@ export function openItemEditor(store, id, day, { place = null } = {}) {
         <div class="flex flex-wrap gap-1.5" id="icon-pick">
           ${ICONS.map((ic) => html`<button type="button" data-action="icon" data-icon="${ic}" class="w-8 h-8 rounded-lg ${ic === it.icon ? 'bg-neon-cyan text-night-950' : 'bg-slate-800 text-slate-300'}"><i class="fa-solid ${ic} text-xs"></i></button>`)}
         </div><input type="hidden" name="icon" value="${it.icon || 'fa-location-dot'}"></div>
+      <div data-photos></div>
       <button class="btn-primary">${id ? '수정 저장' : '추가'}</button>
       ${id ? html`<button type="button" data-action="delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">삭제</button>` : ''}
     </form>`, (el) => {
     const form = $('#item-form', el);
-    const off = delegate(el, {
+    const offPhotos = mountPhotoEditor($('[data-photos]', el), store, 'item', newId);
+    const offActions = delegate(el, {
       'pick-place': () => pickPlaceForItem(store, {
         day: form.elements.day_date.value || it.day_date, itemId: id, selected: form.elements.place_id.value || null,
         onPick: (pid) => {
@@ -607,7 +615,7 @@ export function openItemEditor(store, id, day, { place = null } = {}) {
         sort = v.start_time ? (lo + hi) / 2 : (same.length ? same[same.length - 1].sort_order + 10 : 10);
       }
       const data = { ...v, sort_order: sort };
-      if (id) store.update('itinerary_items', id, data); else store.insert('itinerary_items', data);
+      if (id) store.update('itinerary_items', id, data); else store.insert('itinerary_items', { ...data, id: newId });
       closeSheet();
       // 연결한 장소가 그날·그 시간에 닫혀 있으면 알려줌 (저장은 그대로)
       const pl = v.place_id ? store.get('places', v.place_id) : null;
@@ -615,6 +623,6 @@ export function openItemEditor(store, id, day, { place = null } = {}) {
       if (issue) toast(`저장했어요. 다만 ${pl.name}: ${issue}`, 'error');
       else if (!id && place) toast(`${v.day_date.slice(5).replace('-', '/')} 일정에 넣었어요.`);
     });
-    return off;
+    return () => { offActions(); offPhotos(); };
   });
 }

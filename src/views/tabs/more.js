@@ -224,6 +224,9 @@ export function mount(root, store) {
     'delete-trip': async () => {
       if (!confirmAction(`"${store.trip.title}" 여행과 모든 데이터를 삭제합니다. 되돌릴 수 없어요. 계속할까요?`)) return;
       if (prompt('확인을 위해 여행 이름을 입력하세요') !== store.trip.title) { toast('이름이 일치하지 않습니다.', 'error'); return; }
+      // 사진 파일을 먼저 지움 (여행 행이 지워지면 권한 확인이 안 되므로). 남은 건 서버 정리가 지움
+      const { removeTripFiles } = await import('../../lib/images.js');
+      await removeTripFiles(store.tripId, store.list('trip_images', { includeDeleted: true }));
       const { error } = await supabase.from('trips').delete().eq('id', store.tripId);
       if (error) { toast(errorText(error), 'error'); return; }
       localStorage.removeItem(store.cacheKey); localStorage.removeItem(store.outboxKey);

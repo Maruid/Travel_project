@@ -11,7 +11,7 @@ export function appUpdateState({ api = 0, min = 0, latest = null } = {}) {
 }
 
 // 새 앱에서 쓸 수 있게 되는 기능 이름 (설정 안내용)
-export const API_FEATURES = { 2: ['화면 켜두기', '초대 링크 앱에서 열기'], 3: ['구글 지도 [공유]로 장소 추가', '화면 세로 고정'] };
+export const API_FEATURES = { 2: ['화면 켜두기', '초대 링크 앱에서 열기'], 3: ['구글 지도 [공유]로 장소 추가', '화면 세로 고정'], 4: ['사진을 기기 앨범에 저장'] };
 export function newFeatures(api, latest) {
   const out = [];
   for (let v = api + 1; v <= latest; v++) out.push(...(API_FEATURES[v] || []));

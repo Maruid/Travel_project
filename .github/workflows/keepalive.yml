@@ -1,6 +1,6 @@
 name: Supabase keepalive
 
-# 1) Supabase 무료 프로젝트 비활성 정지 방지: 3일마다 ping() RPC 호출
+# 1) Supabase 무료 프로젝트 비활성 정지 방지: 3일마다 ping() RPC 호출 (+ 사진 정리 cleanup-images)
 #    (migration_007 부터 ping 안에서 만료된 코드·오래된 사용량 기록도 정리)
 # 2) GitHub 은 60일간 저장소 활동이 없으면 예약 workflow 를 끄므로,
 #    .keepalive 파일을 갱신해 커밋 (deploy.yml 은 이 파일 변경을 무시)
@@ -27,6 +27,20 @@ jobs:
             -H "Content-Type: application/json" -d '{}')
           echo "HTTP $status: $(cat /tmp/out.txt)"
           test "$status" = "200"
+
+      # 사진 정리 (migration_017 · cleanup-images). 함수가 아직 없으면(404) 건너뜀, 실패해도 keepalive 는 계속
+      - name: Clean up trip images
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
+        run: |
+          status=$(curl -sS -o /tmp/gc.txt -w '%{http_code}' -X POST \
+            "$SUPABASE_URL/functions/v1/cleanup-images" \
+            -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" -d '{}')
+          echo "HTTP $status: $(cat /tmp/gc.txt)"
+          test "$status" = "200" -o "$status" = "404"
 
       - uses: actions/checkout@v4
       - name: Touch .keepalive

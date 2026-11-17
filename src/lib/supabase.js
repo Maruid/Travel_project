@@ -43,6 +43,8 @@ const ERROR_TEXT = {
   NO_PLACES: '공유할 장소를 하나 이상 골라주세요.',
   VIEW_LINK_INVALID: '이 보기 전용 링크는 꺼졌거나 바뀌었어요.',
   SHARE_LIMIT: '이 여행의 공유 코드는 10개까지예요. 안 쓰는 코드를 끄고 다시 만들어 주세요.',
+  IMAGE_TARGET_LIMIT: '항목 하나에 사진은 4장까지예요.',
+  IMAGE_EXPIRED: '보관 기간이 지난 여행에는 사진을 붙일 수 없어요.',
 };
 
 export function errorText(err) {
