@@ -90,7 +90,6 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       const d = form.elements.dep_date.value; const a = form.elements.arr_date;
       if (d && (!a.value || a.value < d)) a.value = d;
     });
-    form.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncList));
     const off = delegate(el, {
       delete: () => {
         if (!confirmAction('이 이동편을 삭제할까요?')) return;
