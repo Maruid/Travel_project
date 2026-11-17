@@ -133,6 +133,16 @@ export function appUpdateInfo() {
   return { state: appUpdateState({ api, min: u.min || 0, latest: u.latest ?? null }), api, latest: u.latest ?? null, version: appVersion, apk: u.apk || APK_URL };
 }
 
+// 화면 묶음 업데이트 진단 (설정에서 확인용)
+const BUNDLE_LOG_KEY = 'app:bundleLog';
+function setBundleLog(o) {
+  try { localStorage.setItem(BUNDLE_LOG_KEY, JSON.stringify({ ...o, at: new Date().toISOString() })); } catch {}
+  window.dispatchEvent(new Event('app:update-info'));
+}
+export function bundleLog() {
+  try { return JSON.parse(localStorage.getItem(BUNDLE_LOG_KEY) || 'null'); } catch { return null; }
+}
+
 // ---- 웹 화면 묶음 업데이트 + 앱 업데이트 확인 ----
 async function checkBundle({ showBar }) {
   if (!navigator.onLine) return;
@@ -163,18 +173,30 @@ async function checkBundle({ showBar }) {
       noticed = true;
     }
   }
-  if (!info.version || !info.url || info.version === BUNDLE) return;
+  if (!info.version || !info.url || info.version === BUNDLE) { setBundleLog({ step: 'skip', same: info.version === BUNDLE, server: info.version, running: BUNDLE }); return; }
+  let step = 'import';
   try {
     const { CapacitorUpdater } = await import('@capgo/capacitor-updater');
+    step = 'current';
     const cur = await CapacitorUpdater.current();
-    if (cur?.bundle?.version === info.version) return;
+    if (cur?.bundle?.version === info.version) { setBundleLog({ step: 'already-current', server: info.version, current: cur.bundle.version }); return; }
+    step = 'list';
     const listed = await CapacitorUpdater.list().catch(() => ({ bundles: [] }));
     let b = (listed.bundles || []).find((x) => x.version === info.version && x.status !== 'error');
-    if (!b) b = await CapacitorUpdater.download({ url: info.url, version: info.version });
+    if (!b) {
+      step = 'download';
+      b = await CapacitorUpdater.download({ url: info.url, version: info.version });
+    }
+    step = 'next';
     await CapacitorUpdater.next({ id: b.id });   // 다음에 앱을 열 때 적용
-    // 앱 업데이트 띠를 방금 보여줬으면 화면 새로고침 띠로 덮지 않음 (화면은 다음에 열 때 자동 적용)
+    setBundleLog({ step: 'scheduled', server: info.version, id: b.id });
     if (!noticed) showBar({ text: '새 버전이 있어요.', action: '새로고침', run: () => CapacitorUpdater.set({ id: b.id }) });
-  } catch {}
+  } catch (e) {
+    const msg = String(e?.message || e).slice(0, 160);
+    console.warn('bundle update failed at', step, e);
+    setBundleLog({ step: `fail:${step}`, error: msg, server: info.version, running: BUNDLE });
+    showBar({ text: `화면 업데이트 실패 (${step})`, action: '자세히', run: () => window.dispatchEvent(new Event('app:bundle-log-open')) });
+  }
 }
 
 // ---- 바깥 열기 · 공유 ----

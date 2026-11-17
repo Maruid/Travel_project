@@ -8,9 +8,10 @@ import { canInstall, promptInstall, isIOS, screenInfo, SCREEN_LABEL } from '../l
 import { isStandalone } from '../lib/back-nav.js';
 import { isApp, isAndroid, APK_URL, canKeepAwake, keepAwakeOn, setKeepAwake, appUpdateInfo, openExternal } from '../lib/native.js';
 import { newFeatures } from '../lib/app-update.js';
+import { bundleLog } from '../lib/native.js';   // 기존 import에 bundleLog 추가
 
 function appUpdateBlock() {
-  const u = appUpdateInfo();
+  const u = appUpdateInfo();  
   const ver = html`<span class="text-slate-500">${u.version ? `앱 ${u.version}` : '앱'}${u.api ? ` · 기능 ${u.api}` : ''}</span>`;
   if (u.state === 'required' || u.state === 'available') {
     const feats = newFeatures(u.api, u.latest || u.api);
@@ -37,7 +38,7 @@ function appUpdateBlock() {
 
 export function appSectionHtml({ showApk = true } = {}) {
   return html`
-    ${isApp() ? html`${appUpdateBlock()}
+    ${isApp() ? (() => { const l = bundleLog(); return l ? html`<p class="text-[10px] text-slate-500 break-all">화면 업데이트: ${l.step}${l.error ? ` · ${l.error}` : ''} · 서버 ${l.server || '-'} · 실행 ${l.running || l.current || '-'}</p>` : ''; })() : ''}
         ${canKeepAwake() ? html`
           <label class="flex items-start gap-2 pt-2 border-t border-white/5 cursor-pointer">
             <input type="checkbox" data-action="keep-awake" ${keepAwakeOn() ? 'checked' : ''} class="accent-cyan-400 mt-0.5">
