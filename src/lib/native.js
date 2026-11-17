@@ -185,7 +185,7 @@ async function checkBundle({ showBar }) {
     let b = (listed.bundles || []).find((x) => x.version === info.version && x.status !== 'error');
     if (!b) {
       step = 'download';
-      b = await CapacitorUpdater.download({ url: info.url, version: info.version });
+      b = await CapacitorUpdater.download({ url: info.url, version: info.version, checksum: info.checksum || '' });
     }
     step = 'next';
     await CapacitorUpdater.next({ id: b.id });   // 다음에 앱을 열 때 적용
@@ -195,7 +195,7 @@ async function checkBundle({ showBar }) {
     const msg = String(e?.message || e).slice(0, 160);
     console.warn('bundle update failed at', step, e);
     setBundleLog({ step: `fail:${step}`, error: msg, server: info.version, running: BUNDLE });
-    showBar({ text: `화면 업데이트 실패 (${step})`, action: '자세히', run: () => window.dispatchEvent(new Event('app:bundle-log-open')) });
+    showBar({ text: `화면 업데이트 실패 (${step})`, action: '자세히', run: () => alert(`화면 업데이트 실패\n단계: ${step}\n${msg}`) });
   }
 }
 
