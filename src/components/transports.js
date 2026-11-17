@@ -99,9 +99,13 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
         const key = b.dataset.key;
         const mode = form.elements.mode.value;
         if (mode !== 'flight') { toast('항공편일 때만 공항을 고를 수 있어요. 직접 입력해 주세요.'); return; }
+        const typed = form.elements[`${key}_name`].value.trim();
         openPicker({
           title: key === 'dep' ? '출발 공항' : '도착 공항',
-          selected: AIRPORTS.find((a) => a.value === form.elements[`${key}_name`].value)?.value,
+          // 입력칸 글이 목록의 공항과 같으면 그 항목 표시, 아니면 검색어로 채움
+          selected: AIRPORTS.find((a) => a.value === typed)?.value,
+          query: AIRPORTS.some((a) => a.value === typed) ? '' : typed,
+          placeholder: '공항 · 도시 · 코드 (예: 오사카, KIX)',
           sections: [{ items: AIRPORTS.map((a) => ({
             id: a.value, title: a.value, sub: a.label.split(' · ')[1], icon: 'fa-plane',
             place: { name: a.value, zone: a.label, signature: '' },

@@ -5,6 +5,7 @@
 //    place 가 있으면 이름 · 현지 이름 · 동네 · 대표 메뉴로 검색, 없으면 title 로
 //  - 뒤로가기는 이 창만 닫음 (back-nav.js pickerOpened)
 //  - 창이 열릴 때 키보드는 띄우지 않음 (검색칸을 누르면 그때)
+//  - query: 처음 검색어 (검색칸에 채워 두고 바로 거름) · placeholder: 검색칸 안내 문구
 import { html, setHTML, $ } from '../lib/dom.js';
 import { color, icon } from '../lib/safe.js';
 import { matchScore, normQuery } from '../lib/place-filter.js';
@@ -29,13 +30,14 @@ export function closePicker() {
 }
 window.addEventListener('app:route', () => { if (current) hide(); });
 
-export function openPicker({ title, top = [], sections = [], categories = [], selected = null, onPick, emptyText = '맞는 항목이 없어요.' }) {
+export function openPicker({ title, top = [], sections = [], categories = [], selected = null, onPick, emptyText = '맞는 항목이 없어요.',
+  query = '', placeholder = '이름 · 동네 · 대표 메뉴 검색' }) {
   if (current) hide();
   const all = sections.flatMap((s) => s.items);
   const searchable = all.length > SEARCH_MIN;
   // 칩에는 실제로 쓰인 카테고리만
   const usedCats = categories.filter((c) => all.some((it) => it.catId === c.id));
-  let q = '';
+  let q = searchable ? String(query || '').trim() : '';
   let cat = null;
   let timer = null;
 
@@ -53,7 +55,7 @@ export function openPicker({ title, top = [], sections = [], categories = [], se
     ${searchable ? html`
       <div class="relative mb-2 flex-shrink-0">
         <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[11px] text-slate-500"></i>
-        <input data-q type="search" class="input pl-8" placeholder="이름 · 동네 · 대표 메뉴 검색" autocomplete="off" enterkeyhint="search">
+        <input data-q type="search" class="input pl-8" placeholder="${placeholder}" value="${q}" autocomplete="off" enterkeyhint="search">
       </div>
       ${usedCats.length > 1 ? html`<div data-cats class="flex gap-1.5 overflow-x-auto no-scrollbar pb-2 flex-shrink-0"></div>` : ''}` : ''}
     <div data-list class="overflow-y-auto no-scrollbar space-y-1 min-h-[30vh]"></div>`);
