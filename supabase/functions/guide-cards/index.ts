@@ -133,7 +133,7 @@ function weatherTable(d: NonNullable<Awaited<ReturnType<typeof weatherData>>>, p
   const lines = [
     `**${place} · ${d.start.slice(5).replace('-', '/')} ~ ${d.end.slice(5).replace('-', '/')}** (지난 ${s.years.length}년 같은 날짜 실제 기록)`,
     '',
-    `| 평균 최고 | 평균 최저 | 가장 더운 날 | 가장 추운 날 | 비 온 날 |`,
+    `| 평균 최고 | 평균 최저 | 최고 | 최저 | 비 온 날 |`,
     `|---|---|---|---|---|`,
     `| ${n(s.avgMax)} | ${n(s.avgMin)} | ${n(s.hottest)} | ${n(s.coldest)} | ${s.rainyPct}% |`,
   ];

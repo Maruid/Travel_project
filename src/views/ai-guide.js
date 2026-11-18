@@ -20,6 +20,12 @@ const dataOf = (store) => ({
   transports: store.list('trip_transports'),
 });
 
+// 카드를 만든(덮어쓴) 날 M/D
+const madeOn = (g) => {
+  const d = new Date(g.updated_at || g.created_at || Date.now());
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+};
+
 export async function openAiGuide(store) {
   if (!navigator.onLine) { toast('온라인 상태에서만 쓸 수 있어요.', 'error'); return; }
   let access;
@@ -64,7 +70,7 @@ export async function openAiGuide(store) {
             <div class="flex items-start gap-2.5">
               <i class="fa-solid ${c.icon} mt-0.5 w-4 text-center" style="color:${c.color}"></i>
               <div class="flex-1 min-w-0">
-                <p class="text-xs font-bold text-white">${c.title}${has ? html` <span class="text-[10px] font-normal text-slate-400">· 만든 카드 있음</span>` : ''}</p>
+                <p class="text-xs font-bold text-white whitespace-nowrap truncate">${c.title}</p>
                 <p class="text-[10px] text-slate-400 mt-0.5">${c.desc}</p>
                 ${gaps.length ? html`<p class="text-[10px] text-amber-300 mt-1"><i class="fa-solid fa-circle-exclamation mr-1"></i>먼저 등록: ${gaps.join(', ')}</p>` : ''}
                 ${running ? html`<p id="ag-progress" class="text-[10px] text-purple-200 mt-1"></p>` : ''}
@@ -73,7 +79,8 @@ export async function openAiGuide(store) {
                 <button data-action="make" data-card="${c.key}" ${blocked || busy ? 'disabled' : ''}
                   class="px-3 h-8 rounded-xl text-[11px] font-bold border ${blocked || busy ? 'bg-slate-800 text-slate-500 border-white/10' : 'bg-purple-500/25 text-purple-100 border-purple-400/50'}">
                   ${running ? html`<i class="fa-solid fa-spinner fa-spin"></i>` : has ? '다시 만들기' : '만들기'}</button>
-                ${left != null ? html`<span class="text-[9px] text-slate-500">${left}/${access.card_limit}번 남음</span>` : ''}
+                ${has ? html`<span class="text-[9px] text-emerald-300/80 whitespace-nowrap"><i class="fa-solid fa-check mr-0.5"></i>${madeOn(has)} 만듦</span>` : ''}
+                ${left != null ? html`<span class="text-[9px] text-slate-500 whitespace-nowrap">${left}/${access.card_limit}번 남음</span>` : ''}
               </div>
             </div>
           </div>`;

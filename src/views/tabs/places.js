@@ -31,7 +31,17 @@ import { checkEnrich } from '../../lib/enrich-check.js';
 import { todayIn, dateRange } from '../../lib/format.js';
 
 // 지도 높이 세 단계 (장소 탭 높이 대비 %)
-const MAP_SIZES = { s: 30, m: 45, l: 70 };
+// 지도 높이: 기본 높이(%)는 손잡이로 끌어 정하고 기기에 기억. 목록을 내리면 작은 지도(140px)로 줄고,
+//   카드를 고르거나 목록 맨 위로 올리거나 손잡이를 누르면 기본 높이로 돌아옴
+const MAP_DEFAULT_PCT = 45;
+const MAP_COMPACT_PX = 140;
+const OLD_SIZES = { s: 30, m: 45, l: 70 };   // 예전 설정값(작게 · 기본 · 크게) 읽기
+function readMapPct(v) {
+  if (OLD_SIZES[v]) return OLD_SIZES[v];
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 18 && n <= 80 ? n : MAP_DEFAULT_PCT;
+}
+const PREF_LIST_MODE = 'places:listMode';    // 'compact' 간단히 · 그 밖은 자세히
 import { SORTS, sortRows, nextSort, parseSort, sortToString } from '../../lib/place-sort.js';
 
 const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//i.test(u) ? u : null);
@@ -102,12 +112,14 @@ export function mount(root, store) {
     sort: parseSort(getPrefStr(PREF_PLACE_SORT)),   // { key: distance|rating|price, dir: asc|desc }
     selectedId: null,
     collapsed: getPref(PREF_MAP_COLLAPSED),
-    mapSize: MAP_SIZES[getPrefStr(PREF_MAP_SIZE)] ? getPrefStr(PREF_MAP_SIZE) : 'm',
+    mapPct: readMapPct(getPrefStr(PREF_MAP_SIZE)),
+    shrunk: false,         // 목록을 내려서 지도가 작아진 상태 (기기에 저장 안 함)
+    compactList: getPrefStr(PREF_LIST_MODE) === 'compact',
     resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
 
   setHTML(root, html`
-    <div id="map-wrap" class="relative w-full min-h-[140px] flex-shrink-0 transition-[height] duration-200" style="height:${MAP_SIZES[state.mapSize]}%">
+    <div id="map-wrap" class="relative w-full min-h-[140px] flex-shrink-0 transition-[height] duration-200" style="height:${state.mapPct}%">
       <div id="map-loading" class="absolute inset-0 flex items-center justify-center text-[11px] text-slate-500">
         <i class="fa-solid fa-map mr-1.5"></i>지도 불러오는 중...</div>
       <div id="map" class="w-full h-full z-10"></div>
@@ -125,15 +137,18 @@ export function mount(root, store) {
         <button data-action="reset-view" id="btn-reset-view" class="w-9 h-9 rounded-full glass-card bg-night-950/85 flex items-center justify-center text-slate-200 border border-white/20"></button>
       </div>
     </div>
-    <!-- 높이 조절 손잡이: 끌거나 누르면 작게(30%) · 기본(45%) · 크게(70%) -->
+    <!-- 높이 조절 손잡이: 끌면 기본 높이를 바꾸고, 누르면 작은 지도 ↔ 기본 높이. 왼쪽은 목록 보기 방식 -->
     <div id="map-handle" class="relative h-6 flex-shrink-0 flex items-center justify-center border-b border-white/10 bg-night-950/60 touch-none select-none cursor-row-resize">
       <span class="w-10 h-1 rounded-full bg-slate-500"></span>
-      <span id="map-size-text" class="absolute left-3 text-[9px] text-slate-500"></span>
+      <button data-action="list-mode" class="list-mode-btn absolute left-2 h-5 px-2 rounded-md text-[10px] font-bold"></button>
       <button data-action="toggle-map" class="absolute right-2 h-5 px-2 rounded-md text-[10px] text-slate-400 font-bold"><i class="fa-solid fa-chevron-up mr-0.5"></i>접기</button>
     </div>
-    <button data-action="toggle-map" id="map-bar" class="hidden w-full h-9 flex-shrink-0 flex items-center justify-center gap-2 border-b border-white/10 bg-night-950/60 text-[11px] text-slate-300 font-bold">
-      <i class="fa-solid fa-map text-neon-cyan"></i><span id="map-bar-text">지도 펼치기</span><i class="fa-solid fa-chevron-down"></i>
-    </button>
+    <div id="map-bar" class="hidden relative w-full h-9 flex-shrink-0 border-b border-white/10 bg-night-950/60">
+      <button data-action="toggle-map" class="w-full h-full flex items-center justify-center gap-2 text-[11px] text-slate-300 font-bold">
+        <i class="fa-solid fa-map text-neon-cyan"></i><span id="map-bar-text">지도 펼치기</span><i class="fa-solid fa-chevron-down"></i>
+      </button>
+      <button data-action="list-mode" class="list-mode-btn absolute left-2 top-2 h-5 px-2 rounded-md text-[10px] font-bold"></button>
+    </div>
 
     <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
       <!-- 한 줄 툴바: [필터] [정렬 칩 (좁으면 이 부분만 옆으로 밀림)] [AI] [+] -->
@@ -148,7 +163,7 @@ export function mount(root, store) {
         <span><i class="fa-solid fa-location-dot mr-1"></i><span id="geo-banner-text"></span></span><span class="text-amber-300">검토 <i class="fa-solid fa-chevron-right text-[9px]"></i></span>
       </button>
       <div id="place-scroll" class="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-3">
-        <div id="place-list" class="space-y-2"></div>
+        <div id="place-list" class="space-y-1.5"></div>
       </div>
     </div>
   `);
@@ -443,21 +458,33 @@ export function mount(root, store) {
       const hl = 'px-1 rounded border';
       const meta = [
         p.rating ? html`<span class="font-bold flex-shrink-0 ${sk === 'rating' ? `${hl} bg-amber-400/15 text-amber-200 border-amber-400/40` : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}${p.rating_count != null ? html`<span class="font-normal text-slate-400"> (${Number(p.rating_count).toLocaleString()})</span>` : ''}</span>` : null,
-        priceRange(p) ? html`<span class="font-mono font-bold flex-shrink-0 ${sk === 'price' ? `${hl} bg-emerald-400/15 text-emerald-300 border-emerald-400/40` : 'text-emerald-400'}">${priceRange(p)}</span>${priceInHome(p, store.budget) ? html`<span class="flex-shrink-0 text-slate-400">(${priceInHome(p, store.budget)})</span>` : ''}` : null,
+        // 원화 환산은 펼친 카드에서만 (목록에서는 동네가 잘리지 않게)
+        priceRange(p) ? html`<span class="font-mono font-bold flex-shrink-0 ${sk === 'price' ? `${hl} bg-emerald-400/15 text-emerald-300 border-emerald-400/40` : 'text-emerald-400'}">${priceRange(p)}</span>${selected && priceInHome(p, store.budget) ? html`<span class="flex-shrink-0 text-slate-400">(${priceInHome(p, store.budget)})</span>` : ''}` : null,
         p.zone ? html`<span class="truncate">${p.zone}</span>` : null,
       ].filter(Boolean);
+      // 간단히: 한 줄 (아이콘 · 이름 · 별점 · 거리). 고르면 아래 자세한 카드로
+      if (state.compactList && !selected) {
+        return html`
+        <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card px-3 h-11 rounded-xl cursor-pointer flex items-center gap-2 min-w-0 ${p.visited_at ? 'opacity-60' : ''}">
+          <i class="fa-solid ${icon(cat?.icon)} w-4 text-center text-[11px] flex-shrink-0" style="color:${color(cat?.color, '#94a3b8')}"></i>
+          <span class="flex-1 min-w-0 truncate text-[12px] font-bold text-white">${p.name}</span>
+          ${p.rating ? html`<span class="flex-shrink-0 text-[10px] font-bold ${sk === 'rating' ? 'text-amber-200' : 'text-amber-300'}">★${Number(p.rating).toFixed(1)}</span>` : ''}
+          ${sk === 'price' && priceRange(p) ? html`<span class="flex-shrink-0 font-mono text-[10px] font-bold text-emerald-400">${priceRange(p)}</span>` : ''}
+          ${walk.text ? html`<span class="flex-shrink-0 text-[10px] ${sk === 'distance' ? 'text-emerald-300 font-bold' : 'text-emerald-400'}">${walk.text}</span>` : ''}
+        </div>`;
+      }
       return html`
       <div data-action="select" data-id="${p.id}" id="card-${p.id}" class="glass-card p-3 rounded-2xl cursor-pointer hover:border-slate-500 transition ${selected ? 'neon-border-cyan' : ''} ${p.visited_at && !selected ? 'opacity-60' : ''}">
         <div class="flex gap-2">
           <div class="flex-1 min-w-0 space-y-1">
             <h4 class="font-bold text-[13px] text-white truncate leading-tight">${p.name}</h4>
-            ${meta.length ? html`<div class="flex items-center gap-1 text-[10px] text-slate-400 min-w-0 overflow-hidden whitespace-nowrap">
+            ${meta.length ? html`<div class="flex items-center gap-1 text-[10px] text-slate-400 min-w-0 ${selected ? 'flex-wrap' : 'overflow-hidden whitespace-nowrap'}">
               ${meta.map((m, i) => html`${i ? html`<span class="text-slate-600">·</span>` : ''}${m}`)}</div>` : ''}
             ${badges.length ? html`<div class="flex items-center gap-1 ${selected ? 'flex-wrap' : 'overflow-hidden'}">
               ${selected ? badges : badges.slice(0, BADGE_COLLAPSED_MAX)}
               ${!selected && badges.length > BADGE_COLLAPSED_MAX ? html`<span class="${BADGE} bg-slate-800 text-slate-300 border-white/10">+${badges.length - BADGE_COLLAPSED_MAX}</span>` : ''}
             </div>` : ''}
-            ${p.signature || p.description ? html`<p class="text-[11px] truncate">
+            ${p.signature || p.description ? html`<p class="text-[11px] ${selected ? '' : 'line-clamp-2'}">
               ${p.signature ? html`<span class="font-medium text-neon-cyan">${p.signature}</span>` : ''}
               ${p.description ? html`<span class="text-slate-400">${p.signature ? ' · ' : ''}${p.description}</span>` : ''}</p>` : ''}
           </div>
@@ -472,14 +499,13 @@ export function mount(root, store) {
           </div>
         </div>
         ${selected ? html`
-          <div class="grid ${state.collapsed && p.lat != null ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5 mt-2.5 pt-2.5 border-t border-white/10">
+          <!-- 길찾기는 오른쪽 아이콘과 같아서 빼고 얇은 한 줄로 -->
+          <div class="grid ${state.collapsed && p.lat != null ? 'grid-cols-2' : 'grid-cols-1'} gap-1.5 mt-2 pt-2 border-t border-white/10">
             ${state.collapsed && p.lat != null ? html`
-              <button data-action="show-on-map" data-id="${p.id}" class="py-2 rounded-xl bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
+              <button data-action="show-on-map" data-id="${p.id}" class="py-1.5 rounded-lg bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
                 <i class="fa-solid fa-map-location-dot mr-1 text-neon-cyan"></i>지도에서 보기</button>` : ''}
-            <button data-action="detail" data-id="${p.id}" class="py-2 rounded-xl bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
+            <button data-action="detail" data-id="${p.id}" class="py-1.5 rounded-lg bg-slate-800 text-slate-100 text-[11px] font-bold border border-white/10">
               <i class="fa-solid fa-circle-info mr-1"></i>상세 보기</button>
-            <a href="${googleMapsHref(p)}" target="_blank" rel="noopener" class="py-2 rounded-xl bg-neon-cyan text-night-950 text-[11px] font-black text-center">
-              <i class="fa-solid fa-diamond-turn-right mr-1"></i>길찾기</a>
           </div>` : ''}
       </div>`;
     })}` : store.list('places').length ? emptyCard('조건에 맞는 장소가 없습니다.') : html`
@@ -496,15 +522,19 @@ export function mount(root, store) {
   function select(id, { from = 'list' } = {}) {
     state.selectedId = id;
     const p = id ? store.get('places', id) : null;
+    // 카드를 고르면 작아진 지도를 기본 높이로 (커지는 동안 기다렸다 이동 · 스크롤)
+    userAt = 0;   // 고른 뒤 자동 스크롤로 다시 작아지지 않게
+    const grew = p && p.lat != null && setShrunk(false);
+    const wait = grew ? 240 : 0;
     if (map && p && p.lat != null && !state.collapsed) {
-      map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 });
+      setTimeout(() => map?.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 }), wait);
     }
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
     // 선택한 카드가 리스트 위·아래에 걸쳐 있으면 펼쳐진 카드 전체가 보이도록 스크롤
     //  (지도 핀으로 선택한 경우에도 같은 방식으로 카드를 보여줌)
-    if (p) requestAnimationFrame(() => document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    if (p) setTimeout(() => document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), wait);
   }
 
   // ---------- 지도 접기 / 펼치기 ----------
@@ -516,20 +546,18 @@ export function mount(root, store) {
     $('#map-bar-text', root).textContent = `지도 펼치기${a?.name ? ` · ${a.name} 기준` : ''}`;
     if (!state.collapsed) setTimeout(() => map?.invalidateSize(), 50);
   }
-  // ---------- 지도 높이: 손잡이로 작게(30%) · 기본(45%) · 크게(70%) ----------
-  const SIZE_ORDER = ['s', 'm', 'l'];
-  const SIZE_TEXT = { s: '지도 작게', m: '기본', l: '지도 크게' };
+  // ---------- 지도 높이: 기본 높이(손잡이로 끌어 정함) ↔ 작은 지도(목록을 내리면) ----------
   function applyMapSize(animate = true) {
-    $('#map-wrap', root).style.height = `${MAP_SIZES[state.mapSize]}%`;
-    $('#map-size-text', root).textContent = SIZE_TEXT[state.mapSize];
+    $('#map-wrap', root).style.height = state.shrunk ? `${MAP_COMPACT_PX}px` : `${state.mapPct}%`;
     setTimeout(() => map?.invalidateSize(), animate ? 220 : 0);
   }
-  function setMapSize(size) {
-    state.mapSize = size;
-    setPrefStr(PREF_MAP_SIZE, size);
+  function setShrunk(on) {
+    if (state.shrunk === on || state.collapsed) return false;
+    state.shrunk = on;
     applyMapSize();
+    return true;
   }
-  // 끌면 손가락을 따라 높이가 바뀌고, 놓으면 가장 가까운 단계로 맞춤. 거의 안 움직이고 놓으면(탭) 다음 단계로
+  // 끌면 손가락을 따라 높이가 바뀌고 놓은 높이가 새 기본 높이. 거의 안 움직이고 놓으면(탭) 작은 지도 ↔ 기본
   const handle = $('#map-handle', root);
   let drag = null;
   const onHandleDown = (e) => {
@@ -550,12 +578,13 @@ export function mount(root, store) {
     if (!drag) return;
     $('#map-wrap', root).style.transition = '';
     if (!drag.moved) {
-      setMapSize(SIZE_ORDER[(SIZE_ORDER.indexOf(state.mapSize) + 1) % SIZE_ORDER.length]);
-    } else {
-      const pct = drag.pct ?? MAP_SIZES[state.mapSize];
-      const nearest = Object.keys(MAP_SIZES).sort((a, b) => Math.abs(MAP_SIZES[a] - pct) - Math.abs(MAP_SIZES[b] - pct))[0];
-      setMapSize(nearest);
+      state.shrunk = !state.shrunk;
+    } else if (drag.pct != null) {
+      state.mapPct = Math.round(drag.pct);
+      state.shrunk = false;
+      setPrefStr(PREF_MAP_SIZE, String(state.mapPct));
     }
+    applyMapSize();
     drag = null;
   };
   handle.addEventListener('pointerdown', onHandleDown);
@@ -563,9 +592,41 @@ export function mount(root, store) {
   handle.addEventListener('pointerup', onHandleUp);
   handle.addEventListener('pointercancel', onHandleUp);
 
+  // 목록을 내리면 지도를 작게, 맨 위로 다시 올리면 기본 높이로
+  //  (작아진 뒤에도 목록이 충분히 길 때만 줄임 → 줄자마자 맨 위가 되어 다시 커지는 일 없게)
+  //  손가락 · 휠로 직접 내릴 때만 (카드를 골라 자동으로 스크롤될 때는 그대로)
+  const scroller = $('#place-scroll', root);
+  let lastTop = 0;
+  let userAt = 0;
+  const markUser = () => { userAt = Date.now(); };
+  ['touchstart', 'touchmove', 'wheel'].forEach((ev) => scroller.addEventListener(ev, markUser, { passive: true }));
+  const onListScroll = () => {
+    const top = scroller.scrollTop;
+    const up = top < lastTop;
+    lastTop = top;
+    if (state.collapsed || drag || Date.now() - userAt > 1500) return;   // 손을 뗀 뒤 관성 스크롤까지
+    if (!state.shrunk && !up && top > 60) {
+      const gain = $('#map-wrap', root).getBoundingClientRect().height - MAP_COMPACT_PX;
+      if (scroller.scrollHeight - scroller.clientHeight > gain + 80) setShrunk(true);
+    } else if (state.shrunk && up && top <= 0) {
+      setShrunk(false);
+    }
+  };
+  scroller.addEventListener('scroll', onListScroll, { passive: true });
+
+  // 목록 보기 방식: 자세히(카드) ↔ 간단히(한 줄)
+  function renderListModeButtons() {
+    root.querySelectorAll('.list-mode-btn').forEach((b) => {
+      b.className = `list-mode-btn absolute left-2 ${b.closest('#map-bar') ? 'top-2' : ''} h-5 px-2 rounded-md text-[10px] font-bold whitespace-nowrap ${state.compactList ? 'bg-neon-cyan/15 text-neon-cyan' : 'text-slate-400'}`;
+      setHTML(b, state.compactList ? html`<i class="fa-solid fa-list mr-0.5"></i>간단히` : html`<i class="fa-solid fa-table-list mr-0.5"></i>자세히`);
+    });
+  }
+
   function setCollapsed(on) {
     state.collapsed = on;
+    state.shrunk = false;
     setPref(PREF_MAP_COLLAPSED, on);
+    applyMapSize(false);
     applyCollapsed();
     renderList(filtered());
   }
@@ -637,6 +698,12 @@ export function mount(root, store) {
     gps: locate,
     'reset-view': resetView,
     'toggle-map': () => setCollapsed(!state.collapsed),
+    'list-mode': () => {
+      state.compactList = !state.compactList;
+      setPrefStr(PREF_LIST_MODE, state.compactList ? 'compact' : 'full');
+      renderListModeButtons();
+      renderList(filtered());
+    },
     filter: openFilterSheet,
     'anchor-pick': openAnchorPicker,
     'filter-off': (el) => {
@@ -675,6 +742,7 @@ export function mount(root, store) {
 
   applyCollapsed();
   applyMapSize(false);
+  renderListModeButtons();
   renderResetButton();
   update();
   // 리스트를 먼저 그린 뒤 지도 라이브러리를 불러와 붙임

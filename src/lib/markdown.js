@@ -43,7 +43,9 @@ export function labelListItems(htmlStr) {
 }
 
 export function renderMarkdown(src) {
-  const dirty = labelListItems(md.parse(src || ''));
+  // 표는 감싸서 폭이 넘치면 표만 옆으로 밀림 (화면 전체가 밀리지 않게)
+  const dirty = labelListItems(md.parse(src || ''))
+    .replace(/<table>/g, '<div class="md-table"><table>').replace(/<\/table>/g, '</table></div>');
   return raw(DOMPurify.sanitize(dirty, { ADD_ATTR: ['data-copy'] }));
 }
 
