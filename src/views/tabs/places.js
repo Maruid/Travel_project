@@ -19,6 +19,7 @@ import { progressTicker, timingText, sourceLabel } from '../../lib/ai-stream.js'
 import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { takePendingShare } from '../../lib/share-in.js';
 import { color, icon } from '../../lib/safe.js';
+import { splitScroll, sheetTakesGesture, sheetMaxOff, releaseVelocity } from '../../lib/sheet-scroll.js';
 import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
   geoReviewOf, geoReviewList, distanceText,
@@ -31,8 +32,9 @@ import { checkEnrich } from '../../lib/enrich-check.js';
 import { todayIn, dateRange } from '../../lib/format.js';
 
 // 지도 높이 세 단계 (장소 탭 높이 대비 %)
-// 지도 높이: 기본 높이(%)는 손잡이로 끌어 정하고 기기에 기억. 목록을 내리면 작은 지도(140px)로 줄고,
-//   카드를 고르거나 목록 맨 위로 올리거나 손잡이를 누르면 기본 높이로 돌아옴
+// 지도 높이: 기본 높이(%)는 손잡이로 끌어 정하고 기기에 기억. 지도는 크기가 그대로이고
+//   목록 판이 손가락을 따라 지도 위로 올라옴(작은 지도 140px 만 남을 때까지).
+//   카드를 고르거나 목록 맨 위에서 더 내리거나 손잡이를 누르면 판이 내려감
 const MAP_DEFAULT_PCT = 45;
 const MAP_COMPACT_PX = 140;
 const OLD_SIZES = { s: 30, m: 45, l: 70 };   // 예전 설정값(작게 · 기본 · 크게) 읽기
@@ -113,13 +115,12 @@ export function mount(root, store) {
     selectedId: null,
     collapsed: getPref(PREF_MAP_COLLAPSED),
     mapPct: readMapPct(getPrefStr(PREF_MAP_SIZE)),
-    shrunk: false,         // 목록을 내려서 지도가 작아진 상태 (기기에 저장 안 함)
     compactList: getPrefStr(PREF_LIST_MODE) === 'compact',
     resetNext: 'all',      // 초기화 버튼이 다음에 할 동작: 'all'(전체 보기) ↔ 'anchor'(기준점)
   };
 
   setHTML(root, html`
-    <div id="map-wrap" class="relative w-full min-h-[140px] flex-shrink-0 transition-[height] duration-200" style="height:${state.mapPct}%">
+    <div id="map-wrap" class="absolute inset-x-0 top-0 z-0 isolate" style="height:${state.mapPct}%">
       <div id="map-loading" class="absolute inset-0 flex items-center justify-center text-[11px] text-slate-500">
         <i class="fa-solid fa-map mr-1.5"></i>지도 불러오는 중...</div>
       <div id="map" class="w-full h-full z-10"></div>
@@ -137,20 +138,22 @@ export function mount(root, store) {
         <button data-action="reset-view" id="btn-reset-view" class="w-9 h-9 rounded-full glass-card bg-night-950/85 flex items-center justify-center text-slate-200 border border-white/20"></button>
       </div>
     </div>
-    <!-- 높이 조절 손잡이: 끌면 기본 높이를 바꾸고, 누르면 작은 지도 ↔ 기본 높이. 왼쪽은 목록 보기 방식 -->
-    <div id="map-handle" class="relative h-6 flex-shrink-0 flex items-center justify-center border-b border-white/10 bg-night-950/60 touch-none select-none cursor-row-resize">
+    <!-- 목록 판: 지도 위로 손가락을 따라 올라옴 (transform 만 바뀌어서 지도를 다시 그리지 않음) -->
+    <div id="list-sheet" class="absolute inset-x-0 z-10 flex flex-col bg-night-950 rounded-t-2xl border-t border-white/10 shadow-[0_-8px_24px_rgba(0,0,0,0.45)] will-change-transform">
+    <!-- 손잡이: 끌면 지도 기본 높이를 바꾸고, 누르면 판 올리기 ↔ 내리기. 왼쪽은 목록 보기 방식 -->
+    <div id="map-handle" class="relative h-6 flex-shrink-0 flex items-center justify-center rounded-t-2xl touch-none select-none cursor-row-resize">
       <span class="w-10 h-1 rounded-full bg-slate-500"></span>
       <button data-action="list-mode" class="list-mode-btn absolute left-2 h-5 px-2 rounded-md text-[10px] font-bold"></button>
       <button data-action="toggle-map" class="absolute right-2 h-5 px-2 rounded-md text-[10px] text-slate-400 font-bold"><i class="fa-solid fa-chevron-up mr-0.5"></i>접기</button>
     </div>
-    <div id="map-bar" class="hidden relative w-full h-9 flex-shrink-0 border-b border-white/10 bg-night-950/60">
+    <div id="map-bar" class="hidden relative w-full h-9 flex-shrink-0 border-b border-white/10">
       <button data-action="toggle-map" class="w-full h-full flex items-center justify-center gap-2 text-[11px] text-slate-300 font-bold">
         <i class="fa-solid fa-map text-neon-cyan"></i><span id="map-bar-text">지도 펼치기</span><i class="fa-solid fa-chevron-down"></i>
       </button>
       <button data-action="list-mode" class="list-mode-btn absolute left-2 top-2 h-5 px-2 rounded-md text-[10px] font-bold"></button>
     </div>
 
-    <div class="flex-1 min-h-0 flex flex-col px-3 pt-3">
+    <div id="sheet-head" class="flex-shrink-0 px-3 pt-1">
       <!-- 한 줄 툴바: [필터] [정렬 칩 (좁으면 이 부분만 옆으로 밀림)] [AI] [+] -->
       <div class="flex items-center gap-1.5 text-xs py-1 mb-1 flex-shrink-0 min-w-0">
         <button data-action="filter" id="btn-filter" class="flex-shrink-0 h-7 px-2.5 rounded-lg text-[11px] font-bold flex items-center gap-1"></button>
@@ -162,24 +165,27 @@ export function mount(root, store) {
       <button data-action="geo-review" id="geo-banner" class="hidden w-full mb-1.5 px-3 h-8 flex-shrink-0 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 font-bold flex items-center justify-between">
         <span><i class="fa-solid fa-location-dot mr-1"></i><span id="geo-banner-text"></span></span><span class="text-amber-300">검토 <i class="fa-solid fa-chevron-right text-[9px]"></i></span>
       </button>
-      <div id="place-scroll" class="flex-1 min-h-0 overflow-y-auto no-scrollbar pb-3">
-        <div id="place-list" class="space-y-1.5"></div>
-      </div>
+    </div>
+    <div id="place-scroll" class="relative flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar px-3 pb-3">
+      <div id="place-list" class="space-y-1.5"></div>
+    </div>
     </div>
   `);
 
   // 장소 탭은 화면 높이에 맞춘 고정 레이아웃: 위는 지도, 아래 리스트만 스크롤
   //  (헤더와 하단 탭바 높이를 빼서 꽉 채움)
-  const prevStyle = { height: root.style.height, paddingBottom: root.style.paddingBottom, flex: root.style.flex };
+  const prevStyle = { height: root.style.height, paddingBottom: root.style.paddingBottom, flex: root.style.flex, position: root.style.position, overflow: root.style.overflow };
   const fitHeight = () => {
     const headerH = document.querySelector('header')?.offsetHeight || 44;
     const navH = document.querySelector('nav')?.offsetHeight || 56;   // 하단 탭바 (아이폰 홈 바 영역 포함)
     root.style.height = `calc(100dvh - ${headerH}px - ${navH}px)`;
     root.style.paddingBottom = '0';
     root.style.flex = 'none';   // 부모의 flex-1 로 늘어나 하단 탭바 뒤로 리스트가 숨지 않도록
+    root.style.position = 'relative';   // 지도 · 목록 판을 겹쳐 놓음
+    root.style.overflow = 'hidden';
   };
   fitHeight();
-  const onResize = () => { fitHeight(); map?.invalidateSize(); };
+  const onResize = () => { fitHeight(); layoutSheet(); map?.invalidateSize(); };
   window.addEventListener('resize', onResize);
 
   // ---------- 지도 (라이브러리가 준비되면 생성. 그 전에는 map = null 이고 리스트만 동작) ----------
@@ -516,25 +522,36 @@ export function mount(root, store) {
           <button data-action="import-places" class="btn-ghost py-2.5"><i class="fa-solid fa-file-import mr-1"></i>다른 여행에서</button>
         </div>
       </div>`);
+    clampOff();
   }
 
   // 장소 선택 (id = null 이면 해제). 지도가 펼쳐져 있으면 그 위치로 이동
   function select(id, { from = 'list' } = {}) {
     state.selectedId = id;
     const p = id ? store.get('places', id) : null;
-    // 카드를 고르면 작아진 지도를 기본 높이로 (커지는 동안 기다렸다 이동 · 스크롤)
-    userAt = 0;   // 고른 뒤 자동 스크롤로 다시 작아지지 않게
-    const grew = p && p.lat != null && setShrunk(false);
-    const wait = grew ? 240 : 0;
+    // 카드를 고르면 목록 판을 내려 지도를 다 보여 줌
+    stopFling();
+    if (p && p.lat != null && sheetOff > 0) setOff(0, true);
     if (map && p && p.lat != null && !state.collapsed) {
-      setTimeout(() => map?.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 }), wait);
+      map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), ZOOM_SELECT), { duration: 0.5 });
     }
     const rows = filtered();
     renderMarkers(rows);
     renderList(rows);
-    // 선택한 카드가 리스트 위·아래에 걸쳐 있으면 펼쳐진 카드 전체가 보이도록 스크롤
+    // 선택한 카드가 (판이 내려간 뒤) 보이는 목록 영역 안에 다 들어오게 스크롤
     //  (지도 핀으로 선택한 경우에도 같은 방식으로 카드를 보여줌)
-    if (p) setTimeout(() => document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), wait);
+    if (p) requestAnimationFrame(() => revealCard(id));
+  }
+
+  function revealCard(id) {
+    const card = document.getElementById(`card-${id}`);
+    if (!card) return;
+    const visH = rootH() - (mapPx() - sheetOff) - headH();   // 지금 판에서 보이는 목록 높이
+    const top = card.offsetTop; const bottom = top + card.offsetHeight;
+    let st = scroller.scrollTop;
+    if (bottom > st + visH - 8) st = bottom - visH + 8;
+    if (top < st + 4) st = top - 4;
+    if (st !== scroller.scrollTop) scroller.scrollTo({ top: Math.max(0, st), behavior: 'smooth' });
   }
 
   // ---------- 지도 접기 / 펼치기 ----------
@@ -542,77 +559,149 @@ export function mount(root, store) {
     $('#map-wrap', root).classList.toggle('hidden', state.collapsed);
     $('#map-handle', root).classList.toggle('hidden', state.collapsed);
     $('#map-bar', root).classList.toggle('hidden', !state.collapsed);
+    sheet.classList.toggle('rounded-t-2xl', !state.collapsed);
+    sheet.classList.toggle('border-t', !state.collapsed);
+    layoutSheet();
     const a = anchorPoint();
     $('#map-bar-text', root).textContent = `지도 펼치기${a?.name ? ` · ${a.name} 기준` : ''}`;
     if (!state.collapsed) setTimeout(() => map?.invalidateSize(), 50);
   }
-  // ---------- 지도 높이: 기본 높이(손잡이로 끌어 정함) ↔ 작은 지도(목록을 내리면) ----------
-  function applyMapSize(animate = true) {
-    $('#map-wrap', root).style.height = state.shrunk ? `${MAP_COMPACT_PX}px` : `${state.mapPct}%`;
-    setTimeout(() => map?.invalidateSize(), animate ? 220 : 0);
+  // ---------- 지도 + 목록 판 ----------
+  //  지도: 위에 기본 높이로 고정 (크기가 안 바뀜). 목록 판: 지도 바로 아래에서 시작해 손가락을 따라
+  //  지도 위로 올라옴(sheetOff). 판 높이는 "작은 지도만 남았을 때" 화면을 채우는 높이.
+  const sheet = $('#list-sheet', root);
+  const scroller = $('#place-scroll', root);
+  let sheetOff = 0;
+  const rootH = () => root.clientHeight || 1;
+  const mapPx = () => (state.collapsed ? 0 : Math.max(MAP_COMPACT_PX, Math.round((rootH() * state.mapPct) / 100)));
+  const headH = () => $('#map-handle', root).offsetHeight + $('#map-bar', root).offsetHeight + $('#sheet-head', root).offsetHeight;
+  const maxOff = () => (state.collapsed ? 0 : sheetMaxOff({
+    mapPx: mapPx(), compact: MAP_COMPACT_PX, rootH: rootH(), headerH: headH(),
+    contentH: $('#place-list', root).offsetHeight + 12,
+  }));
+  function setOff(v, animate = false) {
+    sheetOff = Math.max(0, Math.min(maxOff(), v));
+    sheet.style.transition = animate ? 'transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none';
+    sheet.style.transform = `translate3d(0, ${-sheetOff}px, 0)`;
   }
-  function setShrunk(on) {
-    if (state.shrunk === on || state.collapsed) return false;
-    state.shrunk = on;
-    applyMapSize();
-    return true;
+  function layoutSheet() {
+    const m = mapPx();
+    $('#map-wrap', root).style.height = `${m}px`;
+    sheet.style.top = `${m}px`;
+    sheet.style.height = `${rootH() - (state.collapsed ? 0 : MAP_COMPACT_PX)}px`;
+    setOff(sheetOff);
   }
-  // 끌면 손가락을 따라 높이가 바뀌고 놓은 높이가 새 기본 높이. 거의 안 움직이고 놓으면(탭) 작은 지도 ↔ 기본
+  // 목록이 바뀌어 짧아지면 판도 그만큼만
+  function clampOff() { if (sheetOff > maxOff()) setOff(sheetOff, true); }
+
+  // 판과 목록 스크롤을 한꺼번에 움직임 (d > 0: 내용을 위로)
+  function moveBy(d) {
+    const r = splitScroll(d, { off: sheetOff, max: maxOff(), scrollTop: scroller.scrollTop, scrollMax: scroller.scrollHeight - scroller.clientHeight });
+    if (r.off !== sheetOff) setOff(r.off);
+    if (r.scrollTop !== scroller.scrollTop) scroller.scrollTop = r.scrollTop;
+    return r;
+  }
+  // 손을 뗀 뒤 관성
+  let fling = 0;
+  function stopFling() { if (fling) cancelAnimationFrame(fling); fling = 0; }
+  function startFling(v) {
+    stopFling();
+    if (Math.abs(v) < 0.05) return;
+    let last = performance.now();
+    const step = (now) => {
+      const dt = Math.min(32, now - last); last = now;
+      const before = { sheetOff, st: scroller.scrollTop };
+      moveBy(v * dt);
+      v *= Math.pow(0.996, dt);
+      const stuck = before.sheetOff === sheetOff && before.st === scroller.scrollTop;
+      fling = Math.abs(v) > 0.02 && !stuck ? requestAnimationFrame(step) : 0;
+    };
+    fling = requestAnimationFrame(step);
+  }
+  // 끈 뒤 바로 따라오는 클릭(카드 고르기)은 무시
+  function swallowNextClick() {
+    const stop = (e) => { e.stopPropagation(); e.preventDefault(); };
+    sheet.addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => sheet.removeEventListener('click', stop, { capture: true }), 350);
+  }
+
+  // 손가락: 판을 움직일 상황이면 이 손짓은 끝까지 직접 처리(판 → 목록 순서), 아니면 목록 기본 스크롤
+  let g = null;
+  sheet.addEventListener('touchstart', (e) => {
+    stopFling();
+    if (state.collapsed || e.touches.length !== 1) { g = null; return; }
+    if (sheetOff === 0 && e.target.closest('#map-handle')) { g = null; return; }   // 손잡이: 지도 기본 높이 조절
+    const t = e.touches[0];
+    g = { x: t.clientX, y: t.clientY, last: t.clientY, mode: null, samples: [{ y: t.clientY, t: e.timeStamp }] };
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (!g || g.mode === 'native') return;
+    const t = e.touches[0];
+    if (g.mode === null) {
+      const dx = t.clientX - g.x; const dy = t.clientY - g.y;
+      if (Math.abs(dy) < 6 && Math.abs(dx) < 6) return;
+      const take = Math.abs(dy) > Math.abs(dx)
+        && sheetTakesGesture(dy < 0, { off: sheetOff, max: maxOff(), scrollTop: scroller.scrollTop });
+      g.mode = take && e.cancelable ? 'sheet' : 'native';
+      if (g.mode === 'native') return;
+    }
+    e.preventDefault();
+    moveBy(g.last - t.clientY);
+    g.last = t.clientY;
+    g.samples.push({ y: t.clientY, t: e.timeStamp });
+    if (g.samples.length > 8) g.samples.shift();
+  }, { passive: false });
+  const onTouchEnd = (e) => {
+    if (g?.mode === 'sheet') {
+      swallowNextClick();
+      startFling(releaseVelocity(g.samples, e.timeStamp));
+    }
+    g = null;
+  };
+  sheet.addEventListener('touchend', onTouchEnd);
+  sheet.addEventListener('touchcancel', onTouchEnd);
+  // PC 휠: 같은 순서
+  sheet.addEventListener('wheel', (e) => {
+    if (state.collapsed || e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    if (!sheetTakesGesture(d > 0, { off: sheetOff, max: maxOff(), scrollTop: scroller.scrollTop })) return;
+    e.preventDefault();
+    stopFling();
+    moveBy(d);
+  }, { passive: false });
+
+  // 손잡이: 판이 내려가 있을 때 끌면 지도 기본 높이를 바꿈(놓은 높이를 기억). 누르면 판 올리기 ↔ 내리기
   const handle = $('#map-handle', root);
   let drag = null;
   const onHandleDown = (e) => {
     if (e.target.closest('button')) return;
-    const wrap = $('#map-wrap', root);
-    drag = { y: e.clientY, h: wrap.getBoundingClientRect().height, total: root.getBoundingClientRect().height, moved: false, pct: null };
-    wrap.style.transition = 'none';
+    drag = { y: e.clientY, pct: state.mapPct, startPct: state.mapPct, moved: false, resize: sheetOff === 0 };
     handle.setPointerCapture?.(e.pointerId);
   };
   const onHandleMove = (e) => {
     if (!drag) return;
     const dy = e.clientY - drag.y;
     if (Math.abs(dy) > 5) drag.moved = true;
-    drag.pct = Math.min(80, Math.max(18, ((drag.h + dy) / drag.total) * 100));
-    $('#map-wrap', root).style.height = `${drag.pct}%`;
+    if (!drag.resize || !drag.moved) return;
+    state.mapPct = Math.min(80, Math.max(18, drag.startPct + (dy / rootH()) * 100));
+    layoutSheet();
   };
   const onHandleUp = () => {
     if (!drag) return;
-    $('#map-wrap', root).style.transition = '';
     if (!drag.moved) {
-      state.shrunk = !state.shrunk;
-    } else if (drag.pct != null) {
-      state.mapPct = Math.round(drag.pct);
-      state.shrunk = false;
+      setOff(sheetOff > 0 ? 0 : maxOff(), true);
+    } else if (drag.resize) {
+      state.mapPct = Math.round(state.mapPct);
       setPrefStr(PREF_MAP_SIZE, String(state.mapPct));
+      layoutSheet();
+      map?.invalidateSize();
     }
-    applyMapSize();
     drag = null;
   };
   handle.addEventListener('pointerdown', onHandleDown);
   handle.addEventListener('pointermove', onHandleMove);
   handle.addEventListener('pointerup', onHandleUp);
   handle.addEventListener('pointercancel', onHandleUp);
-
-  // 목록을 내리면 지도를 작게, 맨 위로 다시 올리면 기본 높이로
-  //  (작아진 뒤에도 목록이 충분히 길 때만 줄임 → 줄자마자 맨 위가 되어 다시 커지는 일 없게)
-  //  손가락 · 휠로 직접 내릴 때만 (카드를 골라 자동으로 스크롤될 때는 그대로)
-  const scroller = $('#place-scroll', root);
-  let lastTop = 0;
-  let userAt = 0;
-  const markUser = () => { userAt = Date.now(); };
-  ['touchstart', 'touchmove', 'wheel'].forEach((ev) => scroller.addEventListener(ev, markUser, { passive: true }));
-  const onListScroll = () => {
-    const top = scroller.scrollTop;
-    const up = top < lastTop;
-    lastTop = top;
-    if (state.collapsed || drag || Date.now() - userAt > 1500) return;   // 손을 뗀 뒤 관성 스크롤까지
-    if (!state.shrunk && !up && top > 60) {
-      const gain = $('#map-wrap', root).getBoundingClientRect().height - MAP_COMPACT_PX;
-      if (scroller.scrollHeight - scroller.clientHeight > gain + 80) setShrunk(true);
-    } else if (state.shrunk && up && top <= 0) {
-      setShrunk(false);
-    }
-  };
-  scroller.addEventListener('scroll', onListScroll, { passive: true });
 
   // 목록 보기 방식: 자세히(카드) ↔ 간단히(한 줄)
   function renderListModeButtons() {
@@ -624,9 +713,8 @@ export function mount(root, store) {
 
   function setCollapsed(on) {
     state.collapsed = on;
-    state.shrunk = false;
+    sheetOff = 0;
     setPref(PREF_MAP_COLLAPSED, on);
-    applyMapSize(false);
     applyCollapsed();
     renderList(filtered());
   }
@@ -741,7 +829,6 @@ export function mount(root, store) {
   });
 
   applyCollapsed();
-  applyMapSize(false);
   renderListModeButtons();
   renderResetButton();
   update();
@@ -768,6 +855,9 @@ export function mount(root, store) {
       root.style.height = prevStyle.height;
       root.style.paddingBottom = prevStyle.paddingBottom;
       root.style.flex = prevStyle.flex;
+      root.style.position = prevStyle.position;
+      root.style.overflow = prevStyle.overflow;
+      stopFling();
       destroyed = true;
       map?.remove();
     },
