@@ -31,8 +31,19 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+// 목록 첫머리 "머리말: 내용" → 머리말을 작은 색 글씨로 따로 (AI 카드 · 직접 쓴 가이드 공통)
+//   머리말: 1~18자, 숫자로 끝나지 않음(09:30 · 체크인 15:00 제외), 뒤가 // 아님(주소 제외)
+const LABEL_RE = /<li>(<p>)?(?:<strong>([^<>:\n]{1,18}?)\s*(?::\s*<\/strong>|<\/strong>\s*:)|([^<>:\n]{1,18}?):)(?!\/\/)\s*/g;
+export function labelListItems(htmlStr) {
+  return htmlStr.replace(LABEL_RE, (all, p, bold, plain) => {
+    const label = (bold ?? plain).trim();
+    if (!label || /\d$/.test(label) || !/[^\d\s.,]/.test(label)) return all;
+    return `<li class="md-li-label">${p || ''}<span class="md-label">${label}</span>`;
+  });
+}
+
 export function renderMarkdown(src) {
-  const dirty = md.parse(src || '');
+  const dirty = labelListItems(md.parse(src || ''));
   return raw(DOMPurify.sanitize(dirty, { ADD_ATTR: ['data-copy'] }));
 }
 
