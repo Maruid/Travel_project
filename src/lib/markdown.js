@@ -9,6 +9,14 @@ import { copyText } from '../components/ui.js';
 const md = new Marked({
   gfm: true,
   breaks: true,
+  // 취소선은 ~~글자~~ 만. 한 개짜리 ~ 는 범위(5~6분 · 09:00~18:00)로 자주 써서 그대로 둠
+  tokenizer: {
+    del(src) {
+      const m = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?!~)/.exec(src);
+      if (m) return { type: 'del', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+      return undefined;
+    },
+  },
   renderer: {
     code({ text }) {
       return `<div class="copy-card"><pre>${esc(text)}</pre><button type="button" data-copy>복사</button></div>`;
