@@ -29,7 +29,7 @@ export async function render(app) {
   let retryTimer = null;    // 약한 신호: 연결 표시는 그대로인데 서버 확인이 안 될 때 20초마다 조용히 재시도
 
   setHTML(app, html`
-    <header class="px-4 py-4 glass-nav sticky top-0 z-40 flex items-center justify-between" style="padding-top:calc(1rem + var(--sat))">
+    <header class="px-4 glass-nav sticky top-0 z-40 flex items-center justify-between" style="height:calc(2.75rem + var(--sat)); padding-top:var(--sat)">
       <div class="flex items-center gap-2">
         <span class="w-2.5 h-2.5 rounded-full bg-neon-cyan animate-pulse shadow-[0_0_8px_#00f2fe]"></span>
         <h1 class="text-sm font-black tracking-wide text-white">MY TRIPS</h1>
@@ -41,10 +41,11 @@ export async function render(app) {
       </div>
     </header>
 
-    <main class="flex-1 p-4 space-y-3">
-      <div id="net-slot"></div>
-      <div id="welcome-slot"></div>
-      <div id="install-slot">${installBannerHtml()}</div>
+    <!-- 빈 안내 칸(empty:hidden)은 간격을 차지하지 않음 -->
+    <main class="flex-1 px-4 pt-2 pb-4 space-y-3">
+      <div id="net-slot" class="empty:hidden"></div>
+      <div id="welcome-slot" class="empty:hidden"></div>
+      <div id="install-slot" class="empty:hidden">${installBannerHtml()}</div>
       <div id="list-slot" class="space-y-3"></div>
 
       <button data-action="create" class="btn-primary flex items-center justify-center gap-1.5">
