@@ -11,6 +11,7 @@ import { schedulePrefetch } from '../lib/prefetch.js';
 import { isApp } from '../lib/native.js';
 import { openAppSettings } from '../components/app-settings.js';
 import { parseAppLink } from '../lib/app-link.js';
+import { howToButtonHtml, openHowTo } from '../components/how-to.js';
 
 const WELCOME_KEY = 'app:welcomedAt';
 const welcomed = () => { try { return !!localStorage.getItem(WELCOME_KEY); } catch { return true; } };
@@ -53,6 +54,8 @@ export async function render(app) {
       </button>
 
       <div id="login-slot"></div>
+
+      ${howToButtonHtml()}
     </main>
   `);
 
@@ -188,6 +191,7 @@ export async function render(app) {
     'install-dismiss': () => { dismissBanner(); refreshInstall(); },
     create: () => navigate('/create'),
     admin: () => navigate('/admin'),
+    'how-to': () => openHowTo(),
     'account-login': () => startGoogleLogin({ hasLocalTrips: trips.length > 0 }),
     'account-menu': async () => openAccountMenu(await getUser()),
     'account-offline': () => toast(navigator.onLine ? '로그인 상태를 확인하는 중이에요. 잠시 후 다시 눌러 주세요.' : '오프라인이에요. 계정 메뉴는 인터넷에 연결된 뒤 쓸 수 있어요.'),
