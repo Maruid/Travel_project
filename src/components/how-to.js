@@ -60,11 +60,11 @@ const SECTIONS = () => [
   {
     icon: 'fa-list-check', color: '#a3e635', title: '할 일',
     items: [
-      ['할 일', '할 것 · 갈 곳 · 살 것 · 챙길 것 체크리스트. ✎로 열어 메모 · 사진 · 장소 · 날짜 · 담당을 정해요.'],
-      ['날짜 · 담당', '날짜를 정하면 일정 탭 그 날에도 보여요. [내 담당만]으로 내 것만 볼 수 있어요.'],
-      ['연결', '갈 곳을 체크하면 연결한 장소도 다녀옴으로, 살 것을 체크하면 [지출 기록]으로 가계부에 바로 적어요.'],
+      ['분류', '할 것 · 갈 곳 · 살 것 · 챙길 것. 칩마다 몇 개 했는지 보여요. 누르면 체크, ✎로 메모 · 사진 · 장소 · 날짜 · 담당을 정해요.'],
+      ['준비물', '[🧳 준비물 목록]에서 여권 · 충전기 같은 기본 항목을 골라 "챙길 것"으로 한 번에 넣어요.'],
+      ['날짜 · 담당', '날짜를 정하면 일정 탭 그 날 "이 날 할 일"에도 보여요. [내 담당만]으로 내 것만 볼 수 있어요.'],
+      ['장소 · 가계부', '갈 곳을 체크하면 연결한 장소도 다녀옴이 되고, 살 것을 체크하면 알림의 [지출 기록]으로 가계부에 바로 적어요.'],
       ['정리', '왼쪽 손잡이를 끌어 순서를 바꾸고, [완료 숨기기]로 남은 것만 봐요. 지운 항목은 알림의 [되돌리기]로 살려요.'],
-      ['준비물', '[🧳 준비물 목록]에서 여권 · 충전기 같은 기본 항목을 골라 한 번에 넣어요.'],
     ],
   },
   {
@@ -90,7 +90,7 @@ export function howToButtonHtml() {
       <span class="w-8 h-8 rounded-xl bg-neon-cyan/15 text-neon-cyan flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-book-open text-sm"></i></span>
       <span class="flex-1 min-w-0">
         <span class="block text-xs font-bold text-white">사용 방법</span>
-        <span class="block text-[10px] text-slate-400 truncate">장소 · 일정 · AI 가이드 · 가계부 · 공금 정산 · 오프라인</span>
+        <span class="block text-[10px] text-slate-400 truncate">장소 · 일정 · AI 가이드 · 가계부 · 할 일 · 오프라인</span>
       </span>
       <i class="fa-solid fa-chevron-right text-[10px] text-slate-500"></i>
     </button>`;
