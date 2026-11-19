@@ -2,6 +2,7 @@ import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { esc, raw } from './dom.js';
 import { copyText } from '../components/ui.js';
+import { linkPlaceHeadings } from './place-link.js';
 
 // 가이드 카드용 마크다운
 // - 코드블록(```)은 "복사" 버튼이 붙은 쇼잉 카드로 렌더링
@@ -42,11 +43,22 @@ export function labelListItems(htmlStr) {
   });
 }
 
-export function renderMarkdown(src) {
+// 장소 링크 [이름](#place:id) → 장소 상세를 여는 버튼 (data-action="place", 각 화면의 delegate 가 처리)
+//   정리(sanitize)한 뒤에 바꿈. id 는 UUID 형식만 받음
+const PLACE_A_RE = /<a href="#place:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"[^>]*>([\s\S]*?)<\/a>/g;
+function placeButtons(htmlStr, clickable) {
+  return htmlStr.replace(PLACE_A_RE, (_, id, inner) => (clickable
+    ? `<button type="button" class="md-place" data-action="place" data-id="${id}"><i class="fa-solid fa-location-dot"></i>${inner}</button>`
+    : inner));
+}
+
+// opts.places: 등록한 장소 (제목을 장소 이름과 비교해 연결) · opts.placeLinks: false 면 링크 없이 글만
+export function renderMarkdown(src, { places = null, placeLinks = true } = {}) {
+  const text = places && placeLinks ? linkPlaceHeadings(src || '', places) : src || '';
   // 표는 감싸서 폭이 넘치면 표만 옆으로 밀림 (화면 전체가 밀리지 않게)
-  const dirty = labelListItems(md.parse(src || ''))
+  const dirty = labelListItems(md.parse(text))
     .replace(/<table>/g, '<div class="md-table"><table>').replace(/<\/table>/g, '</table></div>');
-  return raw(DOMPurify.sanitize(dirty, { ADD_ATTR: ['data-copy'] }));
+  return raw(placeButtons(DOMPurify.sanitize(dirty, { ADD_ATTR: ['data-copy'] }), placeLinks));
 }
 
 // 복사 버튼 위임 (전역 1회)

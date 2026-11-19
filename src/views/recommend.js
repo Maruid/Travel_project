@@ -20,7 +20,7 @@ import { isCurrencyCode } from '../lib/currency.js';
 // =====================================================================
 
 const KEYWORD_MAX = 100;
-const EXAMPLES = ['현지인 맛집', '비 오는 날 갈 만한 곳', '야경 명소', '혼밥하기 좋은 곳', '기념품 쇼핑'];
+const EXAMPLES = ['현지인 맛집', '꼭 가볼 명소', '야경 명소', '비 오는 날 갈 만한 곳', '기념품 쇼핑', '혼밥하기 좋은 곳'];
 
 let accessCache = null;              // { admin, google, allowed, expires_at, daily_limit, used_today, requested }
 const lastResult = new Map();        // tripId → 마지막으로 본 결과 (편집기에 다녀와도 유지)
@@ -103,7 +103,7 @@ export async function openRecommend(store, { anchor = null } = {}) {
       return html`
         <div class="space-y-2">
           <div class="flex gap-1.5">
-            <input id="rc-keyword" class="input" maxlength="${KEYWORD_MAX}" placeholder="예: 현지인이 가는 야키니쿠" value="${state.keyword}">
+            <input id="rc-keyword" class="input" maxlength="${KEYWORD_MAX}" placeholder="예: 현지인 야키니쿠 · 사진 찍기 좋은 명소" value="${state.keyword}">
             <button data-action="run" class="btn-primary !w-auto px-4 flex-shrink-0" ${state.busy ? 'disabled' : ''}>추천</button>
           </div>
           <div class="flex flex-wrap gap-1">

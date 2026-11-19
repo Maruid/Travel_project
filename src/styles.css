@@ -123,6 +123,11 @@
 .md ol { list-style: decimal; }
 .md li { margin: 0.2em 0; }
 .md li.md-li-label { margin: 0.5em 0; }
+.md .md-place { display: inline-flex; align-items: baseline; gap: 0.35em; color: inherit; font: inherit; text-align: left;
+  text-decoration: underline; text-decoration-color: rgba(103,232,249,0.45); text-underline-offset: 3px; }
+.md .md-place i { color: #67e8f9; font-size: 0.8em; }
+.md .md-place.md-focus { animation: md-focus 1.6s ease-out; border-radius: 6px; }
+@keyframes md-focus { 0%, 40% { background: rgba(103,232,249,0.25); } 100% { background: transparent; } }
 .md .md-label { display: block; font-size: 10px; font-weight: 700; line-height: 1.5; color: #7dd3fc; letter-spacing: 0.02em; }
 .md hr { border-color: rgba(255,255,255,0.1); margin: 0.8em 0; }
 .md a { color: #00f2fe; text-decoration: underline; }

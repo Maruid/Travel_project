@@ -102,7 +102,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
           ${guides.map((g) => html`
             <div class="glass-card p-3.5 rounded-2xl border-l-4" style="border-left-color:${color(g.color)}">
               <h4 class="text-xs font-bold mb-1 flex items-center gap-1.5" style="color:${color(g.color)}"><i class="fa-solid ${g.icon || 'fa-lightbulb'}"></i>${g.title}</h4>
-              <div class="md">${renderMarkdown(g.body_md)}</div>
+              <div class="md">${renderMarkdown(g.body_md, { places: store.list('places') })}</div>
               ${photoThumbsHtml(store, 'guide', g.id)}
             </div>`)}
 

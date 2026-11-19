@@ -10,7 +10,7 @@ import { openSheet, closeSheet, toast, confirmAction } from '../components/ui.js
 import { rpc, errorText } from '../lib/supabase.js';
 import { streamFunction, progressTicker } from '../lib/ai-stream.js';
 import { startGoogleLogin } from '../components/account.js';
-import { GUIDE_CARDS, cardOf, guideGaps, buildGuideRequest, guideBody } from '../lib/ai-guide.js';
+import { GUIDE_CARDS, cardOf, guideGaps, buildGuideRequest, guideBody, guideTargetIds } from '../lib/ai-guide.js';
 import { todayIn } from '../lib/format.js';
 
 const dataOf = (store) => ({
@@ -98,7 +98,7 @@ export async function openAiGuide(store) {
       const ticker = progressTicker((text) => { const p = $('#ag-progress', el); if (p) p.textContent = text; });
       try {
         const r = await streamFunction('guide-cards', { tripId: store.tripId, card: key, request: buildGuideRequest(key, data) }, ticker.onEvent);
-        const body = guideBody(r, todayIn(store.trip.timezone));
+        const body = guideBody(r, todayIn(store.trip.timezone), guideTargetIds(key, data));
         if (old) store.update('guides', old.id, { body_md: body });
         else {
           store.insert('guides', {

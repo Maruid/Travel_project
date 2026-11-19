@@ -20,6 +20,8 @@ import { isGoogleMapsUrl } from '../../lib/maps-link.js';
 import { takePendingShare } from '../../lib/share-in.js';
 import { color, icon } from '../../lib/safe.js';
 import { splitScroll, sheetTakesGesture, sheetMaxOff, releaseVelocity } from '../../lib/sheet-scroll.js';
+import { linkedPlaceIds } from '../../lib/place-link.js';
+import { navigate } from '../../router.js';
 import {
   fetchPlaceDetails, googleColumns, googleFromPlace, mergeIntoExisting, todayIndexMondayFirst, STATUS_TEXT, REVIEW_DISTANCE_M,
   geoReviewOf, geoReviewList, distanceText,
@@ -914,6 +916,8 @@ export function placeDetailHtml(store, p, { from = null, readOnly = false } = {}
     </span>`;
   const hours = p.opening_hours?.weekday || [];
   const today = todayIndexMondayFirst(tz);
+  // 이 장소에 연결된 가이드 카드 (명소 체크포인트 · 숙소 정보 등)
+  const guidesFor = readOnly ? [] : guidesLinking(store, p.id);
   const site = safeUrl(p.website);
   return html`
     ${readOnly ? '' : geoReviewCard(p)}
@@ -934,6 +938,12 @@ export function placeDetailHtml(store, p, { from = null, readOnly = false } = {}
         <button data-action="more" class="flex justify-center">${act('', '<i class="fa-solid fa-ellipsis"></i>', '더보기')}</button>`}
     </div>
     ${names.length ? html`<p class="-mt-1 mb-2 text-[11px] text-rose-200 truncate"><i class="fa-solid fa-heart text-rose-400 mr-1"></i>${names.join(', ')}</p>` : ''}
+    ${guidesFor.length ? html`
+      <button data-action="guide-open" class="w-full mb-2 p-2.5 rounded-2xl bg-purple-500/10 border border-purple-400/30 text-left flex items-center gap-2">
+        <i class="fa-solid fa-book-open text-purple-300 text-xs"></i>
+        <span class="flex-1 min-w-0 text-[11px] text-purple-100 truncate">가이드에서 보기 · ${guidesFor.map((g) => g.title).join(', ')}</span>
+        <i class="fa-solid fa-chevron-right text-[10px] text-purple-300/70"></i>
+      </button>` : ''}
 
     <div class="space-y-2 text-xs">
       ${p.signature ? html`<div class="p-3 rounded-2xl glass-card"><span class="text-[10px] font-bold text-slate-400 block mb-0.5">대표 메뉴 & 볼거리</span><p class="font-bold text-white">${p.signature}</p></div>` : ''}
@@ -978,7 +988,18 @@ export function openPlaceDetail(store, id, from) {
       reopen();
     },
     more: () => openPlaceMore(store, p, from, reopen),
+    'guide-open': () => {
+      closeSheet();
+      try { sessionStorage.setItem('guide:focus', id); } catch {}
+      window.dispatchEvent(new Event('app:guide-focus'));   // 이미 가이드 탭이면 바로 스크롤
+      navigate(`/trip/${store.tripId}/guides`, { replace: true });
+    },
   }));
+}
+
+function guidesLinking(store, placeId) {
+  const places = store.list('places');
+  return store.list('guides').filter((g) => linkedPlaceIds(g.body_md, places).has(placeId));
 }
 
 // ⋯ 더보기: 상세 위에 한 겹 (뒤로가기는 이 창만 닫음)

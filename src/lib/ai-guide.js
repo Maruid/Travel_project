@@ -4,6 +4,7 @@
 // =====================================================================
 import { stayFor } from './route-plan.js';
 import { transportGaps } from './transport.js';
+import { numberedToLinks } from './place-link.js';
 import { dateRange } from './format.js';
 
 export const GUIDE_CARDS = [
@@ -89,9 +90,16 @@ export function buildGuideRequest(card, data) {
   return { ...base, stays: stays.slice(0, 6).map(stayRow) };
 }
 
-// 가이드 카드에 저장할 본문: AI 본문 + 맨 아래 출처 · 만든 날짜
-export function guideBody(result, today) {
+// 요청에 넣은 장소 id (AI 가 쓴 "### 1. 이름" 번호와 같은 순서) → 제목을 그 장소에 연결
+export function guideTargetIds(card, data) {
+  if (card === 'landmark') return landmarks(data).map((p) => p.id);
+  if (card === 'stay') return tripStays(data).slice(0, 6).map((s) => s.place.id);
+  return [];
+}
+
+// 가이드 카드에 저장할 본문: AI 본문(번호 제목 → 장소 링크) + 맨 아래 출처 · 만든 날짜
+export function guideBody(result, today, ids = []) {
   const src = (result.sources || []).slice(0, 6)
     .map((s) => `[${String(s.title || '출처').replace(/[[\]]/g, '')}](${s.uri})`).join(' · ');
-  return `${String(result.body || '').trim()}\n\n---\n*AI 가 ${today} 에 만든 안내예요. 바뀔 수 있으니 중요한 건 다시 확인하세요.*${src ? `\n\n출처: ${src}` : ''}`.slice(0, 19000);
+  return `${numberedToLinks(String(result.body || '').trim(), ids)}\n\n---\n*AI 가 ${today} 에 만든 안내예요. 바뀔 수 있으니 중요한 건 다시 확인하세요.*${src ? `\n\n출처: ${src}` : ''}`.slice(0, 19000);
 }

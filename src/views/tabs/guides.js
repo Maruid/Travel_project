@@ -6,6 +6,8 @@ import { color, icon } from '../../lib/safe.js';
 import { applyFormat } from '../../lib/md-edit.js';
 import { photoThumbsHtml, hydratePhotos, openPhotoViewer, mountPhotoEditor } from '../../components/photos.js';
 
+export const GUIDE_FOCUS_KEY = 'guide:focus';   // 장소 상세 → 가이드 탭에서 이 장소로 스크롤
+
 const FORMAT_BUTTONS = [
   { kind: 'bold', icon: 'fa-bold', label: '굵게', title: '굵게 (**글자**)' },
   { kind: 'bullet', icon: 'fa-list-ul', label: '목록', title: '목록 (- )' },
@@ -19,6 +21,7 @@ const COLORS = ['#00f2fe', '#f43f5e', '#f59e0b', '#10b981', '#38bdf8', '#c084fc'
 // opts.readOnly: 읽기 전용 공유 화면 (추가·수정 버튼 없음)
 export function mount(root, store, { readOnly = false } = {}) {
   function update() {
+    const places = store.list('places');
     const guides = store.list('guides').sort((a, b) => (b.pinned - a.pinned) || (a.sort_order - b.sort_order));
     setHTML(root, html`
       <div class="p-4 space-y-3">
@@ -42,19 +45,37 @@ export function mount(root, store, { readOnly = false } = {}) {
                 ${readOnly ? '' : html`<button data-action="edit" data-id="${g.id}" class="w-6 h-6 rounded-lg bg-slate-800 text-slate-400 text-[10px]"><i class="fa-solid fa-pen"></i></button>`}
               </div>
             </div>
-            <div class="md">${renderMarkdown(g.body_md)}</div>
+            <div class="md">${renderMarkdown(g.body_md, { places, placeLinks: !readOnly })}</div>
             ${photoThumbsHtml(store, 'guide', g.id, { size: 'w-14 h-14' })}
           </article>`) : emptyCard(readOnly ? '가이드 카드가 없습니다.' : '가이드 카드가 없습니다. 날씨, 교통, 현지어 쇼잉 카드 등을 만들어 보세요.')}
       </div>`);
     hydratePhotos(root, store);
+    focusPlace();
   }
 
-  const off = readOnly ? () => {} : delegate(root, {
+  // 장소 상세의 [가이드에서 보기]: 그 장소 제목으로 스크롤하고 잠깐 강조
+  function focusPlace() {
+    let id = null;
+    try { id = sessionStorage.getItem(GUIDE_FOCUS_KEY); sessionStorage.removeItem(GUIDE_FOCUS_KEY); } catch {}
+    if (!id) return;
+    requestAnimationFrame(() => {
+      const el = root.querySelector(`.md-place[data-id="${id}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.remove('md-focus'); void el.offsetWidth; el.classList.add('md-focus');
+    });
+  }
+  const onFocus = () => focusPlace();
+  window.addEventListener('app:guide-focus', onFocus);
+
+  const offActions = readOnly ? () => {} : delegate(root, {
     add: () => pickTemplate(store),
     'ai-guide': async () => (await import('../ai-guide.js')).openAiGuide(store),
     edit: (el) => openGuideEditor(store, el.dataset.id),
     photo: (el) => openPhotoViewer(store, el.dataset.img),
+    place: async (el) => (await import('./places.js')).openPlaceDetail(store, el.dataset.id, null),
   });
+  const off = () => { offActions(); window.removeEventListener('app:guide-focus', onFocus); };
   update();
   return { update, destroy: off };
 }
@@ -137,7 +158,7 @@ function openGuideEditor(store, id, tpl = null) {
       // 편집 ↔ 미리보기: 미리보기는 누를 때만 한 번 그림 (입력 중에는 그리지 않아 가벼움)
       mode: (b) => {
         const preview = b.dataset.mode === 'preview';
-        if (preview) setHTML($('#md-preview', el), ta.value.trim() ? renderMarkdown(ta.value) : html`<p class="text-slate-500">내용이 없어요.</p>`);
+        if (preview) setHTML($('#md-preview', el), ta.value.trim() ? renderMarkdown(ta.value, { placeLinks: false }) : html`<p class="text-slate-500">내용이 없어요.</p>`);
         $('#md-preview', el).classList.toggle('hidden', !preview);
         $('#md-edit', el).classList.toggle('hidden', preview);
         el.querySelectorAll('[data-action="mode"]').forEach((x) => {
