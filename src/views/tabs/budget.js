@@ -499,7 +499,7 @@ export function openExpenseEditor(store, id, { prepaid = false, prefill = {} } =
     spent_date: todayIn(store.trip.timezone),
     spent_time: now.toTimeString().slice(0, 5),
     currency: b.local_currency, method: 'card', category: '음식',
-    paid_by: store.me?.id,
+    paid_by: store.me?.id, ...prefill,
   };
   if (!e) return;
   const ready = 'money_mode' in b;   // migration_018 (사전 결제 칸 포함)

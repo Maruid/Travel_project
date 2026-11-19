@@ -6,6 +6,8 @@ export const PREF_HIDE_VISITED = 'places:hideVisited';   // 안 간 곳만 보�
 export const PREF_ROUTE_OPEN = 'schedule:routeOpen';      // 일정 탭 동선 지도 펼침
 export const PREF_ROUTE_HOTEL = 'schedule:routeHotel';    // 동선에 숙소 출발·복귀 포함
 export const PREF_PLACE_FILTER = 'places:filter';        // 필터 창: {cats, hideVisited, liked} JSON
+export const PREF_TODO_HIDE_DONE = 'todos:hideDone';     // 할 일: 완료 숨기기
+export const PREF_TODO_MINE = 'todos:mine';              // 할 일: 내 담당만
 
 export function getPref(key) {
   try { return localStorage.getItem(key) === '1'; } catch { return false; }

@@ -3,14 +3,22 @@ import { sheetOpened, sheetClosedByApp, sheetClosedByRoute, sheetIsOpen } from '
 
 // ---------- 토스트 ----------
 let toastTimer;
-export function toast(msg, kind = 'info') {
+// action: { label, onClick } → 알림 오른쪽 버튼 (되돌리기 · 지출 기록 등). 누르면 알림을 닫고 실행
+export function toast(msg, kind = 'info', { action = null } = {}) {
   const el = document.getElementById('toast');
   const icon = kind === 'error' ? 'fa-circle-exclamation text-rose-400' : 'fa-circle-check text-neon-cyan';
-  setHTML(el, html`<span class="flex items-start gap-2"><i class="fa-solid ${icon} mt-0.5 flex-shrink-0"></i><span class="min-w-0 break-keep">${msg}</span></span>`);
+  setHTML(el, html`<span class="flex items-start gap-2"><i class="fa-solid ${icon} mt-0.5 flex-shrink-0"></i><span class="min-w-0 break-keep">${msg}</span>${action ? html`
+    <button data-toast-action class="self-center flex-shrink-0 ml-1 px-2 py-1 rounded-lg bg-neon-cyan/15 border border-neon-cyan/40 text-neon-cyan font-bold whitespace-nowrap">${action.label}</button>` : ''}</span>`);
+  el.onclick = action ? (e) => {
+    if (!e.target.closest('[data-toast-action]')) return;
+    el.classList.add('hidden');
+    el.onclick = null;
+    action.onClick();
+  } : null;
   el.classList.remove('hidden');
   clearTimeout(toastTimer);
-  // 긴 안내 문구는 더 오래 보여줌
-  toastTimer = setTimeout(() => el.classList.add('hidden'), Math.min(7000, 2200 + String(msg).length * 45));
+  // 긴 안내 문구는 더 오래 보여줌. 버튼이 있으면 누를 시간을 더 줌
+  toastTimer = setTimeout(() => el.classList.add('hidden'), Math.min(7000, 2200 + String(msg).length * 45 + (action ? 2500 : 0)));
 }
 
 // ---------- 바텀시트 ----------

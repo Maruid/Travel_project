@@ -3,7 +3,7 @@
 > 이 문서는 **다음 작업을 시작하기 전에 가장 먼저 읽는 문서**입니다.
 > 구조, 규칙, 결정된 정책, 숫자 기준, 남은 일을 한곳에 모았습니다.
 > 기능을 바꾸면 이 문서의 해당 부분도 같이 고쳐 주세요.
-> 마지막 정리: 2026-11-14 (안드로이드 앱 2단계)
+> 마지막 정리: 2026-11-19 (할 일 개선, migration_019)
 
 ---
 
@@ -164,7 +164,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | guides | 마크다운 카드 (day_date 지정 시 일정에도 노출). ai_guide = AI 가이드 카드 종류 weather/landmark/entry/stay (016) |
 | trip_transports | 이동편 (015): direction out/back/other, mode flight/train/ship/bus, code, carrier, dep_/arr_ name · date · time · terminal, note |
 | budget_topups / expenses | 환전 / 지출(currency, method, paid_by, split_with) |
-| todos | kind todo/place/shop |
+| todos | kind todo/place/shop/pack(019), place_id(같은 여행 장소), day_date(일정 탭에도 표시, 019), assignee(담당 멤버, 019) |
 | place_likes | 찜: place_id, member_id, liked. id = (장소, 멤버)로 계산한 고정 UUID (011) |
 | trip_view_links | 보기 전용 링크: trip_id(1개), token, enabled (011) |
 | creation_codes | 여행 생성 코드 (one_time/permanent, ended_at) |
@@ -197,6 +197,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 018_wallets | 가계부 공금: `trip_budgets.money_mode`(personal · pool_cash · pool_card), `trip_wallets`(이름 · 카드/현금 · 들고 있는 사람 · personal 개인 지갑), `budget_topups` 에 kind(budget · charge · withdraw) · wallet_id · from_wallet · home_amount · shares, `expenses.wallet_id`, 사전 결제 `expenses.prepaid` · `expenses.transport_id` |
 | 017_images | 사진: `trip_images`(콘텐츠 표, 여행당 100 · 항목당 4, 보관 기간 지난 여행은 추가 막음), Storage 버킷 `trip-images`(비공개, 1.5MB, webp/jpeg) + 객체 RLS(멤버 · 받기 단계 · 저장공간 예산), `image_settings` · `image_usage`(월 받기 추정), `note_image_download` · `image_status` · `admin_image_stats` · `admin_set_image_settings`, 정리용 `image_gc_*`(service_role 전용) |
 | 015_transports | 이동편 `trip_transports`(콘텐츠 표, 멤버 RLS, 행 30, Realtime) + `view_trip` 에 이동편 추가 |
+| 019_todos | 할 일: `todos.day_date` · `todos.assignee`(멤버 삭제 시 비움), kind 에 `pack`(챙길 것), place_id · assignee 같은 여행 검사 트리거 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
 
 Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 새 테이블과 함수에는 **GRANT를 명시**해야 합니다. 함수는 `revoke all ... from public, anon` 후 `grant execute ... to authenticated`로 엽니다.
@@ -573,6 +574,17 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - 이미 만든 카드 · 직접 쓴 카드: `##`~`####` 제목을 등록한 장소 이름 · 현지 이름과 비교(공백 · 기호 · 괄호 무시, 같은 이름 우선, 포함 관계는 3자 이상)해서 후보가 하나일 때만 연결.
 - 장소 상세: 연결된 가이드가 있으면 [가이드에서 보기] → 가이드 탭으로 가서 그 제목으로 스크롤 · 강조(`sessionStorage guide:focus`, `app:guide-focus`).
 
+### 7-7-18. 할 일 개선 (019, 2026-11-19)
+
+- 보기 규칙은 `lib/todo-view.js`(순수 함수, `tests/todo-view.test.js`): 안 한 것 먼저(같은 상태 안은 sort_order), 분류 칩마다 `완료/전체`, [완료 숨기기](`todos:hideDone`) · [내 담당만](`todos:mine`, 멤버 2명 이상) 이 기기에 기억.
+- 분류 4개: 할 것 · 갈 곳 · 살 것 · **챙길 것(pack)**. [🧳 준비물 목록] = 기본 15개(서류 · 돈 · 전자기기 · 생활)를 골라 넣음, 같은 제목(공백 · 기호 무시)은 "이미 있음".
+- 카드: 날짜 · 담당 · 연결 장소 칩(장소 칩 = 장소 상세), 긴 메모는 ⌄ 로 펼침, 메모 속 https 링크는 누르면 열림. 수정 창: 메모 여러 줄 · 연결할 장소(공용 고르기 창, 찜 많은 순) · 날짜(여행 날짜) · 담당. 저장은 바뀐 칸만(`todoPatch`).
+- 삭제: 확인 창 없이 지우고 알림 [되돌리기](`deleted_at = null`). `toast(msg, kind, { action: { label, onClick } })` 로 알림에 버튼.
+- 체크: 갈 곳 + 연결 장소 → 장소도 다녀옴(`visited_at`, 한쪽 방향). 살 것 → 알림 [지출 기록] → 지출 입력 창(사용처 = 연결 장소 이름 또는 항목, 카테고리 쇼핑, 메모 = 항목). `openExpenseEditor` 의 `prefill` 이 일반 지출에도 적용됨.
+- 순서: 안 한 항목 왼쪽 손잡이를 끌어 옮김(`movedSortOrder`, 이웃 사이 가운데 값). 화면이 다시 그려지면 끌기는 취소.
+- 일정 탭: 그 날 `day_date` 할 일을 "이 날 할 일" 카드로(가이드 아래, 일정 위), 눌러서 체크(`toggleTodo` 공유). 보기 전용 링크에는 없음.
+- 찜과 "갈 곳"은 그대로 둘 다 씀(찜 = 사람별 관심 표시, 갈 곳 = 같이 챙길 목록).
+
 ### 7-7-13. 사진 붙이기 (017, 2026-11-18)
 
 - **어디에**: 일정 항목 · 가이드 카드 · 할 일. 편집 창 맨 아래 사진 칸(`components/photos.js` `mountPhotoEditor`), 카드에는 작은 썸네일 줄(`photoThumbsHtml`, 누르면 크게 보기). 할 일은 ✎ 버튼으로 수정 창(사진 포함). 새 항목도 저장 전에 붙일 수 있게 편집 창이 id 를 미리 정함(저장 안 하면 7일 뒤 서버 정리가 지움). 보기 전용 링크에는 사진 없음.
@@ -716,6 +728,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 | `app:welcomedAt` | 안드로이드 앱 처음 실행 안내를 닫은 시각 |
 | `app:keepAwake` | 안드로이드 앱 화면 켜두기 (`'1'`/`'0'`) |
 | `app:updateInfo` | 마지막으로 받은 앱 업데이트 정보 `{min, latest, apk, at}` (설정 표시용) |
+| `todos:hideDone` | 할 일 완료 숨기기 |
+| `todos:mine` | 할 일 내 담당만 |
 | `photo:kind` | 사진 칸에서 마지막으로 고른 종류 (`photo`/`doc`) |
 | `photo:notice-seen` | 처음 사진 추가 때 보관 기간 안내를 본 적 있음 |
 | `img-status:v1:<tripId>` | 사진 단계 · 보관 일수 · 삭제일 (`image_status`, 10분) |
@@ -793,7 +807,7 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - `npx vite build`: 청크 크기를 확인합니다. places 청크는 MapLibre 때문에 약 1.2MB이고, more/place-import 청크는 작게 유지되어야 합니다.
 - SQL 검증(작업 환경에 Postgres 16이 있을 때):
   1. Supabase 흉내 객체 만들기: `anon` / `authenticated` 역할, `auth` 스키마(`auth.users`, `auth.uid()`는 `request.jwt.claim.sub`에서 읽기), `extensions` 스키마의 pgcrypto, `supabase_realtime` publication
-  2. `schema.sql` → `migration_002` ~ `016` 순서로 적용 (`auth`, `extensions` 스키마에 anon · authenticated usage 권한, DB `search_path = public, extensions`. 파일은 postgres 사용자가 읽을 수 있는 곳(/tmp)에 복사)
+  2. `schema.sql` → `migration_002` ~ `019` 순서로 적용 (`auth`, `extensions` 스키마에 anon · authenticated usage 권한, DB `search_path = public, extensions`. 파일은 postgres 사용자가 읽을 수 있는 곳(/tmp)에 복사)
   3. `set request.jwt.claim.sub = '<uuid>'`로 사용자를 바꿔 가며 RPC를 호출해 확인
 
 ---

@@ -12,6 +12,7 @@ import { color } from '../../lib/safe.js';
 import { hoursIssueAt } from '../../lib/hours.js';
 import { transportCardsHtml, openTransportEditor } from '../../components/transports.js';
 import { photoThumbsHtml, hydratePhotos, openPhotoViewer, mountPhotoEditor } from '../../components/photos.js';
+import { toggleTodo, KINDS as TODO_KINDS } from './todos.js';
 
 const ICONS = ['fa-location-dot', 'fa-utensils', 'fa-mug-saucer', 'fa-train-subway', 'fa-taxi', 'fa-plane-departure',
   'fa-plane-arrival', 'fa-hotel', 'fa-bed', 'fa-hot-tub-person', 'fa-camera', 'fa-bag-shopping', 'fa-tree', 'fa-landmark',
@@ -69,6 +70,9 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     const header = store.list('itinerary_days').find((d) => d.day_date === selected);
     const items = store.list('itinerary_items').filter((i) => i.day_date === selected);
     const guides = store.list('guides').filter((g) => g.day_date === selected);
+    // 이 날 할 일 (보기 전용 링크에는 할 일이 없음). 안 한 것 먼저
+    const dayTodos = readOnly ? [] : store.list('todos').filter((t) => t.day_date === selected)
+      .sort((a, b) => Number(a.done) - Number(b.done));
 
     const plan = currentRoute(items);
     renderDayTabs(all);
@@ -105,6 +109,18 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
               <div class="md">${renderMarkdown(g.body_md, { places: store.list('places') })}</div>
               ${photoThumbsHtml(store, 'guide', g.id)}
             </div>`)}
+
+          ${dayTodos.length ? html`
+            <div class="glass-card p-3 rounded-2xl border-l-4 border-lime-400">
+              <h4 class="text-xs font-bold text-lime-300 mb-1 flex items-center gap-1.5"><i class="fa-solid fa-list-check"></i>이 날 할 일
+                <span class="font-mono font-normal text-slate-400">${dayTodos.filter((t) => t.done).length}/${dayTodos.length}</span></h4>
+              ${dayTodos.map((t) => html`
+                <button data-action="todo-toggle" data-id="${t.id}" class="w-full flex items-center gap-2 py-1 text-left">
+                  <span class="w-4 h-4 rounded-md border ${t.done ? 'bg-neon-cyan border-neon-cyan text-night-950' : 'border-slate-500 text-transparent'} flex items-center justify-center text-[9px] flex-shrink-0"><i class="fa-solid fa-check"></i></span>
+                  <span class="text-[10px] flex-shrink-0">${String(TODO_KINDS[t.kind] || '').split(' ')[0]}</span>
+                  <span class="flex-1 min-w-0 truncate text-[11px] ${t.done ? 'line-through text-slate-500' : 'text-slate-200'}">${t.title}</span>
+                </button>`)}
+            </div>` : ''}
 
           <div class="space-y-2.5">
             ${items.length ? items.map((it, idx) => {
@@ -386,6 +402,7 @@ export function mount(root, store, { readOnly = false, onPlace = null } = {}) {
     day: (el) => { selected = el.dataset.day; route.focus = null; update(); },
     place: (el) => (onPlace ? onPlace(el.dataset.id) : openPlaceDetail(store, el.dataset.id, null)),
     photo: (el) => openPhotoViewer(store, el.dataset.img),
+    'todo-toggle': (el) => toggleTodo(store, el.dataset.id),
     add: () => openItemEditor(store, null, selected),
     edit: (el) => openItemEditor(store, el.dataset.id, selected),
     'edit-day': () => openDayEditor(store, selected),
