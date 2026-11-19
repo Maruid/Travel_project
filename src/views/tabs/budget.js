@@ -34,7 +34,9 @@ export const MONEY_MODES = [
 ];
 const moneyMode = (store) => store.budget?.money_mode || 'personal';
 const isPool = (store) => moneyMode(store) !== 'personal';
-const walletsOf = (store) => store.list('trip_wallets').sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'card' ? -1 : 1) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
+// 공금 먼저 → 개인, 그 안에서 카드 → 현금
+const walletsOf = (store) => store.list('trip_wallets').sort((a, b) => (!!a.personal - !!b.personal)
+  || (a.kind === b.kind ? 0 : a.kind === 'card' ? -1 : 1) || (a.sort_order ?? 0) - (b.sort_order ?? 0));
 const WALLET_ICON = { card: 'fa-credit-card', cash: 'fa-money-bill-wave' };
 const WALLET_COLOR = { card: '#38bdf8', cash: '#fbbf24' };
 const kindOf = (t) => t.kind || 'budget';
@@ -163,21 +165,33 @@ export function mount(root, store) {
     const L = b.local_currency; const H = b.home_currency; const rate = Number(b.rate) || 1;
     const toL = (e) => toLocal(store, e.amount, e.currency);
     const wb = walletBalances(wallets, d.topups, expenses, toL);
-    const left = wallets.reduce((s, w) => s + (wb.get(w.id) || 0), 0);
+    const bal = (w) => wb.get(w.id) || 0;
+    // 공금 지갑 + 내 개인 지갑만 (다른 사람 용돈은 위에 안 보임)
+    const poolW = wallets.filter((w) => !w.personal);
+    const myW = wallets.filter((w) => w.personal && w.holder && w.holder === store.me?.id);
+    const poolLeft = poolW.reduce((s, w) => s + bal(w), 0);
+    const myLeft = myW.reduce((s, w) => s + bal(w), 0);
     const totalSpent = expenses.reduce((s, e) => s + toL(e), 0);
     const real = chargedRate(d.topups);
     const hasCard = wallets.some((w) => w.kind === 'card') && wallets.some((w) => w.kind === 'cash');
+    const walletRow = (w) => html`
+      <div class="flex items-center gap-2 text-[11px] min-w-0">
+        <i class="fa-solid ${WALLET_ICON[w.kind]} w-4 text-center flex-shrink-0" style="color:${WALLET_COLOR[w.kind]}"></i>
+        <span class="flex-1 min-w-0 truncate text-slate-200">${w.name}${!w.personal && w.holder ? html` <span class="text-slate-500">· ${d.memberOf(w.holder)?.display_name || ''}</span>` : ''}</span>
+        <b class="font-mono whitespace-nowrap ${bal(w) < 0 ? 'text-rose-400' : 'text-white'}">${money(bal(w), L)}</b>
+        ${H !== L ? html`<span class="font-mono text-[10px] text-slate-500 w-[4.5rem] text-right truncate flex-shrink-0">${money(bal(w) * rate, H)}</span>` : ''}
+      </div>`;
     setHTML(top, html`
       <div class="glass-card rounded-2xl">
+        <!-- 목록을 올리면 남는 한 줄: 남은 공금 합계 (+ 내 지갑) · 지출 -->
         <div class="h-[52px] px-3 flex items-center gap-2">
           <div class="flex-1 min-w-0">
-            <span class="text-[10px] text-slate-400">남은 공금</span>
-            <div class="flex items-baseline gap-1.5 min-w-0 overflow-hidden whitespace-nowrap">
-              ${wallets.length ? wallets.map((w, i) => html`${i ? html`<span class="text-slate-600 text-xs">·</span>` : ''}
-                <span class="flex items-baseline gap-1 flex-shrink-0"><i class="fa-solid ${WALLET_ICON[w.kind]} text-[10px]" style="color:${WALLET_COLOR[w.kind]}"></i>
-                <b class="text-[15px] leading-tight font-black font-mono ${(wb.get(w.id) || 0) < 0 ? 'text-rose-400' : 'text-emerald-400'}">${money(wb.get(w.id) || 0, L)}</b></span>`)
-                : html`<span class="text-xs text-slate-500">설정에서 지갑을 만들어 주세요</span>`}
-            </div>
+            <span class="text-[10px] text-slate-400">남은 공금${myW.length ? html` <span class="text-slate-500">· 내 지갑 <b class="font-mono text-sky-300">${money(myLeft, L)}</b></span>` : ''}</span>
+            ${poolW.length ? html`<div class="flex items-baseline gap-1.5 min-w-0 whitespace-nowrap">
+                <b class="text-lg leading-tight font-black font-mono ${poolLeft < 0 ? 'text-rose-400' : 'text-emerald-400'}">${money(poolLeft, L)}</b>
+                ${H !== L ? html`<span class="text-[10px] font-mono text-slate-500 truncate">${money(poolLeft * rate, H)}</span>` : ''}
+              </div>`
+              : html`<p class="text-xs text-slate-500">설정에서 공금 지갑을 만들어 주세요</p>`}
           </div>
           <div class="text-right flex-shrink-0">
             <span class="text-[10px] text-slate-400 block">지출</span>
@@ -186,13 +200,8 @@ export function mount(root, store) {
           <button data-action="settings" title="예산 · 환율 · 지갑" aria-label="예산 · 환율 · 지갑" class="flex-shrink-0 w-8 h-8 rounded-lg bg-slate-800 text-slate-300 border border-white/10 flex items-center justify-center"><i class="fa-solid fa-gear text-xs"></i></button>
         </div>
         <div class="px-3 pb-3 pt-1.5 border-t border-white/5 space-y-1.5">
-          ${wallets.map((w) => html`
-            <div class="flex items-center gap-2 text-[11px]">
-              <i class="fa-solid ${WALLET_ICON[w.kind]} w-4 text-center" style="color:${WALLET_COLOR[w.kind]}"></i>
-              <span class="flex-1 min-w-0 truncate text-slate-200">${w.name}${w.holder ? html` <span class="text-slate-500">· ${d.memberOf(w.holder)?.display_name || ''}</span>` : ''}</span>
-              <b class="font-mono text-white">${money(wb.get(w.id) || 0, L)}</b>
-              ${H !== L ? html`<span class="font-mono text-[10px] text-slate-500 w-20 text-right truncate">${money((wb.get(w.id) || 0) * rate, H)}</span>` : ''}
-            </div>`)}
+          ${poolW.map(walletRow)}
+          ${myW.length ? html`<p class="text-[10px] text-slate-500 pt-0.5">내 지갑 (정산과 무관)</p>${myW.map(walletRow)}` : ''}
           <div class="grid ${hasCard ? 'grid-cols-2' : 'grid-cols-1'} gap-1.5 pt-1">
             <button data-action="move-charge" class="h-8 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold"><i class="fa-solid fa-plus mr-1"></i>충전 · 환전</button>
             ${hasCard ? html`<button data-action="move-withdraw" class="h-8 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 text-[11px] font-bold"><i class="fa-solid fa-money-bill-transfer mr-1"></i>현금 인출</button>` : ''}
@@ -528,7 +537,8 @@ export function openExpenseEditor(store, id, { prepaid = false, prefill = {} } =
         ${EXPENSE_CATS.map((c) => html`<option ${c === e.category ? 'selected' : ''}>${c}</option>`)}</select></div>
       ${pool ? html`<div id="exp-src-box" class="${isPrepaid ? 'hidden' : ''}"><label class="label">어디서 냈나</label>
         <div id="exp-src" class="flex flex-wrap gap-1.5">
-          ${wallets.map((w) => srcBtn(w.id, w.name, WALLET_ICON[w.kind], WALLET_COLOR[w.kind]))}
+          ${wallets.filter((w) => !w.personal).map((w) => srcBtn(w.id, w.name, WALLET_ICON[w.kind], WALLET_COLOR[w.kind]))}
+          ${wallets.filter((w) => w.personal).map((w) => srcBtn(w.id, `${w.name}${w.holder && w.holder !== store.me?.id ? ` (${store.member(w.holder)?.display_name || ''})` : ''}`, 'fa-user-tag', WALLET_COLOR[w.kind]))}
           ${srcBtn('me', '개인 돈', 'fa-user', '#cbd5e1')}
         </div></div>` : ''}
       <div id="exp-personal" class="grid grid-cols-2 gap-2 ${pool && source !== 'me' && !isPrepaid ? 'hidden' : ''}">
@@ -572,8 +582,9 @@ export function openExpenseEditor(store, id, { prepaid = false, prefill = {} } =
       }
       const sh = ev.target.closest('[data-share]');
       if (sh) {
-        // 나만: 개인 돈이면 결제자, 공금이면 나
-        const meId = source === 'me' || !pool ? form.elements.paid_by.value : store.me?.id;
+        // 나만: 개인 돈이면 결제자, 개인 지갑이면 주인, 공금이면 나
+        const sw = wallets.find((w) => w.id === source);
+        const meId = source === 'me' || !pool ? form.elements.paid_by.value : sw?.personal ? sw.holder || store.me?.id : store.me?.id;
         form.querySelectorAll('input[name=split]').forEach((x) => { x.checked = sh.dataset.share === 'all' || x.value === meId; });
       }
     };
@@ -595,7 +606,8 @@ export function openExpenseEditor(store, id, { prepaid = false, prefill = {} } =
         spent_date: v.spent_date, spent_time: v.spent_time, place_name: v.place_name, place_id: place?.id || null,
         amount: Number(v.amount), currency: v.currency, category: v.category,
         // 공금 지갑에서 낸 지출: 낸 사람 없음, 수단은 지갑 종류
-        method: wallet ? wallet.kind : v.method, paid_by: wallet ? null : v.paid_by,
+        // 개인 지갑(용돈)은 주인이 낸 것
+        method: wallet ? wallet.kind : v.method, paid_by: wallet ? (wallet.personal ? wallet.holder || null : null) : v.paid_by,
         ...(pool || e.wallet_id ? { wallet_id: wallet ? wallet.id : null } : {}),   // migration_018 전에는 칸이 없음
         note: v.note,
         split_with: chosen.length && chosen.length < members.length ? chosen : null,
@@ -646,11 +658,11 @@ function openBudgetSettings(store) {
               <button type="button" data-action="wallet-edit" data-id="${w.id}" class="w-full p-2.5 rounded-xl bg-night-950/60 border border-white/10 flex items-center gap-2 text-left">
                 <i class="fa-solid ${WALLET_ICON[w.kind]} w-4 text-center text-xs" style="color:${WALLET_COLOR[w.kind]}"></i>
                 <span class="flex-1 min-w-0 text-xs text-white truncate">${w.name}</span>
-                <span class="text-[10px] text-slate-400">들고 있는 사람 · ${nameOf(w.holder)}</span>
+                <span class="text-[10px] ${w.personal ? 'text-sky-300' : 'text-slate-400'}">${w.personal ? `개인 · ${nameOf(w.holder)}` : `들고 있는 사람 · ${nameOf(w.holder)}`}</span>
                 <i class="fa-solid fa-pen text-[10px] text-slate-500"></i>
               </button>`)}
             <button type="button" data-action="wallet-add" class="btn-ghost w-full py-2 text-xs"><i class="fa-solid fa-plus mr-1"></i>지갑 추가</button>
-            <p class="text-[10px] text-slate-500 leading-relaxed">카드 이름은 쓰는 카드로 바꿔 주세요 (트래블월렛 · 트래블로그 등). 들고 있는 사람이 남은 공금을 나눠 돌려주는 것으로 정산해요.</p>
+            <p class="text-[10px] text-slate-500 leading-relaxed">카드 이름은 쓰는 카드로 바꿔 주세요 (트래블월렛 · 트래블로그 등). 들고 있는 사람이 남은 공금을 나눠 돌려주는 것으로 정산해요. 내 용돈 카드 · 현금은 [지갑 추가]에서 "개인"으로 만들면 잔액만 따로 보고 정산에는 내가 낸 돈으로 들어가요.</p>
           </div>` : ''}`
         : html`<p class="text-[11px] text-amber-200">공금 기능을 쓰려면 Supabase 에서 <b>migration_018_wallets.sql</b> 을 먼저 실행해 주세요.</p>`}
     </div>
@@ -768,7 +780,7 @@ function openMoveEditor(store, kind, id = null) {
   const members = store.activeMembers();
   const charge = kind === 'charge';
   let custom = !!(t.shares && Object.keys(t.shares).length);
-  const wOpt = (list, sel) => list.map((w) => html`<option value="${w.id}" ${w.id === sel ? 'selected' : ''}>${w.name}</option>`);
+  const wOpt = (list, sel) => list.map((w) => html`<option value="${w.id}" ${w.id === sel ? 'selected' : ''}>${w.name}${w.personal ? ' (개인)' : ''}</option>`);
   if (charge && !wallets.length) { toast('설정에서 공금 지갑을 먼저 만들어 주세요.', 'error'); return; }
   if (!charge && (!cards.length || !cashes.length)) { toast('공금 카드와 공금 현금 지갑이 있어야 인출을 기록할 수 있어요.', 'error'); return; }
 
@@ -789,7 +801,7 @@ function openMoveEditor(store, kind, id = null) {
       </div>
       <div><label class="label">날짜</label><input type="date" name="topup_date" class="input" value="${t.topup_date}"></div>
       ${charge && members.length > 1 ? html`
-        <div>
+        <div id="share-box">
           <div class="flex items-center justify-between"><label class="label">누가 얼마 넣었나</label>
             <span class="flex p-0.5 rounded-lg bg-slate-800 text-[10px] font-bold">
               <button type="button" data-mode="equal" class="px-2 py-0.5 rounded-md">모두 같게</button>
@@ -846,9 +858,16 @@ function openMoveEditor(store, kind, id = null) {
       if (ev.target.dataset.shareId) { shares.set(ev.target.dataset.shareId, Number(ev.target.value) || 0); sumNote(); }
       else if (ev.target.name === 'amount') { if (custom) sumNote(); else drawShares(); }
     };
+    // 개인 지갑 충전은 주인 돈 → 누가 얼마 숨김
+    const syncPersonal = () => {
+      const w = wallets.find((x) => x.id === form.elements.wallet_id?.value);
+      $('#share-box', el)?.classList.toggle('hidden', !!w?.personal);
+    };
+    form.elements.wallet_id?.addEventListener('change', syncPersonal);
     el.addEventListener('click', onClick);
     el.addEventListener('input', onInput);
     drawShares();
+    syncPersonal();
     const offActions = delegate(el, {
       delete: () => {
         if (!confirmAction(`이 ${charge ? '충전' : '인출'} 기록을 삭제할까요?`)) return;
@@ -866,7 +885,12 @@ function openMoveEditor(store, kind, id = null) {
         home_amount: charge && Number(v.home_amount) > 0 ? Number(v.home_amount) : null,
         shares: null,
       };
-      if (charge && custom && members.length > 1) {
+      const toW = wallets.find((x) => x.id === data.wallet_id);
+      const fromW = wallets.find((x) => x.id === data.from_wallet);
+      if (!charge && (!!toW?.personal !== !!fromW?.personal || (toW?.personal && toW.holder !== fromW.holder))) {
+        toast('공금은 공금끼리, 개인 지갑은 같은 사람 지갑끼리만 옮길 수 있어요.', 'error'); return;
+      }
+      if (charge && custom && members.length > 1 && !toW?.personal) {
         const sum = [...shares.values()].reduce((a, x) => a + x, 0);
         if (Math.abs(sum - amount) >= 1) { toast('사람별 금액의 합이 받은 금액과 같아야 해요.', 'error'); return; }
         data.shares = Object.fromEntries([...shares].filter(([, x]) => x > 0));
@@ -876,7 +900,9 @@ function openMoveEditor(store, kind, id = null) {
       if (!charge && !id && fee > 0) {
         store.insert('expenses', {
           spent_date: data.topup_date, spent_time: null, place_name: 'ATM 인출 수수료', place_id: null,
-          amount: fee, currency: L, category: '기타', method: 'card', paid_by: null, wallet_id: data.from_wallet, note: null, split_with: null,
+          amount: fee, currency: L, category: '기타', method: 'card', wallet_id: data.from_wallet, note: null,
+          // 개인 지갑에서 뽑았으면 주인 몫
+          paid_by: fromW?.personal ? fromW.holder || null : null, split_with: fromW?.personal && fromW.holder ? [fromW.holder] : null,
         });
       }
       closeSheet();
@@ -907,7 +933,7 @@ function setMoneyMode(store, mode) {
 }
 
 function openWalletEditor(store, id) {
-  const w = id ? store.get('trip_wallets', id) : { kind: 'card', name: '', holder: store.me?.id };
+  const w = id ? store.get('trip_wallets', id) : { kind: 'card', name: '', holder: store.me?.id, personal: false };
   if (!w) return;
   const members = store.activeMembers();
   const used = id && (store.list('expenses').some((e) => e.wallet_id === id)
@@ -916,11 +942,19 @@ function openWalletEditor(store, id) {
     <h3 class="text-base font-black text-white mb-3">${id ? '지갑 수정' : '지갑 추가'}</h3>
     <form id="wallet-form" class="space-y-2.5">
       <div><label class="label">종류</label>
-        ${id ? html`<p class="text-xs text-slate-300"><i class="fa-solid ${WALLET_ICON[w.kind]} mr-1" style="color:${WALLET_COLOR[w.kind]}"></i>${w.kind === 'card' ? '충전식 카드' : '현금'}</p>`
-          : html`<select name="kind" class="input"><option value="card">충전식 카드 (트래블월렛 등)</option><option value="cash">현금</option></select>`}</div>
+        ${id ? html`<div class="grid grid-cols-2 gap-2 items-center">
+              <select name="personal" class="input"><option value="">공금 (함께 씀)</option><option value="1" ${w.personal ? 'selected' : ''}>개인 (내 용돈)</option></select>
+              <p class="text-xs text-slate-300"><i class="fa-solid ${WALLET_ICON[w.kind]} mr-1" style="color:${WALLET_COLOR[w.kind]}"></i>${w.kind === 'card' ? '충전식 카드' : '현금'}</p>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-1">바꾸면 이 지갑의 충전 · 지출 기록도 새 기준으로 다시 정산돼요.</p>`
+          : html`<div class="grid grid-cols-2 gap-2">
+              <select name="personal" class="input"><option value="">공금 (함께 씀)</option><option value="1">개인 (내 용돈)</option></select>
+              <select name="kind" class="input"><option value="card">충전식 카드</option><option value="cash">현금</option></select>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-1">개인 지갑은 잔액만 따로 보고, 그 지갑으로 낸 돈은 주인이 낸 것으로 정산해요.</p>`}</div>
       <div><label class="label">이름 *</label><input name="name" class="input" required maxlength="20" value="${w.name || ''}" placeholder="예: 트래블월렛"></div>
-      <div><label class="label">들고 있는 사람</label><select name="holder" class="input">
-        <option value="">정하지 않음 (모두 같이)</option>
+      <div><label class="label">${w.personal ? '주인' : '들고 있는 사람 (개인 지갑은 주인)'}</label><select name="holder" class="input">
+        ${w.personal ? '' : html`<option value="">정하지 않음 (모두 같이)</option>`}
         ${members.map((m) => html`<option value="${m.id}" ${m.id === w.holder ? 'selected' : ''}>${m.display_name}</option>`)}</select></div>
       <button class="btn-primary">${id ? '수정 저장' : '추가'}</button>
       ${id ? html`<button type="button" data-action="delete" ${used ? 'disabled' : ''} class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold disabled:opacity-40">삭제</button>
@@ -937,8 +971,10 @@ function openWalletEditor(store, id) {
       const v = formValues(ev.target);
       const data = { name: v.name.trim(), holder: v.holder || null };
       if (!data.name) return;
-      if (id) store.update('trip_wallets', id, data);
-      else store.insert('trip_wallets', { ...data, kind: v.kind === 'cash' ? 'cash' : 'card', sort_order: v.kind === 'cash' ? 10 : 0 });
+      const personal = v.personal === '1';
+      if (personal && !data.holder) { toast('개인 지갑은 주인을 골라 주세요.', 'error'); return; }
+      if (id) store.update('trip_wallets', id, { ...data, ...(personal !== !!w.personal ? { personal } : {}) });
+      else store.insert('trip_wallets', { ...data, kind: v.kind === 'cash' ? 'cash' : 'card', sort_order: (personal ? 100 : 0) + (v.kind === 'cash' ? 10 : 0), ...(personal ? { personal: true } : {}) });
       openBudgetSettings(store);
     });
     return off;

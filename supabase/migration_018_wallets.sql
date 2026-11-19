@@ -85,3 +85,8 @@ commit;
 alter table public.expenses
   add column if not exists prepaid boolean not null default false,
   add column if not exists transport_id uuid references public.trip_transports(id) on delete set null;
+
+-- ---------------------------------------------------------------------
+-- (추가) 개인 지갑: 내 용돈 카드 · 현금. holder 가 주인이고, 충전은 늘 주인 돈, 남은 돈은 정산과 무관
+-- ---------------------------------------------------------------------
+alter table public.trip_wallets add column if not exists personal boolean not null default false;

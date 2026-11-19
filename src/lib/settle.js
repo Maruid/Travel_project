@@ -73,24 +73,28 @@ export function chargeShares(t, memberIds) {
 }
 
 // 사람별: 낸 돈(충전 + 개인 돈 지출) · 쓴 몫 · 들고 있는 공금 · 차액
+//   개인 지갑(personal, 주인 = holder): 충전은 주인 돈이라 정산과 무관, 그 지갑으로 낸 지출은 주인이 개인 돈으로 낸 것
 //   차액 = 낸 돈 - 쓴 몫 - 들고 있는 공금  (합은 0 → settleTransfers 로 송금 목록)
 //   지갑에 들고 있는 사람이 없으면 남은 공금은 모두가 같이 들고 있는 것으로 침
 export function poolBalances({ expenses, topups = [], wallets = [], memberIds, toAmount }) {
   const paid = new Map(); const owed = new Map(); const held = new Map();
   const plus = (m, id, v) => m.set(id, (m.get(id) || 0) + v);
+  const personal = new Map(wallets.filter((w) => w.personal).map((w) => [w.id, w.holder || null]));
   for (const t of topups) {
-    if (t.kind !== 'charge') continue;
+    if (t.kind !== 'charge' || personal.has(t.wallet_id)) continue;
     for (const [id, v] of chargeShares(t, memberIds)) plus(paid, id, v);
   }
   for (const e of expenses) {
     const amt = toAmount(e);
     if (!amt) continue;
     if (!e.wallet_id && e.paid_by) plus(paid, e.paid_by, amt);
+    else if (personal.has(e.wallet_id) && personal.get(e.wallet_id)) plus(paid, personal.get(e.wallet_id), amt);
     const split = e.split_with?.length ? e.split_with : memberIds;
     split.forEach((mid) => plus(owed, mid, amt / split.length));
   }
   const wb = walletBalances(wallets, topups, expenses, toAmount);
   for (const w of wallets) {
+    if (w.personal) continue;
     const b = wb.get(w.id) || 0;
     if (!b) continue;
     if (w.holder) plus(held, w.holder, b);

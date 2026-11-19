@@ -194,7 +194,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 013_day_stay | itinerary_days.stay_place_id (날짜별 오늘 묵는 숙소, 같은 여행 장소만, 장소 삭제 시 비움) |
 | 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
 | 016_ai_guides | AI 가이드 카드: ai_calls.kind 에 guide + `sub`(카드 종류), 하루 한도 추천 · 일정과 합산, 카드마다 여행당 `ai_guide_card_limit()`(3), `begin_ai_guide`, `ai_guide_status`, guides.ai_guide, admin_ai_users 에 가이드 통계 |
-| 018_wallets | 가계부 공금: `trip_budgets.money_mode`(personal · pool_cash · pool_card), `trip_wallets`(이름 · 카드/현금 · 들고 있는 사람), `budget_topups` 에 kind(budget · charge · withdraw) · wallet_id · from_wallet · home_amount · shares, `expenses.wallet_id`, 사전 결제 `expenses.prepaid` · `expenses.transport_id` |
+| 018_wallets | 가계부 공금: `trip_budgets.money_mode`(personal · pool_cash · pool_card), `trip_wallets`(이름 · 카드/현금 · 들고 있는 사람 · personal 개인 지갑), `budget_topups` 에 kind(budget · charge · withdraw) · wallet_id · from_wallet · home_amount · shares, `expenses.wallet_id`, 사전 결제 `expenses.prepaid` · `expenses.transport_id` |
 | 017_images | 사진: `trip_images`(콘텐츠 표, 여행당 100 · 항목당 4, 보관 기간 지난 여행은 추가 막음), Storage 버킷 `trip-images`(비공개, 1.5MB, webp/jpeg) + 객체 RLS(멤버 · 받기 단계 · 저장공간 예산), `image_settings` · `image_usage`(월 받기 추정), `note_image_download` · `image_status` · `admin_image_stats` · `admin_set_image_settings`, 정리용 `image_gc_*`(service_role 전용) |
 | 015_transports | 이동편 `trip_transports`(콘텐츠 표, 멤버 RLS, 행 30, Realtime) + `view_trip` 에 이동편 추가 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
@@ -553,7 +553,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 ### 7-7-16. 가계부 공금 지갑 (018, 2026-11-19, 2단계)
 
 - 돈 쓰는 방식(가계부 ⚙): **각자 내고 정산**(기존과 같음. 기본 환전금 · 추가 환전은 예산 숫자, 정산과 무관) · **공금 현금** · **공금 카드 + 현금**. 공금으로 바꾸면 "공금 현금"(· "공금 카드") 지갑을 만들고, 이름(트래블월렛 등)과 들고 있는 사람을 고침. 공금 지출 · 충전 기록이 있으면 각자 방식으로 못 돌아감.
-- 위 요약: 지갑마다 남은 돈 · 들고 있는 사람 · [충전 · 환전] · [현금 인출](카드 + 현금 지갑일 때) · 충전 평균 환율.
+- 위 요약: 맨 위 한 줄은 남은 공금 합계(+ 내 지갑 합계) · 지출. 펼치면 공금 지갑마다 남은 돈 · 들고 있는 사람, "내 지갑"(내 개인 지갑만), [충전 · 환전] · [현금 인출](카드 + 현금 지갑일 때) · 충전 평균 환율.
+- 개인 지갑(`personal`, 주인 = holder): 내 용돈 카드 · 현금. 충전은 주인 돈(누가 얼마 숨김), 그 지갑 지출은 주인이 낸 것으로 정산, 남은 돈은 정산과 무관. 인출은 공금끼리 · 같은 주인 개인 지갑끼리만. 지갑 수정에서 공금 ↔ 개인을 바꿀 수 있음.
 - 충전(`kind=charge`): 받은 현지 금액, 빠져나간 원화(선택 → 평균 환율, 설정에서 [평균 환율로 맞추기]), 누가 얼마(기본 모두 같게, [직접]은 합이 받은 금액과 같아야 함 → `shares`). 인출(`withdraw`): 카드 지갑 → 현금 지갑, 수수료를 적으면 카드에서 나간 "ATM 인출 수수료" 지출(모두 몫)도 같이.
 - 지출: "어디서 냈나" = 공금 지갑(낸 사람 없음, 수단 = 지갑 종류) 또는 개인 돈(결제자 · 수단). 마지막 선택 기억(`budget:lastSource:<tripId>`). "누구 몫"에 [모두] · [나만(개인)].
 - 목록: 지갑 지출은 지갑 이름, 개인 돈은 "개인 카드 · 이름". 날짜순 · 필터 없음이면 충전 · 인출이 그날 끝에 점선 줄(합계 제외, 누르면 수정). 필터 "어디서 냈나" = 지갑 · 개인 현금 · 개인 카드.

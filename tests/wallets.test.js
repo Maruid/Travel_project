@@ -51,3 +51,12 @@ test('들고 있는 사람 없는 지갑 · 충전 나눔 · 환율', () => {
   assert.equal(chargedRate([{ kind: 'charge', amount: 10000, home_amount: 91000 }, { kind: 'charge', amount: 5000 }]), 9.1);
   assert.equal(chargedRate([]), null);
 });
+
+test('개인 지갑(용돈 카드): 충전 · 남은 돈은 정산과 무관, 그 지갑 지출은 주인이 낸 것', () => {
+  const wallets = [...W, { id: 'mine', kind: 'card', holder: 'a', personal: true }];
+  const topups = [{ kind: 'charge', wallet_id: 'mine', amount: 50000 }];
+  const ex = [{ wallet_id: 'mine', amount: 9000 }, { wallet_id: 'mine', amount: 2000, split_with: ['a'] }];
+  const r = poolBalances({ expenses: ex, topups, wallets, memberIds: M, toAmount: amt });
+  const net = Object.fromEntries(r.map((x) => [x.id, Math.round(x.net)]));
+  assert.deepEqual(net, { a: 6000, b: -3000, c: -3000 });       // 예전 "a 개인 돈으로 냄"과 같음
+});
