@@ -45,11 +45,22 @@ const SECTIONS = () => [
     ],
   },
   {
-    icon: 'fa-wallet', color: '#34d399', title: '가계부 · 할 일',
+    icon: 'fa-wallet', color: '#34d399', title: '가계부',
     items: [
-      ['지출', '누가 냈는지 함께 기록하면 균등 분담 기준으로 누가 누구에게 보낼지 정산해 줘요. 정산 글은 복사해서 단톡방에.'],
-      ['환율', '머리줄의 계산기로 현지 돈 ↔ 원화를 바로 계산해요.'],
-      ['할 일', '준비물 · 할 일 체크리스트. 바우처 사진도 붙여 둘 수 있어요.'],
+      ['돈 쓰는 방식', '가계부 ⚙에서 고르세요. 각자 내고 정산 · 공금 현금 · 공금 카드(트래블월렛 등) + 현금.'],
+      ['공금', '[충전 · 환전]에 누가 얼마 넣었는지 적고, ATM에서 뽑으면 [현금 인출]. 지갑마다 남은 돈이 위에 보여요.'],
+      ['내 용돈', '[지갑 추가]에서 "개인"으로 만들면 잔액은 나만 보고, 그 지갑으로 낸 돈은 내가 낸 것으로 정산돼요.'],
+      ['지출 적기', '[+ 지출]에서 어디서 냈나(공금 · 내 지갑 · 개인 돈)와 누구 몫(모두 · 나만)을 골라요.'],
+      ['목록 보기', '목록을 끌어 올리면 위 요약이 한 줄로 줄어요. 날짜순 · 금액순 · 카테고리별 정렬과 필터(어디서 · 누가 · 누구 몫).'],
+      ['사전 결제', '항공권 · 숙소처럼 여행 전에 낸 돈. 이동편 · 숙소 장소의 [결제 금액]으로도 넣고, 정산과 여행 총비용에 들어가요.'],
+      ['정산', '[정산]에서 누가 누구에게 얼마 보내면 되는지 보여주고, [복사]해서 단톡방에 붙여 넣어요.'],
+      ['환율', '머리줄 계산기로 현지 돈 ↔ 원화 계산. 충전할 때 원화를 적으면 실제 평균 환율로 맞출 수 있어요.'],
+    ],
+  },
+  {
+    icon: 'fa-list-check', color: '#a3e635', title: '할 일',
+    items: [
+      ['할 일', '준비물 · 할 일 체크리스트. ✎로 열어 바우처 사진도 붙여 둘 수 있어요.'],
     ],
   },
   {
@@ -75,7 +86,7 @@ export function howToButtonHtml() {
       <span class="w-8 h-8 rounded-xl bg-neon-cyan/15 text-neon-cyan flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-book-open text-sm"></i></span>
       <span class="flex-1 min-w-0">
         <span class="block text-xs font-bold text-white">사용 방법</span>
-        <span class="block text-[10px] text-slate-400 truncate">장소 · 일정 · AI 가이드 · 가계부 · 오프라인</span>
+        <span class="block text-[10px] text-slate-400 truncate">장소 · 일정 · AI 가이드 · 가계부 · 공금 정산 · 오프라인</span>
       </span>
       <i class="fa-solid fa-chevron-right text-[10px] text-slate-500"></i>
     </button>`;
