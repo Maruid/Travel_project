@@ -11,11 +11,30 @@ import { getPref, setPref, PREF_ANCHOR_NEAR_SORT } from '../../lib/prefs.js';
 import { openPlaceImport, openShareCodes } from '../place-import.js';
 import { canShare, shareContent } from '../../lib/native.js';
 import { appSectionHtml, appSectionActions } from '../../components/app-settings.js';
+import { openHowTo } from '../../components/how-to.js';
+import { shortDateRange } from '../../lib/format.js';
 
 const CAT_KINDS = { food: '식당', cafe: '카페', bar: '술집', spot: '명소', shop: '쇼핑', lodging: '숙소', transit: '교통', etc: '기타' };
 const CAT_COLORS = ['#f43f5e', '#10b981', '#f59e0b', '#f97316', '#06b6d4', '#eab308', '#c084fc', '#3b82f6', '#94a3b8'];
 const CAT_ICONS = ['fa-utensils', 'fa-bowl-food', 'fa-drumstick-bite', 'fa-fish', 'fa-pepper-hot', 'fa-mug-saucer',
   'fa-wine-glass', 'fa-ice-cream', 'fa-landmark', 'fa-tree', 'fa-bag-shopping', 'fa-hotel', 'fa-train-subway', 'fa-star'];
+
+// ---------- 설정 화면 공통 모양: 묶음 제목 + 한 줄 행 (아이콘 · 제목 · 설명 · 오른쪽 값) ----------
+const CHEVRON = html`<i class="fa-solid fa-chevron-right text-[10px] text-slate-500 flex-shrink-0"></i>`;
+const TINT = { cyan: 'bg-neon-cyan/15 text-neon-cyan', amber: 'bg-amber-500/15 text-amber-300', green: 'bg-emerald-500/15 text-emerald-300' };
+const groupTitle = (text) => html`<h2 class="text-[11px] font-black text-slate-500 tracking-wider px-1 pt-2">${text}</h2>`;
+
+// action 이 없으면 누를 수 없는 줄, nested 면 안에 버튼이 있어서 <div role="button"> 으로 그림
+function row({ action, nested, ic, tint = TINT.cyan, title, sub, right = CHEVRON, dim = false }) {
+  const inner = html`
+    <span class="set-ico ${tint}"><i class="${ic}"></i></span>
+    <span class="flex-1 min-w-0"><span class="set-title">${title}</span>${sub ? html`<span class="set-sub">${sub}</span>` : ''}</span>
+    ${right}`;
+  const cls = `set-row${dim ? ' opacity-50' : ''}`;
+  if (!action) return html`<div class="${cls}">${inner}</div>`;
+  if (nested) return html`<div role="button" tabindex="0" data-action="${action}" class="${cls}">${inner}</div>`;
+  return html`<button data-action="${action}" class="${cls}">${inner}</button>`;
+}
 
 export function mount(root, store) {
   let anonymous = true;
@@ -27,54 +46,44 @@ export function mount(root, store) {
   function update() {
     const owner = store.isOwner;
     const me = store.me;
+    const t = store.trip;
     const members = store.activeMembers();
     const customCats = store.list('categories');
-
-    const groupTitle = (text) => html`<h2 class="text-[11px] font-black text-slate-500 tracking-wider px-1 pt-2">${text}</h2>`;
+    const allowCats = !!t.allow_custom_categories;
     const anchorNear = getPref(PREF_ANCHOR_NEAR_SORT);
     const withCoords = store.list('places').filter((p) => p.lat != null).length;
     const geoReviewCount = store.list('places').filter((p) => p.geo_review?.type === 'review').length;
     const geoAutoCount = store.list('places').filter((p) => p.geo_review?.type === 'auto').length;
+    const viewOn = !!store.viewLink?.enabled;
 
     setHTML(root, html`
       <div class="p-4 space-y-3">
+        <section class="glass-card rounded-2xl p-4 flex items-center gap-3">
+          <span class="text-3xl leading-none flex-shrink-0">${t.cover_emoji || '✈️'}</span>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-black text-white truncate">${t.title}</p>
+            <p class="text-[10px] text-slate-400 truncate">${[t.destination, shortDateRange(t.start_date, t.end_date), `멤버 ${members.length}명`].filter(Boolean).join(' · ')}</p>
+          </div>
+          ${owner ? html`<button data-action="edit-trip" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-pen mr-1"></i>수정</button>` : ''}
+        </section>
+
         ${groupTitle('함께하기')}
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-link text-neon-cyan mr-1"></i>초대 링크</h3>
-          <p class="text-[10px] text-slate-400">이 링크를 받은 사람은 누구나 참여해서 편집할 수 있어요.</p>
-          <div class="flex gap-1.5">
-            <input readonly class="input font-mono text-[10px]" value="${inviteUrl() || '불러오는 중...'}">
-            <button data-action="copy-invite" class="btn-ghost flex-shrink-0">복사</button>
-            ${canShare() ? html`<button data-action="share-invite" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
-          </div>
-          ${owner ? html`<button data-action="regen" class="text-[10px] text-amber-300 underline">링크 재발급 (기존 링크는 더 이상 동작하지 않음)</button>` : ''}
+        <section class="set-group">
+          ${row({ action: 'invite', nested: true, ic: 'fa-solid fa-link', title: '초대 링크', sub: '받은 사람은 누구나 참여해서 편집할 수 있어요',
+            right: html`<span class="flex gap-1 flex-shrink-0">
+              <button data-action="copy-invite" class="btn-ghost">복사</button>
+              ${canShare() ? html`<button data-action="share-invite" class="btn-ghost"><i class="fa-solid fa-share-nodes"></i></button>` : ''}</span>` })}
+          ${row({ action: 'view-link', ic: 'fa-solid fa-eye', title: '보기 전용 링크', sub: '로그인 없이 일정 · 장소 · 가이드만 봐요',
+            right: html`<span class="text-[10px] font-bold ${viewOn ? 'text-emerald-300' : 'text-slate-500'}">${viewOn ? '켜짐' : '꺼짐'}</span>${CHEVRON}` })}
         </section>
-
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-eye text-neon-cyan mr-1"></i>보기 전용 링크</h3>
-            ${owner ? html`<label class="flex items-center gap-1.5 text-[11px] text-slate-300">
-              <input type="checkbox" data-action="view-toggle" ${store.viewLink?.enabled ? 'checked' : ''} class="accent-cyan-400"> 켜기</label>`
-              : html`<span class="text-[10px] ${store.viewLink?.enabled ? 'text-emerald-300' : 'text-slate-500'}">${store.viewLink?.enabled ? '켜짐' : '꺼짐'}</span>`}
-          </div>
-          <p class="text-[10px] text-slate-400">로그인 없이 일정 · 장소 · 가이드만 볼 수 있어요. 가계부 · 할 일 · 멤버는 보이지 않고, 고칠 수 없어요. 부모님께 일정 공유할 때 좋아요.</p>
-          ${store.viewLink?.enabled ? html`
-            <div class="flex gap-1.5">
-              <input readonly class="input font-mono text-[10px]" value="${viewUrl()}">
-              <button data-action="copy-view" class="btn-ghost flex-shrink-0">복사</button>
-              ${canShare() ? html`<button data-action="share-view" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
-            </div>
-            ${owner ? html`<button data-action="view-regen" class="text-[10px] text-amber-300 underline">링크 다시 만들기 (기존 링크는 더 이상 열리지 않음)</button>` : ''}`
-          : owner ? '' : html`<p class="text-[10px] text-slate-500">여행 관리자(owner)가 켤 수 있어요.</p>`}
-        </section>
-
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <div class="flex items-center justify-between">
-            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-users text-neon-cyan mr-1"></i>멤버 ${members.length}명</h3>
-            <button data-action="add-placeholder" class="text-[10px] text-neon-cyan">+ 동행자 추가</button>
+        <section class="set-group">
+          <div class="set-row">
+            <span class="set-ico ${TINT.cyan}"><i class="fa-solid fa-users"></i></span>
+            <span class="flex-1 set-title">멤버 ${members.length}명</span>
+            <button data-action="add-placeholder" class="text-[10px] text-neon-cyan font-bold">+ 동행자 추가</button>
           </div>
           ${members.map((m) => html`
-            <div class="flex items-center justify-between p-2 rounded-xl bg-night-950/60">
+            <div class="flex items-center justify-between gap-2 px-3.5 py-2.5">
               <div class="flex items-center gap-2 min-w-0">
                 <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${color(m.color, '#64748b')}"></span>
                 <span class="text-xs font-bold text-white truncate">${m.display_name}</span>
@@ -83,7 +92,7 @@ export function mount(root, store) {
                 ${store.deviceCount(m.id) === 0 ? html`<span class="text-[9px] text-slate-500">미연결</span>`
                   : store.deviceCount(m.id) > 1 ? html`<span class="text-[9px] text-slate-400"><i class="fa-solid fa-mobile-screen-button"></i> ${store.deviceCount(m.id)}대</span>` : ''}
               </div>
-              <div class="flex gap-1">
+              <div class="flex gap-1 flex-shrink-0">
                 ${m.id === me?.id ? html`<button data-action="rename" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-300">이름 변경</button>` : ''}
                 ${owner && m.role !== 'owner' ? html`
                   <button data-action="member-menu" data-id="${m.id}" class="text-[10px] px-2 py-1 rounded bg-slate-800 text-slate-300"><i class="fa-solid fa-ellipsis"></i></button>` : ''}
@@ -91,92 +100,49 @@ export function mount(root, store) {
             </div>`)}
         </section>
 
-        ${groupTitle('지도 · 오프라인')}
-        <section class="glass-card p-4 rounded-2xl space-y-2.5">
-          <div>
-            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-download text-emerald-300 mr-1"></i>오프라인 지도 저장</h3>
-            <p class="text-[10px] text-slate-400 mt-0.5">위치가 있는 장소 ${withCoords}곳 주변 지도를 이 기기에 저장해요. 와이파이에서 출발 전에 한 번 해두세요.</p>
-          </div>
-          <button data-action="offline-map" class="btn-ghost w-full py-2.5"><i class="fa-solid fa-download mr-1"></i>이 여행 지도 저장하기</button>
-          <details class="text-[10px] text-slate-400">
-            <summary class="cursor-pointer text-slate-300">출발 전 체크리스트</summary>
-            <ol class="list-decimal pl-4 mt-1 space-y-0.5">
-              <li>여행 화면의 탭들을 한 번씩 열어 데이터 받아두기</li>
-              <li>위의 지도 저장 (지명 글자는 지도를 한 번 둘러봐야 저장돼요)</li>
-              <li>홈 화면에 앱 추가 (아이폰: 공유 → 홈 화면에 추가)</li>
-            </ol>
-          </details>
-          <label class="flex items-start gap-2 pt-2 border-t border-white/5 cursor-pointer">
-            <input type="checkbox" data-action="anchor-near" ${anchorNear ? 'checked' : ''} class="accent-cyan-400 mt-0.5">
-            <span class="text-[11px] text-slate-300">기준점 목록을 지도 중심에서 가까운 순으로 정렬
-              <span class="block text-[10px] text-slate-500">여러 도시를 도는 여행에서 유용해요. 이 기기에만 적용돼요.</span></span>
+        ${groupTitle('장소')}
+        <section class="set-group">
+          ${row({ action: 'categories', ic: 'fa-solid fa-tags', title: '카테고리',
+            sub: !allowCats ? '직접 만들기 꺼짐' : customCats.length ? `기본 + 직접 만든 ${customCats.length}개` : '기본 카테고리만 쓰는 중' })}
+          ${row({ action: 'place-import', ic: 'fa-solid fa-file-import', title: '장소 가져오기', sub: '내 다른 여행이나 공유 코드에서 골라 복사해요' })}
+          ${owner ? row({ action: 'share-codes', ic: 'fa-solid fa-share-from-square', title: '장소 공유 코드', sub: '이 여행 장소를 다른 여행에서 가져갈 수 있게 해요' }) : ''}
+          ${row({ action: 'geo', ic: 'fa-solid fa-location-dot', tint: TINT.amber, title: '위치 검토', dim: !(geoReviewCount + geoAutoCount),
+            sub: geoReviewCount + geoAutoCount ? `확인 필요 ${geoReviewCount}곳 · 자동으로 바뀜 ${geoAutoCount}곳` : '검토할 장소가 없어요',
+            right: geoReviewCount ? html`<span class="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/25 text-amber-200 font-black">${geoReviewCount}</span>${CHEVRON}` : CHEVRON })}
+          ${owner ? row({ action: 'google-bulk', ic: 'fa-brands fa-google', title: '구글 정보 일괄 채우기', sub: '구글 정보가 없는 장소에 영업시간 · 평점 · 좌표를 채워요' }) : ''}
+        </section>
+
+        ${groupTitle('이 기기')}
+        <section class="set-group">
+          ${row({ ic: 'fa-solid fa-download', tint: TINT.green, title: '오프라인 지도', sub: `장소 ${withCoords}곳 주변 · 와이파이에서 출발 전에 한 번`,
+            right: html`<button data-action="offline-map" class="btn-ghost flex-shrink-0 whitespace-nowrap">저장</button>` })}
+          <label class="set-row cursor-pointer">
+            <span class="set-ico ${TINT.cyan}"><i class="fa-solid fa-arrow-down-short-wide"></i></span>
+            <span class="flex-1 min-w-0"><span class="set-title">기준점 가까운 순</span>
+              <span class="set-sub">장소 탭 기준점 목록을 지도 중심에서 가까운 순으로</span></span>
+            <input type="checkbox" data-action="anchor-near" ${anchorNear ? 'checked' : ''} class="accent-cyan-400 w-4 h-4 flex-shrink-0">
           </label>
         </section>
-
-        ${groupTitle('장소 데이터')}
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <div class="flex items-center justify-between">
-            <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-tags text-neon-cyan mr-1"></i>커스텀 카테고리</h3>
-            ${store.trip.allow_custom_categories ? html`<button data-action="add-cat" class="text-[10px] text-neon-cyan">+ 추가</button>` : ''}
-          </div>
-          ${store.trip.allow_custom_categories ? html`
-            <div class="flex flex-wrap gap-1.5">
-              ${customCats.length ? customCats.map((c) => html`
-                <button data-action="edit-cat" data-id="${c.id}" class="text-[11px] px-2 py-1 rounded-lg bg-slate-800 border" style="color:${color(c.color)};border-color:${color(c.color)}55">
-                  <i class="fa-solid ${icon(c.icon)} text-[10px]"></i> ${c.name}</button>`)
-              : html`<p class="text-[11px] text-slate-500">기본 카테고리만 사용 중입니다.</p>`}
-            </div>` : html`<p class="text-[11px] text-slate-500">owner 가 커스텀 카테고리를 꺼두었습니다.</p>`}
-        </section>
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-copy text-neon-cyan mr-1"></i>장소 가져오기 · 공유</h3>
-          <p class="text-[10px] text-slate-400">내 다른 여행이나 공유 코드에서 장소를 골라 이 여행으로 복사해요.</p>
-          <div class="grid ${owner ? 'grid-cols-2' : 'grid-cols-1'} gap-2">
-            <button data-action="place-import" class="btn-ghost py-2.5"><i class="fa-solid fa-file-import mr-1"></i>가져오기</button>
-            ${owner ? html`<button data-action="share-codes" class="btn-ghost py-2.5"><i class="fa-solid fa-share-from-square mr-1"></i>공유 코드</button>` : ''}
-          </div>
-        </section>
-        ${geoReviewCount + geoAutoCount ? html`
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-solid fa-location-dot text-amber-300 mr-1"></i>위치 검토</h3>
-          <div class="grid grid-cols-2 gap-2">
-            <button data-action="geo-review" data-type="review" class="btn-ghost py-2.5 ${geoReviewCount ? 'text-amber-200' : 'opacity-50'}">확인 필요 ${geoReviewCount}곳</button>
-            <button data-action="geo-review" data-type="auto" class="btn-ghost py-2.5 ${geoAutoCount ? '' : 'opacity-50'}">자동으로 바뀜 ${geoAutoCount}곳</button>
-          </div>
-          <p class="text-[10px] text-slate-500">자동으로 바뀐 곳은 구글 좌표가 기존 핀과 300m 이내라 바로 반영한 곳이에요. 비교해 보고 되돌릴 수 있어요.</p>
-        </section>` : ''}
-        ${owner ? html`
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white"><i class="fa-brands fa-google text-neon-cyan mr-1"></i>구글 지도 정보</h3>
-          <p class="text-[10px] text-slate-400">구글 정보가 없는 등록된 장소에 영업시간, 평점, 정확한 좌표 등을 한 번에 채워요.</p>
-          <button data-action="google-bulk" class="btn-ghost w-full py-2.5">등록된 장소 일괄 가져오기</button>
-        </section>` : ''}
-
-        ${owner ? html`
-        ${groupTitle('여행 관리')}
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <button data-action="edit-trip" class="btn-ghost w-full py-2.5"><i class="fa-solid fa-pen mr-1"></i>여행 정보 수정</button>
-          <button data-action="delete-trip" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">여행 삭제</button>
-        </section>` : ''}
-
-        ${groupTitle('내 계정')}
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          ${anonymous ? html`
-            <p class="text-[10px] text-slate-400 leading-relaxed">지금은 이 브라우저에만 연결된 임시 계정이에요. 다른 기기에서도 "${me?.display_name || '나'}"(으)로 쓰려면 둘 중 하나를 선택하세요.
-              ${owner ? html`<b class="text-amber-300">owner 는 Google 계정 연결을 권장합니다.</b>` : ''}</p>
-            <div class="grid grid-cols-2 gap-2">
-              <button data-action="link-google" class="btn-ghost py-2.5"><i class="fa-brands fa-google mr-1"></i>Google 계정 연결</button>
-              <button data-action="device-code" class="btn-ghost py-2.5"><i class="fa-solid fa-key mr-1"></i>다른 기기에서도 쓰기</button>
-            </div>`
-          : html`
-            <p class="text-[10px] text-emerald-300 leading-relaxed">Google 계정이 연결되어 있어요. 다른 기기에서도 같은 계정으로 로그인하면 됩니다.</p>
-            <button data-action="device-code" class="btn-ghost w-full py-2"><i class="fa-solid fa-key mr-1"></i>로그인 없이 다른 기기 연결 (코드)</button>`}
-          ${!owner ? html`<button data-action="leave" class="w-full py-2 rounded-xl text-slate-400 text-[11px]">이 여행에서 나가기</button>` : ''}
-        </section>
-
-        ${groupTitle('앱')}
         <section class="glass-card p-4 rounded-2xl space-y-2">
           ${appSectionHtml()}
         </section>
+
+        ${groupTitle('계정')}
+        <section class="set-group">
+          ${anonymous
+            ? row({ action: 'link-google', ic: 'fa-brands fa-google', title: 'Google 계정 연결',
+                sub: owner ? 'owner 는 연결을 권장해요. 기기를 바꿔도 이어서 써요' : `다른 기기에서도 "${me?.display_name || '나'}"(으)로 쓸 수 있어요` })
+            : row({ ic: 'fa-brands fa-google', tint: TINT.green, title: 'Google 계정 연결됨', sub: '다른 기기에서도 같은 계정으로 로그인하면 돼요',
+                right: html`<i class="fa-solid fa-check text-emerald-300 text-xs"></i>` })}
+          ${row({ action: 'device-code', ic: 'fa-solid fa-key', title: '다른 기기 연결 코드', sub: '로그인 없이 코드로 다른 기기에서 이 여행을 열어요' })}
+          ${row({ action: 'how-to', ic: 'fa-solid fa-book-open', title: '사용 방법', sub: '장소 · 일정 · 가이드 · 가계부 · 할 일 · 오프라인' })}
+        </section>
+
+        <div class="pt-3">
+          ${owner
+            ? html`<button data-action="delete-trip" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">여행 삭제</button>`
+            : html`<button data-action="leave" class="w-full py-2.5 rounded-xl text-rose-300/80 border border-rose-500/20 text-xs font-bold">이 여행에서 나가기</button>`}
+        </div>
       </div>`);
   }
 
@@ -198,16 +164,115 @@ export function mount(root, store) {
     catch (e) { toast(errorText(e), 'error'); }
   }
 
+  // 시트 하나를 draw() 로 다시 그릴 수 있게 열기 (링크 재발급 · 켜기처럼 시트 안에서 값이 바뀌는 경우)
+  function openLiveSheet(body, actions) {
+    openSheet(html`<div data-live></div>`, (el) => {
+      const box = el.querySelector('[data-live]');
+      const draw = () => setHTML(box, body());
+      draw();
+      return delegate(el, actions(draw));
+    });
+  }
+
+  const linkBox = (url, copy, share) => html`
+    <div class="flex gap-1.5">
+      <input readonly class="input font-mono text-[10px]" value="${url || '불러오는 중...'}">
+      <button data-action="${copy}" class="btn-ghost flex-shrink-0">복사</button>
+      ${canShare() ? html`<button data-action="${share}" class="btn-ghost flex-shrink-0"><i class="fa-solid fa-share-nodes"></i></button>` : ''}
+    </div>`;
+
+  const openInviteSheet = () => openLiveSheet(() => html`
+    <h3 class="text-base font-black text-white mb-1"><i class="fa-solid fa-link text-neon-cyan mr-1"></i>초대 링크</h3>
+    <p class="text-[11px] text-slate-400 mb-3">이 링크를 받은 사람은 누구나 참여해서 편집할 수 있어요.</p>
+    ${linkBox(inviteUrl(), 'copy-invite', 'share-invite')}
+    ${store.isOwner ? html`<button data-action="regen" class="mt-3 text-[11px] text-amber-300 underline">링크 재발급 (기존 링크는 더 이상 동작하지 않아요)</button>` : ''}`,
+  (draw) => ({
+    'copy-invite': () => inviteUrl() && copyText(inviteUrl(), '초대 링크'),
+    'share-invite': () => shareContent({ title: store.trip.title, url: inviteUrl() }),
+    regen: () => confirmAction('링크를 재발급하면 기존 링크로는 더 이상 참여할 수 없습니다. 계속할까요?')
+      && run(() => rpc('regenerate_invite', { p_trip: store.tripId }), '새 링크를 발급했습니다.').then(draw),
+  }));
+
+  const openViewLinkSheet = () => openLiveSheet(() => {
+    const on = !!store.viewLink?.enabled;
+    return html`
+      <div class="flex items-center justify-between gap-2 mb-1">
+        <h3 class="text-base font-black text-white"><i class="fa-solid fa-eye text-neon-cyan mr-1"></i>보기 전용 링크</h3>
+        ${store.isOwner ? html`<label class="flex items-center gap-1.5 text-[11px] text-slate-300">
+          <input type="checkbox" data-action="view-toggle" ${on ? 'checked' : ''} class="accent-cyan-400 w-4 h-4"> 켜기</label>`
+          : html`<span class="text-[10px] font-bold ${on ? 'text-emerald-300' : 'text-slate-500'}">${on ? '켜짐' : '꺼짐'}</span>`}
+      </div>
+      <p class="text-[11px] text-slate-400 mb-3">로그인 없이 일정 · 장소 · 가이드만 볼 수 있어요. 가계부 · 할 일 · 멤버는 보이지 않고, 고칠 수 없어요. 부모님께 일정 공유할 때 좋아요.</p>
+      ${on ? html`${linkBox(viewUrl(), 'copy-view', 'share-view')}
+        ${store.isOwner ? html`<button data-action="view-regen" class="mt-3 text-[11px] text-amber-300 underline">링크 다시 만들기 (기존 링크는 더 이상 열리지 않아요)</button>` : ''}`
+        : store.isOwner ? '' : html`<p class="text-[11px] text-slate-500">여행 관리자(owner)가 켤 수 있어요.</p>`}`;
+  }, (draw) => ({
+    'copy-view': () => viewUrl() && copyText(viewUrl(), '보기 전용 링크'),
+    'share-view': () => shareContent({ title: `${store.trip.title} 일정`, url: viewUrl() }),
+    'view-toggle': (el) => setViewLink(el.checked, false, el).then(draw),
+    'view-regen': () => confirmAction('새 링크를 만들면 지금 링크로는 더 이상 볼 수 없어요. 계속할까요?') && setViewLink(true, true).then(draw),
+  }));
+
+  // 카테고리: 직접 만든 카테고리 목록 + (owner) 직접 만들기 허용 켜기 · 끄기
+  const openCategories = () => openLiveSheet(() => {
+    const allow = !!store.trip.allow_custom_categories;
+    const cats = store.list('categories');
+    return html`
+      <div class="flex items-center justify-between mb-1">
+        <h3 class="text-base font-black text-white"><i class="fa-solid fa-tags text-neon-cyan mr-1"></i>카테고리</h3>
+        ${allow ? html`<button data-action="add-cat" class="text-[11px] text-neon-cyan font-bold">+ 추가</button>` : ''}
+      </div>
+      <p class="text-[11px] text-slate-400 mb-3">기본 카테고리(식당 · 카페 · 명소 등)에 더해 이 여행에서 쓸 카테고리를 만들어요.</p>
+      ${allow ? html`
+        <div class="flex flex-wrap gap-1.5">
+          ${cats.length ? cats.map((c) => html`
+            <button data-action="edit-cat" data-id="${c.id}" class="text-[11px] px-2 py-1 rounded-lg bg-slate-800 border" style="color:${color(c.color)};border-color:${color(c.color)}55">
+              <i class="fa-solid ${icon(c.icon)} text-[10px]"></i> ${c.name}</button>`)
+          : html`<p class="text-[11px] text-slate-500">아직 직접 만든 카테고리가 없어요.</p>`}
+        </div>` : html`<p class="text-[11px] text-slate-500">${store.isOwner ? '직접 만들기가 꺼져 있어요.' : 'owner 가 직접 만들기를 꺼두었어요.'}</p>`}
+      ${store.isOwner ? html`
+        <label class="flex items-start gap-2 mt-3 pt-3 border-t border-white/5 cursor-pointer">
+          <input type="checkbox" data-action="allow-cats" ${allow ? 'checked' : ''} class="accent-cyan-400 mt-0.5 w-4 h-4">
+          <span class="text-[11px] text-slate-300">카테고리 직접 만들기 허용
+            <span class="block text-[10px] text-slate-500">끄면 모든 멤버가 기본 카테고리만 써요.</span></span>
+        </label>` : ''}`;
+  }, (draw) => ({
+    'add-cat': () => openCategoryEditor(store, null),
+    'edit-cat': (el) => openCategoryEditor(store, el.dataset.id),
+    'allow-cats': (el) => run(async () => {
+      const { error } = await supabase.from('trips').update({ allow_custom_categories: el.checked }).eq('id', store.tripId);
+      if (error) throw error;
+    }, el.checked ? '카테고리 직접 만들기를 켰어요.' : '카테고리 직접 만들기를 껐어요.').then(draw),
+  }));
+
+  // 위치 검토: 한 종류만 있으면 바로 열고, 둘 다 있으면 고르기
+  async function openGeo() {
+    const places = store.list('places');
+    const review = places.filter((p) => p.geo_review?.type === 'review').length;
+    const auto = places.filter((p) => p.geo_review?.type === 'auto').length;
+    if (!review && !auto) { toast('검토할 장소가 없어요.'); return; }
+    const { openGeoReview } = await import('./places.js');
+    const go = (type) => openGeoReview(store, type, { onDone: () => closeSheet() });
+    if (!review || !auto) { go(review ? 'review' : 'auto'); return; }
+    openSheet(html`
+      <h3 class="text-base font-black text-white mb-3"><i class="fa-solid fa-location-dot text-amber-300 mr-1"></i>위치 검토</h3>
+      <div class="grid grid-cols-2 gap-2">
+        <button data-action="go" data-type="review" class="btn-ghost py-2.5 text-amber-200">확인 필요 ${review}곳</button>
+        <button data-action="go" data-type="auto" class="btn-ghost py-2.5">자동으로 바뀜 ${auto}곳</button>
+      </div>
+      <p class="text-[10px] text-slate-500 mt-2">자동으로 바뀐 곳은 구글 좌표가 기존 핀과 300m 이내라 바로 반영한 곳이에요. 비교해 보고 되돌릴 수 있어요.</p>`,
+    (el) => delegate(el, { go: (b) => go(b.dataset.type) }));
+  }
+
   const off = delegate(root, {
     'copy-invite': () => inviteUrl() && copyText(inviteUrl(), '초대 링크'),
     ...appSectionActions(() => update()),
-    'copy-view': () => viewUrl() && copyText(viewUrl(), '보기 전용 링크'),
-    'share-view': () => shareContent({ title: `${store.trip.title} 일정`, url: viewUrl() }),
-    'view-toggle': (el) => setViewLink(el.checked, false, el),
-    'view-regen': () => confirmAction('새 링크를 만들면 지금 링크로는 더 이상 볼 수 없어요. 계속할까요?') && setViewLink(true, true),
     'share-invite': () => shareContent({ title: store.trip.title, url: inviteUrl() }),
-    regen: () => confirmAction('링크를 재발급하면 기존 링크로는 더 이상 참여할 수 없습니다. 계속할까요?')
-      && run(() => rpc('regenerate_invite', { p_trip: store.tripId }), '새 링크를 발급했습니다.'),
+    invite: () => openInviteSheet(),
+    'view-link': () => openViewLinkSheet(),
+    categories: () => openCategories(),
+    geo: () => openGeo(),
+    'how-to': () => openHowTo(),
     rename: () => {
       const name = prompt('새 이름', store.me?.display_name || '');
       if (name?.trim()) run(() => rpc('update_my_name', { p_trip: store.tripId, p_display_name: name.trim() }), '이름을 바꿨습니다.');
@@ -217,8 +282,6 @@ export function mount(root, store) {
       if (name?.trim()) run(() => rpc('add_placeholder_member', { p_trip: store.tripId, p_display_name: name.trim() }), '추가했습니다.');
     },
     'member-menu': (el) => openMemberMenu(store, el.dataset.id, run),
-    'add-cat': () => openCategoryEditor(store, null),
-    'edit-cat': (el) => openCategoryEditor(store, el.dataset.id),
     'edit-trip': () => openTripEditor(store, run),
     'google-bulk': () => openGoogleBulk(store),
     'delete-trip': async () => {
@@ -236,10 +299,6 @@ export function mount(root, store) {
     'device-code': () => openDeviceCodeIssue(store.tripId),
     'place-import': () => openPlaceImport(store),
     'share-codes': () => openShareCodes(store),
-    'geo-review': async (el) => {
-      const { openGeoReview } = await import('./places.js');
-      openGeoReview(store, el.dataset.type, { onDone: () => closeSheet() });
-    },
     'anchor-near': (el) => {
       setPref(PREF_ANCHOR_NEAR_SORT, el.checked);
       toast(el.checked ? '장소 탭의 기준점 목록을 지도 중심에서 가까운 순으로 보여줘요.' : '기준점 목록을 등록 순서로 보여줘요.');
@@ -312,13 +371,11 @@ function openTripEditor(store, run) {
         <div><label class="label">종료일</label><input type="date" name="end_date" class="input" value="${t.end_date || ''}"></div>
       </div>
       <div><label class="label">현지 시간대</label><input name="timezone" class="input font-mono" value="${t.timezone}"></div>
-      <label class="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" name="allow_custom_categories" ${t.allow_custom_categories ? 'checked' : ''} class="accent-cyan-400"> 멤버의 커스텀 카테고리 편집 허용</label>
       <button class="btn-primary">저장</button>
     </form>`, (el) => {
     $('#trip-form', el).addEventListener('submit', (e) => {
       e.preventDefault();
       const v = formValues(e.target);
-      v.allow_custom_categories = e.target.elements.allow_custom_categories.checked;
       run(async () => {
         const { error } = await supabase.from('trips').update(v).eq('id', store.tripId);
         if (error) throw error;

@@ -85,6 +85,15 @@
   .chip-active {
     @apply flex-shrink-0 text-xs px-3 py-1 rounded-full font-bold bg-neon-cyan text-night-950 shadow-md;
   }
+  /* 설정 탭: 묶음 카드 안의 한 줄 행 (아이콘 · 제목 · 설명 · 오른쪽 값) */
+  .set-group { @apply glass-card rounded-2xl overflow-hidden divide-y divide-white/5; }
+  .set-row {
+    @apply w-full flex items-center gap-3 px-3.5 py-3 text-left transition;
+  }
+  button.set-row, [role="button"].set-row { @apply cursor-pointer active:bg-white/5; }
+  .set-ico { @apply w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-sm; }
+  .set-title { @apply block text-xs font-bold text-white; }
+  .set-sub { @apply block text-[10px] text-slate-400 leading-snug mt-0.5; }
 }
 
 /* 지도 */
