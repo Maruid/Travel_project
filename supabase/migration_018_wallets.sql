@@ -77,3 +77,11 @@ alter table public.expenses
   add column if not exists wallet_id uuid references public.trip_wallets(id) on delete set null;
 
 commit;
+
+-- ---------------------------------------------------------------------
+-- (추가) 사전 결제: 항공권 · 숙소처럼 여행 전에 낸 돈. 현지 지출 · 지갑 잔액과 따로 보고 정산에는 포함
+--   transport_id: 이동편과 연결 (이동편 화면의 [결제 금액])
+-- ---------------------------------------------------------------------
+alter table public.expenses
+  add column if not exists prepaid boolean not null default false,
+  add column if not exists transport_id uuid references public.trip_transports(id) on delete set null;

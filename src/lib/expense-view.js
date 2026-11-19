@@ -61,30 +61,3 @@ export function groupExpenses(list, sort, toLocal) {
   });
   return groups.sort(sort === 'cat' ? (a, b) => b.total - a.total : (a, b) => String(b.key).localeCompare(String(a.key)));
 }
-
-// 예시 화면용 지출 (저장하지 않음). 날짜는 여행 첫날부터, 멤버는 있는 사람으로
-export function sampleExpenses({ start, local, memberIds }) {
-  const day = (n) => {
-    const d = new Date(`${start || new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + n);
-    return d.toISOString().slice(0, 10);
-  };
-  const m = (i) => memberIds[i % memberIds.length];
-  const rows = [
-    [0, '15:20', '간사이공항 라피트', '교통', 2900, 'card', 0, null],
-    [0, '18:40', '이치란 라멘 도톤보리', '음식', 4760, 'card', 0, null],
-    [0, '21:10', '로손 편의점', '음식', 1380, 'cash', 1, null],
-    [1, '10:30', '오사카성 천수각', '관광', 1200, 'card', 1, null],
-    [1, '12:50', '규카츠 모토무라', '음식', 6200, 'card', 0, null],
-    [1, '15:00', '돈키호테 도톤보리', '쇼핑', 8640, 'card', 1, [1]],
-    [1, '16:20', '릴로 커피', '카페', 1300, 'cash', 0, [0]],
-    [2, '09:10', '오사카 주유패스', '관광', 6600, 'card', 0, null],
-    [2, '13:30', '쿠로몬 시장', '음식', 5400, 'cash', 1, null],
-    [2, '19:00', '야키니쿠 만푸쿠', '음식', 14800, 'card', 1, null],
-  ];
-  return rows.map(([d, t, place, cat, amount, method, payer, split], i) => ({
-    id: `sample-${i}`, spent_date: day(d), spent_time: t, place_name: place, category: cat,
-    amount, currency: local, method, paid_by: m(payer),
-    split_with: split ? split.map(m) : null, note: null, sample: true,
-  }));
-}

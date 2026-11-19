@@ -8,6 +8,7 @@ import { openSheet, closeSheet, toast, confirmAction } from './ui.js';
 import { MODES, DIRECTIONS, modeOf, transportsOn, routeText, titleText } from '../lib/transport.js';
 import { openPicker } from './picker.js';
 import { AIRPORTS } from '../lib/airports.js';
+import { money } from '../lib/format.js';
 
 const shortT = (t) => (t ? String(t).slice(0, 5) : '');
 
@@ -49,6 +50,7 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
     arr_date: direction === 'back' ? trip.end_date : trip.start_date,
   };
   if (!t) return;
+  const paid = id ? store.list('expenses').find((e) => e.transport_id === id) : null;   // 가계부 사전 결제
   const radio = (name, value, label, cur) => html`
     <label class="flex-1"><input type="radio" name="${name}" value="${value}" class="peer sr-only" ${cur === value ? 'checked' : ''}>
       <span class="block text-center py-2 rounded-xl text-[11px] font-bold border border-white/10 bg-slate-800 text-slate-300 peer-checked:bg-sky-500/20 peer-checked:text-sky-200 peer-checked:border-sky-400/50">${label}</span></label>`;
@@ -81,6 +83,12 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       ${side('arr', '도착 (현지 시각)')}
       <div><label class="label">메모</label><textarea name="note" class="input" rows="2" maxlength="300" placeholder="예약 번호 · 수하물 · 좌석">${t.note || ''}</textarea></div>
       <p class="text-[10px] text-slate-500">도착 · 출발 시각을 넣으면 AI 일정 짜기가 첫날 · 마지막 날 일정을 그 시간에 맞춰요.</p>
+      ${id && 'money_mode' in (store.budget || {}) ? html`
+        <button type="button" data-action="tr-pay" class="w-full p-2.5 rounded-xl bg-violet-500/10 border border-violet-400/30 text-[11px] text-violet-100 flex items-center gap-2">
+          <i class="fa-solid fa-receipt text-violet-300"></i>
+          <span class="flex-1 text-left">${paid ? html`결제 금액 <b class="font-mono">${money(paid.amount, paid.currency)}</b> · 가계부 사전 결제` : '결제 금액 넣기 (가계부 사전 결제)'}</span>
+          <i class="fa-solid fa-chevron-right text-[10px] text-violet-300/70"></i>
+        </button>` : ''}
       <button class="btn-primary">${id ? '수정 저장' : '등록'}</button>
       ${id ? html`<button type="button" data-action="delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">삭제</button>` : ''}
     </form>`, (el) => {
@@ -94,6 +102,14 @@ export function openTransportEditor(store, id, { direction = 'out' } = {}) {
       delete: () => {
         if (!confirmAction('이 이동편을 삭제할까요?')) return;
         store.remove('trip_transports', id); closeSheet(); toast('삭제했습니다.');
+      },
+      // 이 이동편의 항공권 값 → 가계부 사전 결제 (있으면 그 기록을 엶)
+      'tr-pay': async () => {
+        const { openExpenseEditor } = await import('../views/tabs/budget.js');
+        if (paid) { openExpenseEditor(store, paid.id); return; }
+        openExpenseEditor(store, null, { prepaid: true, prefill: {
+          place_name: [titleText(t), routeText(t)].filter(Boolean).join(' ').slice(0, 100), category: '교통', transport_id: id,
+        } });
       },
       'pick-airport': (b) => {
         const key = b.dataset.key;

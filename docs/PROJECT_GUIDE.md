@@ -194,7 +194,7 @@ public/privacy.html, terms.html   ※ [운영자 이름], [연락처 이메일] 
 | 013_day_stay | itinerary_days.stay_place_id (날짜별 오늘 묵는 숙소, 같은 여행 장소만, 장소 삭제 시 비움) |
 | 012_ai_plan | AI 일정 짜기: ai_calls.kind 에 plan, 하루 한도 추천과 합산, 여행당 `ai_plan_trip_limit()`(3), `ai_plan_status`, itinerary_items.ai_plan, admin_ai_users 에 일정 통계 |
 | 016_ai_guides | AI 가이드 카드: ai_calls.kind 에 guide + `sub`(카드 종류), 하루 한도 추천 · 일정과 합산, 카드마다 여행당 `ai_guide_card_limit()`(3), `begin_ai_guide`, `ai_guide_status`, guides.ai_guide, admin_ai_users 에 가이드 통계 |
-| 018_wallets | 가계부 공금: `trip_budgets.money_mode`(personal · pool_cash · pool_card), `trip_wallets`(이름 · 카드/현금 · 들고 있는 사람), `budget_topups` 에 kind(budget · charge · withdraw) · wallet_id · from_wallet · home_amount · shares, `expenses.wallet_id` |
+| 018_wallets | 가계부 공금: `trip_budgets.money_mode`(personal · pool_cash · pool_card), `trip_wallets`(이름 · 카드/현금 · 들고 있는 사람), `budget_topups` 에 kind(budget · charge · withdraw) · wallet_id · from_wallet · home_amount · shares, `expenses.wallet_id`, 사전 결제 `expenses.prepaid` · `expenses.transport_id` |
 | 017_images | 사진: `trip_images`(콘텐츠 표, 여행당 100 · 항목당 4, 보관 기간 지난 여행은 추가 막음), Storage 버킷 `trip-images`(비공개, 1.5MB, webp/jpeg) + 객체 RLS(멤버 · 받기 단계 · 저장공간 예산), `image_settings` · `image_usage`(월 받기 추정), `note_image_download` · `image_status` · `admin_image_stats` · `admin_set_image_settings`, 정리용 `image_gc_*`(service_role 전용) |
 | 015_transports | 이동편 `trip_transports`(콘텐츠 표, 멤버 RLS, 행 30, Realtime) + `view_trip` 에 이동편 추가 |
 | 011_likes_view | 찜 `place_likes`(콘텐츠 테이블, 자기 멤버 것만 추가·수정 RLS) + 보기 전용 링크 `trip_view_links`, `set_view_link`(owner), `view_trip`(anon 허용) |
@@ -547,9 +547,8 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 ### 7-7-15. 가계부 화면 (2026-11-19, 1단계)
 
 - 위 요약 판(남은 잔액 · 지출 · 총 예산 · 현금/카드 · 환율) 위로 목록 판이 손가락을 따라 올라옴(`components/slide-sheet.js`, 장소 탭과 같은 규칙). 다 올라오면 한 줄(남은 잔액 · 지출)만 남음. 판 위 손잡이를 누르면 올리기 ↔ 내리기.
-- 판 안: [지출 내역 | 정산] 전환. 정산 보기에 사람별 낸 돈 · 쓴 몫 · 받을/보낼 돈과 송금 목록.
+- 판 안: [현지 지출 | 사전 결제 | 정산] 전환. 정산 보기에 사람별 낸 돈 · 쓴 몫 · 받을/보낼 돈과 송금 목록.
 - 지출 목록(`lib/expense-view.js`): 정렬 `budget:sort` 날짜순(날짜 소제목 · 그날 합계) · 금액순 · 카테고리별(합계 · 비율 막대). 필터 `budget:filter:<tripId>` 결제 수단 · 낸 사람 · 누구 몫 · 카테고리 → 칩 표시 + 걸린 합계. 한 줄: 카테고리 아이콘 · 이름 · 시간(또는 날짜) · 수단 · 낸 사람 · 몫(모두/이름/개인).
-- 지출이 없으면 [예시로 화면 보기]: 저장하지 않는 예시 지출 10건(멤버가 혼자면 "동행" 추가)으로 화면을 미리 봄.
 
 ### 7-7-16. 가계부 공금 지갑 (018, 2026-11-19, 2단계)
 
@@ -559,6 +558,12 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
 - 지출: "어디서 냈나" = 공금 지갑(낸 사람 없음, 수단 = 지갑 종류) 또는 개인 돈(결제자 · 수단). 마지막 선택 기억(`budget:lastSource:<tripId>`). "누구 몫"에 [모두] · [나만(개인)].
 - 목록: 지갑 지출은 지갑 이름, 개인 돈은 "개인 카드 · 이름". 날짜순 · 필터 없음이면 충전 · 인출이 그날 끝에 점선 줄(합계 제외, 누르면 수정). 필터 "어디서 냈나" = 지갑 · 개인 현금 · 개인 카드.
 - 정산(`settle.js poolBalances`): 차액 = (넣은 충전 + 개인 돈으로 낸 지출) − 쓴 몫 − 들고 있는 공금 잔액 → 합 0 → 송금 목록. 남은 공금은 들고 있는 사람이 넣은 비율대로 돌려주는 것과 같음. 들고 있는 사람이 없는 지갑은 모두가 같이 든 것으로. 지갑이 없으면 예전 `balances` 와 같은 결과(테스트).
+
+### 7-7-17. 사전 결제 (018, 2026-11-19, 3단계)
+
+- `expenses.prepaid`: 항공 · 숙소처럼 여행 전에 낸 돈. 현지 지출 목록 · 합계 · 남은 잔액 · 지갑 잔액에서 빠지고, 정산에는 포함(개인 돈만, 지갑 고르기 숨김). 기본 통화는 내 통화.
+- 가계부 [사전 결제] 보기: 목록 · 합계, [+ 추가]. 요약에 "사전 결제 · 여행 총비용(사전 결제 + 현지 지출, 내 통화)". 지출 입력 창 맨 위 체크박스로 바꿀 수 있음.
+- 이동편 수정 창 [결제 금액 넣기] → 사전 결제(`transport_id`, 사용처 = 편명 + 구간), 있으면 그 기록을 엶. 숙소 카테고리 장소 상세 [숙박비 넣기] → 사전 결제(`place_id`).
 
 ### 7-7-14. 가이드 ↔ 장소 연결 (2026-11-19)
 

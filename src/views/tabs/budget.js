@@ -1,7 +1,7 @@
 import { html, setHTML, delegate, formValues, $ } from '../../lib/dom.js';
 import { openSheet, closeSheet, toast, emptyCard, confirmAction, copyText } from '../../components/ui.js';
 import { money, todayIn, shortTime, rateText, approxMoney, dayLabel } from '../../lib/format.js';
-import { EXPENSE_CATS, CAT_ICON, CAT_COLOR, EMPTY_EXPENSE_FILTER, parseExpenseFilter, expenseFilterCount, filterExpenses, groupExpenses, sampleExpenses } from '../../lib/expense-view.js';
+import { EXPENSE_CATS, CAT_ICON, CAT_COLOR, EMPTY_EXPENSE_FILTER, parseExpenseFilter, expenseFilterCount, filterExpenses, groupExpenses } from '../../lib/expense-view.js';
 import { attachSlideSheet } from '../../components/slide-sheet.js';
 import { sheetMaxOff } from '../../lib/sheet-scroll.js';
 import { getPrefStr, setPrefStr } from '../../lib/prefs.js';
@@ -60,14 +60,12 @@ const COMPACT_PX = 64;          // 판이 다 올라왔을 때 남는 요약 높
 const PREF_SORT = 'budget:sort';
 const filterKey = (tripId) => `budget:filter:${tripId}`;
 const SORTS = [['date', '날짜순'], ['amount', '금액순'], ['cat', '카테고리별']];
-const SAMPLE_MATE = { id: 'sample-mate', display_name: '동행', color: '#f472b6' };
 
 export function mount(root, store) {
   const state = {
-    view: 'list',                                    // list | settle
+    view: 'list',                                    // list(현지 지출) | prepaid(사전 결제) | settle
     sort: SORTS.some(([k]) => k === getPrefStr(PREF_SORT)) ? getPrefStr(PREF_SORT) : 'date',
     filter: parseExpenseFilter(getPrefStr(filterKey(store.tripId))),
-    preview: false,                                  // 지출이 없을 때 [예시로 보기]
   };
 
   // ---------- 높이 고정 + 겹쳐 놓기 (장소 탭과 같은 방식) ----------
@@ -109,19 +107,18 @@ export function mount(root, store) {
   const onGrip = () => slide.setOff(slide.off() > 0 ? 0 : 1e6, true);
   $('#bd-grip', root).addEventListener('click', onGrip);
 
-  // ---------- 데이터 (예시 화면이면 저장하지 않는 예시) ----------
+  // ---------- 데이터 ----------
+  //  all: 모든 지출 (정산) · expenses: 현지 지출 (목록 · 합계 · 지갑) · prepaid: 사전 결제 (항공 · 숙소)
   function data() {
     const b = store.budget || { local_currency: 'KRW', home_currency: 'KRW', rate: 1, base_amount: 0 };
-    let members = store.activeMembers();
-    let expenses = store.list('expenses');
-    if (state.preview) {
-      if (members.length < 2) members = [...members, SAMPLE_MATE];
-      expenses = sampleExpenses({ start: store.trip?.start_date, local: b.local_currency, memberIds: members.map((m) => m.id) });
-    }
-    const memberOf = (id) => store.member(id) || (id === SAMPLE_MATE.id ? SAMPLE_MATE : null);
+    const members = store.activeMembers();
+    const all = store.list('expenses');
+    const expenses = all.filter((e) => !e.prepaid);
+    const prepaid = all.filter((e) => e.prepaid);
+    const memberOf = (id) => store.member(id);
     const wallets = walletsOf(store);
     const walletOf = (id) => wallets.find((w) => w.id === id) || store.get('trip_wallets', id) || null;
-    return { b, members, expenses, memberOf, wallets, walletOf, pool: isPool(store), topups: store.list('budget_topups') };
+    return { b, members, all, expenses, prepaid, memberOf, wallets, walletOf, pool: isPool(store), topups: store.list('budget_topups') };
   }
 
   function drawTop(d) {
@@ -154,6 +151,7 @@ export function mount(root, store) {
           <div><span class="text-slate-500 block">총 예산</span><b class="font-mono text-white">${money(totalBudget, L)}</b>${H !== L ? html`<span class="block font-mono text-slate-500">${homeOf(totalBudget)}</span>` : ''}</div>
           <div><span class="text-slate-500 block">현금 지출</span><b class="font-mono text-amber-300">${money(cash, L)}</b></div>
           <div><span class="text-slate-500 block">카드 등</span><b class="font-mono text-sky-300">${money(totalSpent - cash, L)}</b></div>
+          ${prepaidLine(d, totalSpent, 'col-span-3')}
           <p class="col-span-3 text-[9px] text-emerald-300/80 font-mono truncate">환율 ${rateText(b)}</p>
         </div>
       </div>`);
@@ -199,9 +197,18 @@ export function mount(root, store) {
             <button data-action="move-charge" class="h-8 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold"><i class="fa-solid fa-plus mr-1"></i>충전 · 환전</button>
             ${hasCard ? html`<button data-action="move-withdraw" class="h-8 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 text-[11px] font-bold"><i class="fa-solid fa-money-bill-transfer mr-1"></i>현금 인출</button>` : ''}
           </div>
+          ${prepaidLine(d, totalSpent, '')}
           <p class="text-[9px] text-emerald-300/80 font-mono truncate">환율 ${rateText(b)}${real ? ` · 충전 평균 ${money(real * (CURRENCY_MONEY[L]?.base || 1), H)}/${(CURRENCY_MONEY[L]?.base || 1).toLocaleString('ko-KR')}${unitText(L)}` : ''}</p>
         </div>
       </div>`);
+  }
+
+  // 사전 결제가 있으면: 사전 결제 + 현지 지출 = 여행 총비용 (내 통화)
+  function prepaidLine(d, localSpent, cls) {
+    if (!d.prepaid.length) return '';
+    const H = d.b.home_currency; const rate = Number(d.b.rate) || 1;
+    const pre = d.prepaid.reduce((s, e) => s + toLocal(store, e.amount, e.currency), 0) * rate;
+    return html`<p class="${cls} text-[10px] text-slate-400">사전 결제 <b class="font-mono text-violet-300">${money(pre, H)}</b> · 여행 총비용 <b class="font-mono text-white">${money(pre + localSpent * rate, H)}</b></p>`;
   }
 
   function shareText(e, d) {
@@ -224,16 +231,11 @@ export function mount(root, store) {
       ...f.cat.map((v) => ['cat', v, v]),
     ];
     setHTML($('#bd-head', root), html`
-      ${state.preview ? html`
-        <div class="mb-2 px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-400/40 text-[10px] text-amber-100 flex items-center gap-2">
-          <i class="fa-solid fa-eye text-amber-300"></i><span class="flex-1">예시 화면이에요. 저장되지 않아요.</span>
-          <button data-action="preview-off" class="font-bold text-amber-300">닫기</button>
-        </div>` : ''}
       <div class="flex items-center gap-2 mb-2">
         <div class="flex-1 flex p-0.5 rounded-xl bg-slate-800/70 border border-white/5">
-          ${tabBtn('list', `지출 내역 ${d.expenses.length ? d.expenses.length : ''}`)}${tabBtn('settle', '정산')}
+          ${tabBtn('list', `현지 지출${d.expenses.length ? ` ${d.expenses.length}` : ''}`)}${tabBtn('prepaid', `사전 결제${d.prepaid.length ? ` ${d.prepaid.length}` : ''}`)}${tabBtn('settle', '정산')}
         </div>
-        <button data-action="add" class="flex-shrink-0 h-8 px-3 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> 지출</button>
+        ${state.view === 'settle' ? '' : html`<button data-action="${state.view === 'prepaid' ? 'add-prepaid' : 'add'}" class="flex-shrink-0 h-8 px-3 rounded-xl bg-neon-cyan text-night-950 font-black text-xs"><i class="fa-solid fa-plus"></i> ${state.view === 'prepaid' ? '추가' : '지출'}</button>`}
       </div>
       ${state.view === 'list' && d.expenses.length ? html`
         <div class="flex items-center gap-1.5 mb-2 overflow-x-auto no-scrollbar">
@@ -293,12 +295,7 @@ export function mount(root, store) {
   }
 
   function listHtml(d) {
-    if (!d.expenses.length) {
-      return html`<div class="space-y-2 pt-2">
-        ${emptyCard('등록된 지출이 없어요. [+ 지출]로 첫 지출을 적어 보세요.')}
-        <button data-action="preview-on" class="btn-ghost w-full py-2.5 text-xs"><i class="fa-solid fa-eye mr-1"></i>예시로 화면 보기</button>
-      </div>`;
-    }
+    if (!d.expenses.length) return html`<div class="pt-2">${emptyCard('등록된 지출이 없어요. [+ 지출]로 첫 지출을 적어 보세요.')}</div>`;
     const L = d.b.local_currency;
     const toL = (e) => toLocal(store, e.amount, e.currency);
     const rows = filterExpenses(d.expenses, state.filter, d.members.map((m) => m.id));
@@ -330,8 +327,26 @@ export function mount(root, store) {
     </div>`;
   }
 
+  // 사전 결제: 항공 · 숙소처럼 여행 전에 낸 돈 (정산에는 포함, 현지 지출 · 지갑 잔액과는 따로)
+  function prepaidHtml(d) {
+    const H = d.b.home_currency; const rate = Number(d.b.rate) || 1;
+    if (!d.prepaid.length) {
+      return html`<div class="pt-2 space-y-2">
+        ${emptyCard('항공권 · 숙소처럼 여행 전에 낸 돈을 적어 두면 정산과 여행 총비용에 같이 들어가요.')}
+        <p class="text-[10px] text-slate-500 px-1">일정 탭의 이동편이나 숙소 장소 상세에서도 [결제 금액]으로 바로 넣을 수 있어요.</p>
+      </div>`;
+    }
+    const rows = [...d.prepaid].sort((a, b) => String(b.spent_date).localeCompare(String(a.spent_date)));
+    const total = rows.reduce((s, e) => s + toLocal(store, e.amount, e.currency), 0) * rate;
+    return html`<div class="space-y-1.5">
+      <p class="text-[11px] text-slate-300 px-1">${rows.length}건 · 합계 <b class="font-mono text-white">${money(total, H)}</b></p>
+      ${rows.map((e) => rowHtml(e, d, { showDate: true }))}
+    </div>`;
+  }
+
   function settleHtml(d) {
-    const { b, members, expenses } = d;
+    const { b, members } = d;
+    const expenses = d.all;   // 사전 결제도 정산에 포함
     const L = b.local_currency; const H = b.home_currency; const rate = Number(b.rate) || 1;
     if (members.length < 2) return html`<div class="pt-2">${emptyCard('함께 가는 멤버가 있으면 누가 누구에게 얼마를 보내면 되는지 계산해 드려요.')}</div>`;
     const bal = poolBalances({ expenses, topups: d.pool ? d.topups.filter((t) => kindOf(t) !== 'budget') : [], wallets: d.pool ? d.wallets : [],
@@ -342,7 +357,7 @@ export function mount(root, store) {
     const cl = (id) => color(d.memberOf(id)?.color, '#e2e8f0');
     return html`<div class="space-y-2 pt-1">
       <div class="glass-card p-3 rounded-2xl space-y-2">
-        <p class="text-[11px] font-bold text-slate-300">사람별 (균등 분담)</p>
+        <p class="text-[11px] font-bold text-slate-300">사람별 (균등 분담${d.prepaid.length ? ' · 사전 결제 포함' : ''})</p>
         ${members.map((m) => {
           const x = byId.get(m.id) || { paid: 0, owed: 0, net: 0 };
           return html`<div class="p-2 rounded-xl bg-night-950/60 border border-white/5">
@@ -357,7 +372,7 @@ export function mount(root, store) {
       <div class="glass-card p-3 rounded-2xl">
         <div class="flex items-center justify-between mb-1.5">
           <span class="text-[11px] font-bold text-slate-300"><i class="fa-solid fa-right-left text-neon-cyan mr-1"></i>이렇게 보내면 끝나요</span>
-          ${transfers.length && !state.preview ? html`<button data-action="copy-settle" class="text-[10px] text-neon-cyan">복사</button>` : ''}
+          ${transfers.length ? html`<button data-action="copy-settle" class="text-[10px] text-neon-cyan">복사</button>` : ''}
         </div>
         ${transfers.length ? html`<div class="space-y-1">${transfers.map((t) => html`
           <div class="flex items-center gap-1.5 text-[11px] p-2 rounded-xl bg-night-950/60 border border-white/5">
@@ -376,22 +391,19 @@ export function mount(root, store) {
   }
 
   function update() {
-    if (state.preview && store.list('expenses').length) state.preview = false;   // 진짜 지출이 생기면 예시 끝
     const d = data();
     drawTop(d);
     drawHead(d);
-    setHTML(scroller, state.view === 'settle' ? settleHtml(d) : listHtml(d));
+    setHTML(scroller, state.view === 'settle' ? settleHtml(d) : state.view === 'prepaid' ? prepaidHtml(d) : listHtml(d));
     layout();
   }
   const saveFilter = () => setPrefStr(filterKey(store.tripId), JSON.stringify(state.filter));
   const toTop = () => { scroller.scrollTop = 0; };
 
   const off = delegate(root, {
-    add: () => { if (state.preview) { state.preview = false; update(); } openExpenseEditor(store, null); },
-    edit: (el) => {
-      if (state.preview) { toast('예시 지출이라 고칠 수 없어요. [+ 지출]로 직접 적어 보세요.'); return; }
-      openExpenseEditor(store, el.dataset.id);
-    },
+    add: () => openExpenseEditor(store, null),
+    'add-prepaid': () => openExpenseEditor(store, null, { prepaid: true }),
+    edit: (el) => openExpenseEditor(store, el.dataset.id),
     settings: () => openBudgetSettings(store),
     'copy-settle': () => copyText(settleText(store), '정산 목록'),
     'bd-view': (el) => { state.view = el.dataset.v; toTop(); update(); },
@@ -403,11 +415,9 @@ export function mount(root, store) {
       saveFilter(); update();
     },
     'bd-filter-clear': () => { state.filter = { ...EMPTY_EXPENSE_FILTER }; saveFilter(); update(); },
-    'preview-on': () => { state.preview = true; update(); },
     'move-charge': () => openMoveEditor(store, 'charge'),
     'move-withdraw': () => openMoveEditor(store, 'withdraw'),
     'move-edit': (el) => { const t = store.get('budget_topups', el.dataset.id); if (t) openMoveEditor(store, t.kind, t.id); },
-    'preview-off': () => { state.preview = false; state.filter = { ...EMPTY_EXPENSE_FILTER }; slide.setOff(0, true); update(); },
   });
   const onResize = () => { fitHeight(); layout(); };
   window.addEventListener('resize', onResize);
@@ -468,15 +478,23 @@ function openExpenseFilter(current, d, onChange) {
   });
 }
 
-function openExpenseEditor(store, id) {
+// opts.prepaid: 사전 결제로 새로 (내 통화 · 개인 돈) · opts.prefill: 이동편 · 숙소에서 열 때 채울 값
+export function openExpenseEditor(store, id, { prepaid = false, prefill = {} } = {}) {
   const b = store.budget || {};
   const now = new Date();
-  const e = id ? store.get('expenses', id) : {
+  const e = id ? store.get('expenses', id) : prepaid ? {
+    spent_date: todayIn(store.trip.timezone), spent_time: null,
+    currency: b.home_currency || b.local_currency, method: 'card', category: '교통',
+    paid_by: store.me?.id, prepaid: true, ...prefill,
+  } : {
     spent_date: todayIn(store.trip.timezone),
     spent_time: now.toTimeString().slice(0, 5),
     currency: b.local_currency, method: 'card', category: '음식',
     paid_by: store.me?.id,
   };
+  if (!e) return;
+  const ready = 'money_mode' in b;   // migration_018 (사전 결제 칸 포함)
+  let isPrepaid = !!e.prepaid;
   const members = store.activeMembers();
   const places = store.list('places');
   const split = new Set(e.split_with?.length ? e.split_with : members.map((m) => m.id));
@@ -489,8 +507,11 @@ function openExpenseEditor(store, id) {
   const srcBtn = (v, label, icon, clr) => html`<button type="button" data-src="${v}" class="h-8 px-2.5 rounded-lg border text-[11px] font-bold whitespace-nowrap flex items-center gap-1 ${source === v ? 'bg-neon-cyan/15 text-neon-cyan border-neon-cyan/50' : 'bg-slate-800 text-slate-300 border-white/10'}"><i class="fa-solid ${icon} text-[10px]" style="color:${clr}"></i>${label}</button>`;
 
   openSheet(html`
-    <h3 class="text-base font-black text-white mb-3">${id ? '지출 수정' : '새 지출'}</h3>
+    <h3 class="text-base font-black text-white mb-3">${id ? (isPrepaid ? '사전 결제 수정' : '지출 수정') : isPrepaid ? '사전 결제' : '새 지출'}</h3>
     <form id="exp-form" class="space-y-2.5">
+      ${ready ? html`<label class="flex items-center gap-2 p-2 rounded-xl bg-violet-500/10 border border-violet-400/30 text-[11px] text-violet-100">
+        <input type="checkbox" name="prepaid" ${isPrepaid ? 'checked' : ''} class="accent-violet-400">
+        사전 결제 <span class="text-violet-300/70">(항공 · 숙소처럼 여행 전에 낸 돈)</span></label>` : ''}
       <div class="grid grid-cols-2 gap-2">
         <div><label class="label">날짜</label><input type="date" name="spent_date" class="input" required value="${e.spent_date}"></div>
         <div><label class="label">시간</label><input type="time" name="spent_time" class="input" value="${shortTime(e.spent_time)}"></div>
@@ -505,12 +526,12 @@ function openExpenseEditor(store, id) {
       </div>
       <div><label class="label">항목</label><select name="category" class="input">
         ${EXPENSE_CATS.map((c) => html`<option ${c === e.category ? 'selected' : ''}>${c}</option>`)}</select></div>
-      ${pool ? html`<div><label class="label">어디서 냈나</label>
+      ${pool ? html`<div id="exp-src-box" class="${isPrepaid ? 'hidden' : ''}"><label class="label">어디서 냈나</label>
         <div id="exp-src" class="flex flex-wrap gap-1.5">
           ${wallets.map((w) => srcBtn(w.id, w.name, WALLET_ICON[w.kind], WALLET_COLOR[w.kind]))}
           ${srcBtn('me', '개인 돈', 'fa-user', '#cbd5e1')}
         </div></div>` : ''}
-      <div id="exp-personal" class="grid grid-cols-2 gap-2 ${pool && source !== 'me' ? 'hidden' : ''}">
+      <div id="exp-personal" class="grid grid-cols-2 gap-2 ${pool && source !== 'me' && !isPrepaid ? 'hidden' : ''}">
         <div><label class="label">결제자</label><select name="paid_by" class="input">
           ${members.map((m) => html`<option value="${m.id}" ${m.id === e.paid_by ? 'selected' : ''}>${m.display_name}</option>`)}</select></div>
         <div><label class="label">결제 수단</label><select name="method" class="input">
@@ -530,6 +551,13 @@ function openExpenseEditor(store, id) {
       ${id ? html`<button type="button" data-action="delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">삭제</button>` : ''}
     </form>`, (el) => {
     const form = $('#exp-form', el);
+    // 사전 결제는 개인 돈으로만 (공금 지갑 고르기 숨김)
+    const syncPrepaid = () => {
+      isPrepaid = !!form.elements.prepaid?.checked;
+      $('#exp-src-box', el)?.classList.toggle('hidden', isPrepaid);
+      $('#exp-personal', el).classList.toggle('hidden', pool && !isPrepaid && source !== 'me');
+    };
+    form.elements.prepaid?.addEventListener('change', syncPrepaid);
     const onPick = (ev) => {
       const sb = ev.target.closest('[data-src]');
       if (sb) {
@@ -539,7 +567,7 @@ function openExpenseEditor(store, id) {
           x.classList.toggle('bg-neon-cyan/15', on); x.classList.toggle('text-neon-cyan', on); x.classList.toggle('border-neon-cyan/50', on);
           x.classList.toggle('bg-slate-800', !on); x.classList.toggle('text-slate-300', !on); x.classList.toggle('border-white/10', !on);
         });
-        $('#exp-personal', el).classList.toggle('hidden', source !== 'me');
+        $('#exp-personal', el).classList.toggle('hidden', source !== 'me' && !isPrepaid);
         return;
       }
       const sh = ev.target.closest('[data-share]');
@@ -562,7 +590,7 @@ function openExpenseEditor(store, id) {
       const v = formValues(form);
       const chosen = [...form.querySelectorAll('input[name=split]:checked')].map((x) => x.value);
       const place = places.find((p) => p.name === v.place_name);
-      const wallet = pool && source !== 'me' ? wallets.find((w) => w.id === source) : null;
+      const wallet = pool && source !== 'me' && !isPrepaid ? wallets.find((w) => w.id === source) : null;
       const data = {
         spent_date: v.spent_date, spent_time: v.spent_time, place_name: v.place_name, place_id: place?.id || null,
         amount: Number(v.amount), currency: v.currency, category: v.category,
@@ -571,12 +599,13 @@ function openExpenseEditor(store, id) {
         ...(pool || e.wallet_id ? { wallet_id: wallet ? wallet.id : null } : {}),   // migration_018 전에는 칸이 없음
         note: v.note,
         split_with: chosen.length && chosen.length < members.length ? chosen : null,
+        ...(ready ? { prepaid: isPrepaid, transport_id: isPrepaid ? e.transport_id || null : null } : {}),
       };
-      if (pool && !id) setPrefStr(lastKey, source);
+      if (pool && !id && !isPrepaid) setPrefStr(lastKey, source);
       if (!(data.amount > 0)) { toast('금액을 입력해 주세요.', 'error'); return; }
       if (id) store.update('expenses', id, data); else store.insert('expenses', data);
       closeSheet();
-      toast(id ? '수정했습니다.' : '지출을 등록했습니다.');
+      toast(id ? '수정했습니다.' : isPrepaid ? '사전 결제를 적었어요.' : '지출을 등록했습니다.');
     });
     return off;
   });

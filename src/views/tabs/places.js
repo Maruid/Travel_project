@@ -12,7 +12,7 @@ export function loadMapLib() {
   return mapLibPromise;
 }
 import { openSheet, closeSheet, toast, emptyCard, confirmAction } from '../../components/ui.js';
-import { walkInfo, priceRange, priceInHome, distanceKm } from '../../lib/format.js';
+import { walkInfo, priceRange, priceInHome, distanceKm, money } from '../../lib/format.js';
 import { isCurrencyCode } from '../../lib/currency.js';
 import { lookupMapsLink, geocode, currentPosition, enrichPlace } from '../../lib/place-lookup.js';
 import { progressTicker, timingText, sourceLabel } from '../../lib/ai-stream.js';
@@ -918,6 +918,9 @@ export function placeDetailHtml(store, p, { from = null, readOnly = false } = {}
   const today = todayIndexMondayFirst(tz);
   // 이 장소에 연결된 가이드 카드 (명소 체크포인트 · 숙소 정보 등)
   const guidesFor = readOnly ? [] : guidesLinking(store, p.id);
+  // 숙소 카테고리: 숙박비를 가계부 사전 결제로 (migration_018)
+  const stayPay = !readOnly && cat?.kind === 'lodging' && 'money_mode' in (store.budget || {})
+    ? { row: store.list('expenses').find((e) => e.prepaid && e.place_id === p.id) || null } : null;
   const site = safeUrl(p.website);
   return html`
     ${readOnly ? '' : geoReviewCard(p)}
@@ -938,6 +941,12 @@ export function placeDetailHtml(store, p, { from = null, readOnly = false } = {}
         <button data-action="more" class="flex justify-center">${act('', '<i class="fa-solid fa-ellipsis"></i>', '더보기')}</button>`}
     </div>
     ${names.length ? html`<p class="-mt-1 mb-2 text-[11px] text-rose-200 truncate"><i class="fa-solid fa-heart text-rose-400 mr-1"></i>${names.join(', ')}</p>` : ''}
+    ${stayPay ? html`
+      <button data-action="stay-pay" class="w-full mb-2 p-2.5 rounded-2xl bg-violet-500/10 border border-violet-400/30 text-left flex items-center gap-2">
+        <i class="fa-solid fa-receipt text-violet-300 text-xs"></i>
+        <span class="flex-1 min-w-0 text-[11px] text-violet-100 truncate">${stayPay.row ? html`숙박비 <b class="font-mono">${money(stayPay.row.amount, stayPay.row.currency)}</b> · 가계부 사전 결제` : '숙박비 넣기 (가계부 사전 결제)'}</span>
+        <i class="fa-solid fa-chevron-right text-[10px] text-violet-300/70"></i>
+      </button>` : ''}
     ${guidesFor.length ? html`
       <button data-action="guide-open" class="w-full mb-2 p-2.5 rounded-2xl bg-purple-500/10 border border-purple-400/30 text-left flex items-center gap-2">
         <i class="fa-solid fa-book-open text-purple-300 text-xs"></i>
@@ -988,6 +997,12 @@ export function openPlaceDetail(store, id, from) {
       reopen();
     },
     more: () => openPlaceMore(store, p, from, reopen),
+    'stay-pay': async () => {
+      const { openExpenseEditor } = await import('./budget.js');
+      const row = store.list('expenses').find((e) => e.prepaid && e.place_id === id);
+      if (row) openExpenseEditor(store, row.id);
+      else openExpenseEditor(store, null, { prepaid: true, prefill: { place_name: p.name, place_id: id, category: '숙박' } });
+    },
     'guide-open': () => {
       closeSheet();
       try { sessionStorage.setItem('guide:focus', id); } catch {}

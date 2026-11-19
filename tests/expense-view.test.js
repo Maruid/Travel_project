@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { filterExpenses, groupExpenses, parseExpenseFilter, expenseFilterCount, sampleExpenses, EMPTY_EXPENSE_FILTER } from '../src/lib/expense-view.js';
+import { filterExpenses, groupExpenses, parseExpenseFilter, expenseFilterCount, EMPTY_EXPENSE_FILTER } from '../src/lib/expense-view.js';
 
 const E = [
   { id: 'a', spent_date: '2026-11-24', spent_time: '12:00', category: '음식', amount: 1000, method: 'card', paid_by: 'm1', split_with: null },
@@ -34,11 +34,4 @@ test('금액순 · 카테고리별', () => {
 test('필터 저장값 읽기', () => {
   assert.deepEqual(parseExpenseFilter('{"cat":["음식",3],"method":"x"}'), { method: [], payer: [], share: [], cat: ['음식'] });
   assert.equal(expenseFilterCount(parseExpenseFilter('bad')), 0);
-});
-
-test('예시 지출', () => {
-  const s = sampleExpenses({ start: '2026-11-24', local: 'JPY', memberIds: ['m1', 'm2'] });
-  assert.equal(s.length, 10);
-  assert.equal(s[0].spent_date, '2026-11-24');
-  assert.ok(s.every((e) => e.currency === 'JPY' && ['m1', 'm2'].includes(e.paid_by)));
 });
