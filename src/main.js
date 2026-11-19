@@ -18,6 +18,8 @@ route('/create', () => import('./views/create.js'));
 route('/join/:token', () => import('./views/join.js'));
 route('/trip/:id/:tab?', () => import('./views/trip.js'));
 route('/admin', () => import('./views/admin.js'));
+// 관리자 보기: 같은 여행 화면을 읽기 전용으로 (params.admin)
+route('/admin/trip/:id/:tab?', () => import('./views/trip.js').then((m) => ({ render: (app, p) => m.render(app, { ...p, admin: true }) })));
 route('/view/:token', () => import('./views/view.js'));   // 보기 전용 공유 링크 (로그인 없음)
 
 async function boot() {

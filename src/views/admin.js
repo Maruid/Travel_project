@@ -1,8 +1,13 @@
 import { html, setHTML, delegate, formValues, $ } from '../lib/dom.js';
 import { getUser, isAnonymous, signInWithGoogle, signOut } from '../lib/auth.js';
 import { rpc, supabase, errorText } from '../lib/supabase.js';
-import { spinner, toast, copyText, confirmAction, emptyCard } from '../components/ui.js';
+import { spinner, toast, copyText, confirmAction, emptyCard, openSheet, closeSheet } from '../components/ui.js';
 import { navigate } from '../router.js';
+import { todayIn, shortDateRange } from '../lib/format.js';
+
+const TAB_KEY = 'admin:tab';   // sessionStorage: 마지막으로 본 관리자 탭
+const SORTS = [['active', '최근 활동'], ['created', '만든 날'], ['date', '여행 날짜']];
+const FROM_ADMIN = 'nav:fromAdmin';   // trip.js 와 같은 키: 관리자 보기 [←] 가 관리자 화면으로 돌아오게
 
 const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const LEVEL_TEXT = { ok: '정상', warn: '70% 넘음 · 경고', thumbs: '85% 넘음 · 썸네일과 문서만', blocked: '한도 도달 · 사진 받기 막힘' };
@@ -171,8 +176,63 @@ export async function render(app) {
     return { cleanup: delegate(app, { ...actions, 'copy-uid': () => copyText(user.id, 'uid') }) };
   }
 
+  let tab = 'trips';
+  try { tab = sessionStorage.getItem(TAB_KEY) || 'trips'; } catch { /* 무시 */ }
+  let q = '';
+  let sort = 'active';
+  let trips = [];
+
+  // 여행 상태: 여행 중 / D-n / 지남 (여행지 시간대는 목록에 없으므로 이 기기 날짜 기준)
+  const tripState = (t) => {
+    const today = todayIn(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    if (!t.start_date) return null;
+    if (today < t.start_date) {
+      const d = Math.round((new Date(t.start_date) - new Date(today)) / 86400000);
+      return html`<span class="text-[9px] px-1.5 rounded bg-neon-cyan/15 text-neon-cyan font-bold">D-${d}</span>`;
+    }
+    if (!t.end_date || today <= t.end_date) return html`<span class="text-[9px] px-1.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">여행 중</span>`;
+    return html`<span class="text-[9px] px-1.5 rounded bg-slate-700 text-slate-400 font-bold">지남</span>`;
+  };
+
+  function renderTrips() {
+    const box = $('#trip-list', app);
+    if (!box) return;
+    const needle = q.trim().toLowerCase();
+    const list = trips.filter((t) => !needle || [t.title, t.destination, t.owner_name, t.creation_code]
+      .some((v) => String(v || '').toLowerCase().includes(needle)));
+    const key = { active: 'last_active_at', created: 'created_at', date: 'start_date' }[sort];
+    list.sort((a, b) => String(b[key] || '').localeCompare(String(a[key] || '')));
+    setHTML(box, list.length ? html`
+      <p class="text-[10px] text-slate-500 px-1 mb-1.5">${needle ? `${list.length}개 찾음 / ` : ''}전체 ${trips.length}개 · 누르면 관리자 보기(읽기 전용)로 열려요</p>
+      <section class="set-group">
+        ${list.map((t) => html`
+          <div role="button" tabindex="0" data-action="open-trip" data-id="${t.trip_id}" class="set-row">
+            <span class="flex-1 min-w-0">
+              <span class="flex items-center gap-1.5 min-w-0"><span class="set-title truncate">${t.title}</span>${tripState(t)}</span>
+              <span class="set-sub truncate">${[t.destination, shortDateRange(t.start_date, t.end_date), t.owner_name || 'owner 없음'].filter(Boolean).join(' · ')}</span>
+              <span class="set-sub truncate">${t.member_count}명 · 항목 ${t.item_count} · 최근 활동 ${t.last_active_at ? ago(t.last_active_at) : "없음"}${t.creation_code ? ` · ${t.creation_code}` : ''}</span>
+            </span>
+            <button data-action="trip-menu" data-id="${t.trip_id}" data-title="${t.title}" class="w-8 h-8 rounded-lg text-slate-400 flex-shrink-0"><i class="fa-solid fa-ellipsis"></i></button>
+          </div>`)}
+      </section>` : emptyCard(needle ? '검색 결과가 없어요.' : '여행이 없어요.'));
+  }
+
+  function openTrip(id) {
+    try { sessionStorage.setItem(FROM_ADMIN, '1'); } catch { /* 무시 */ }
+    navigate(`/admin/trip/${id}/places`);
+  }
+
+  async function deleteTrip(id, title) {
+    if (!confirmAction(`"${title}" 여행과 모든 데이터를 삭제할까요? 되돌릴 수 없습니다.`)) return;
+    const { removeTripFiles } = await import('../lib/images.js');
+    await removeTripFiles(id);
+    const { error } = await supabase.from('trips').delete().eq('id', id);
+    if (error) toast(errorText(error), 'error'); else { toast('삭제했습니다.'); load(); }
+  }
+
   async function load() {
-    const [stats, trips, codes, places, aiUsers, aiSummary, images] = await Promise.all([
+    let stats, codes, places, aiUsers, aiSummary, images;
+    [stats, trips, codes, places, aiUsers, aiSummary, images] = await Promise.all([
       rpc('admin_stats'),
       rpc('admin_list_trips'),
       supabase.from('creation_codes').select('*').order('created_at', { ascending: false }).then((r) => {
@@ -202,60 +262,84 @@ export async function render(app) {
         : html`<button data-action="delete-code" data-id="${c.id}" data-code="${c.code}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">삭제</button>`}
     </div>`;
 
+    const requests = (aiUsers || []).filter((u) => u.requested_at && !u.active).length;
+    const dbPct = Math.min(100, (stats.db_size_bytes / (500 * 1024 * 1024)) * 100);
+    const tabBtn = (key, label, badge) => html`
+      <button data-action="admin-tab" data-tab="${key}" class="admin-tab py-1.5 rounded-lg text-[11px] font-bold transition ${tab === key ? 'bg-neon-cyan text-night-950' : 'text-slate-300'}">
+        ${label}${badge ? html`<span class="ml-0.5 text-[9px] px-1 rounded-full bg-amber-500 text-night-950">${badge}</span>` : ''}</button>`;
+    const panel = (key, body) => html`<div data-panel="${key}" class="space-y-3 ${tab === key ? '' : 'hidden'}">${body}</div>`;
+
     setHTML(app, html`${header}
       <main class="p-4 space-y-3 pb-10">
-        <section class="grid grid-cols-3 gap-2">
-          ${[['여행', stats.trips], ['오늘 활성', stats.active_1d], ['7일 활성', stats.active_7d],
-             ['30일 활성', stats.active_30d], ['연결된 멤버', stats.members], ['DB 용량', mb(stats.db_size_bytes)],
-             ...(places ? [['구글 상세 조회', `${places.details}/${places.limit}`], ['구글 검색', `${places.search}/${places.limit}`]] : [])]
-            .map(([k, v]) => html`<div class="glass-card p-3 rounded-2xl">
-              <span class="text-[10px] text-slate-400 block">${k}</span>
-              <span class="text-base font-black font-mono text-white">${v}</span></div>`)}
-        </section>
-        <div class="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
-          <div class="h-full bg-neon-cyan" style="width:${Math.min(100, (stats.db_size_bytes / (500 * 1024 * 1024)) * 100).toFixed(1)}%"></div>
-        </div>
-        <p class="text-[10px] text-slate-500 text-right -mt-2">무료 한도 500MB 대비</p>
-
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white">여행 생성 코드</h3>
-          <form id="code-form" class="grid grid-cols-2 gap-2">
-            <select name="type" class="input"><option value="one_time">일회성</option><option value="permanent">영구</option></select>
-            <input name="max_uses" type="number" min="1" class="input" placeholder="최대 사용 (영구, 비우면 무제한)">
-            <input name="expires" type="date" class="input" title="만료일 (선택)">
-            <input name="code" class="input font-mono uppercase" placeholder="코드 직접 지정 (선택)">
-            <input name="note" class="input col-span-2" maxlength="200" placeholder="메모 (누구에게 줬는지 등)">
-            <button class="btn-primary col-span-2">코드 발급</button>
-          </form>
-          <div class="space-y-1.5 pt-1">
-            ${live.length ? live.map((c) => codeRow(c, true)) : emptyCard('사용 가능한 코드가 없습니다.')}
+        <section class="glass-card p-3 rounded-2xl space-y-2">
+          <div class="grid grid-cols-3 gap-2 text-center">
+            ${[['여행', stats.trips], ['7일 활성', stats.active_7d], ['DB', mb(stats.db_size_bytes)]].map(([k, v]) => html`
+              <div><span class="block text-base font-black font-mono text-white">${v}</span><span class="block text-[10px] text-slate-400">${k}</span></div>`)}
           </div>
-          ${ended.length ? html`
-          <details class="pt-1">
-            <summary class="text-[11px] text-slate-400 cursor-pointer">지난 코드 ${ended.length}개 (만료·소진·폐기 · 90일 뒤 자동 삭제)</summary>
-            <div class="space-y-1.5 mt-2">
-              ${ended.map((c) => codeRow(c, false))}
-              <button data-action="delete-ended" class="w-full py-2 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[11px] font-bold">지난 코드 모두 삭제</button>
+          ${bar(stats.db_size_bytes, 500 * 1024 * 1024, dbPct >= 80 ? 'bg-rose-400' : 'bg-neon-cyan')}
+          <p class="text-[10px] text-slate-500 text-right">DB 무료 한도 500MB 대비 ${dbPct.toFixed(1)}%</p>
+        </section>
+
+        <nav class="grid grid-cols-4 gap-1 p-1 rounded-xl bg-slate-800/60 sticky z-30" style="top:calc(3.25rem + var(--sat))">
+          ${tabBtn('trips', '여행')}${tabBtn('codes', '생성 코드')}${tabBtn('ai', 'AI 권한', requests)}${tabBtn('usage', '사용량')}
+        </nav>
+
+        ${panel('trips', html`
+          <input id="trip-q" class="input" placeholder="이름 · 여행지 · owner · 코드 검색" value="${q}">
+          <div class="flex gap-1.5">
+            ${SORTS.map(([k, label]) => html`<button data-action="trip-sort" data-sort="${k}" class="${sort === k ? 'chip-active' : 'chip'}">${label}</button>`)}
+          </div>
+          <div id="trip-list"></div>`)}
+
+        ${panel('codes', html`
+          <section class="glass-card p-4 rounded-2xl space-y-2">
+            <h3 class="text-xs font-bold text-white">새 코드 발급</h3>
+            <form id="code-form" class="grid grid-cols-2 gap-2">
+              <select name="type" class="input"><option value="one_time">일회성</option><option value="permanent">영구</option></select>
+              <input name="max_uses" type="number" min="1" class="input" placeholder="최대 사용 (영구, 비우면 무제한)">
+              <input name="expires" type="date" class="input" title="만료일 (선택)">
+              <input name="code" class="input font-mono uppercase" placeholder="코드 직접 지정 (선택)">
+              <input name="note" class="input col-span-2" maxlength="200" placeholder="메모 (누구에게 줬는지 등)">
+              <button class="btn-primary col-span-2">코드 발급</button>
+            </form>
+          </section>
+          <section class="glass-card p-4 rounded-2xl space-y-2">
+            <h3 class="text-xs font-bold text-white">사용 가능한 코드 ${live.length}개</h3>
+            <div class="space-y-1.5">
+              ${live.length ? live.map((c) => codeRow(c, true)) : emptyCard('사용 가능한 코드가 없습니다.')}
             </div>
-          </details>` : ''}
-        </section>
-
-        ${aiSection(aiUsers, aiSummary)}
-
-        ${imageSection(images)}
-
-        <section class="glass-card p-4 rounded-2xl space-y-2">
-          <h3 class="text-xs font-bold text-white">전체 여행 ${trips.length}개</h3>
-          ${trips.map((t) => html`
-            <div class="flex items-center justify-between p-2.5 rounded-xl bg-night-950/60 gap-2">
-              <div class="min-w-0">
-                <p class="text-xs font-bold text-white truncate">${t.title}</p>
-                <p class="text-[10px] text-slate-400 truncate">${t.owner_name || '-'} · ${t.member_count}명 · 항목 ${t.item_count} · 최근 활동 ${ago(t.last_active_at)}${t.creation_code ? ` · ${t.creation_code}` : ''}</p>
+            ${ended.length ? html`
+            <details class="pt-1">
+              <summary class="text-[11px] text-slate-400 cursor-pointer">지난 코드 ${ended.length}개 (만료·소진·폐기 · 90일 뒤 자동 삭제)</summary>
+              <div class="space-y-1.5 mt-2">
+                ${ended.map((c) => codeRow(c, false))}
+                <button data-action="delete-ended" class="w-full py-2 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-[11px] font-bold">지난 코드 모두 삭제</button>
               </div>
-              <button data-action="delete-trip" data-id="${t.trip_id}" data-title="${t.title}" class="text-rose-400 text-[10px] px-2 flex-shrink-0">삭제</button>
-            </div>`)}
-        </section>
+            </details>` : ''}
+          </section>`)}
+
+        ${panel('ai', aiUsers ? aiSection(aiUsers, aiSummary) : html`<p class="text-[11px] text-slate-500 text-center py-6">migration_009 를 적용하면 AI 권한이 여기에 보여요.</p>`)}
+
+        ${panel('usage', html`
+          <section class="grid grid-cols-3 gap-2">
+            ${[['여행', stats.trips], ['오늘 활성', stats.active_1d], ['7일 활성', stats.active_7d],
+               ['30일 활성', stats.active_30d], ['연결된 멤버', stats.members], ['DB 용량', mb(stats.db_size_bytes)]]
+              .map(([k, v]) => html`<div class="glass-card p-3 rounded-2xl">
+                <span class="text-[10px] text-slate-400 block">${k}</span>
+                <span class="text-base font-black font-mono text-white">${v}</span></div>`)}
+          </section>
+          ${places ? html`
+          <section class="glass-card p-4 rounded-2xl space-y-2">
+            <h3 class="text-xs font-bold text-white"><i class="fa-brands fa-google text-neon-cyan mr-1"></i>구글 장소 조회 (이번 달)</h3>
+            ${[['상세 조회', places.details], ['검색', places.search]].map(([k, v]) => html`<div>
+              <div class="flex justify-between text-[11px] text-slate-300 mb-1"><span>${k}</span><span class="font-mono">${v} / ${places.limit}</span></div>
+              ${bar(v, places.limit, v >= places.limit * 0.9 ? 'bg-rose-400' : 'bg-neon-cyan')}</div>`)}
+          </section>` : ''}
+          ${imageSection(images)}`)}
       </main>`);
+
+    renderTrips();
+    $('#trip-q', app).addEventListener('input', (e) => { q = e.target.value; renderTrips(); });
 
     $('#image-form', app)?.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -337,12 +421,36 @@ export async function render(app) {
         try { await rpc('admin_dismiss_ai_request', { p_user: el.dataset.user }); load(); }
         catch (e) { toast(errorText(e), 'error'); }
       },
-      'delete-trip': async (el) => {
-        if (!confirmAction(`"${el.dataset.title}" 여행과 모든 데이터를 삭제할까요? 되돌릴 수 없습니다.`)) return;
-        const { removeTripFiles } = await import('../lib/images.js');
-        await removeTripFiles(el.dataset.id);
-        const { error } = await supabase.from('trips').delete().eq('id', el.dataset.id);
-        if (error) toast(errorText(error), 'error'); else { toast('삭제했습니다.'); load(); }
+      'delete-trip': (el) => deleteTrip(el.dataset.id, el.dataset.title),
+      'open-trip': (el) => openTrip(el.dataset.id),
+      'trip-sort': (el) => {
+        sort = el.dataset.sort;
+        app.querySelectorAll('[data-action="trip-sort"]').forEach((b) => { b.className = `${b.dataset.sort === sort ? 'chip-active' : 'chip'}`; });
+        renderTrips();
+      },
+      'admin-tab': (el) => {
+        tab = el.dataset.tab;
+        try { sessionStorage.setItem(TAB_KEY, tab); } catch { /* 무시 */ }
+        app.querySelectorAll('.admin-tab').forEach((b) => {
+          const on = b.dataset.tab === tab;
+          b.classList.toggle('bg-neon-cyan', on); b.classList.toggle('text-night-950', on); b.classList.toggle('text-slate-300', !on);
+        });
+        app.querySelectorAll('[data-panel]').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== tab));
+        window.scrollTo(0, 0);
+      },
+      'trip-menu': (el) => {
+        const { id, title } = el.dataset;
+        openSheet(html`
+          <h3 class="text-base font-black text-white mb-3 truncate">${title}</h3>
+          <div class="space-y-2">
+            <button data-action="m-open" class="btn-ghost w-full py-2.5 text-left px-3"><i class="fa-solid fa-user-shield mr-1.5 text-amber-300"></i>관리자 보기로 열기 (읽기 전용)</button>
+            <button data-action="m-copy" class="btn-ghost w-full py-2.5 text-left px-3"><i class="fa-solid fa-copy mr-1.5"></i>여행 id 복사</button>
+            <button data-action="m-delete" class="w-full py-2.5 rounded-xl bg-rose-500/10 text-rose-300 border border-rose-500/30 text-xs font-bold">여행 삭제</button>
+          </div>`, (box) => delegate(box, {
+          'm-open': () => openTrip(id),
+          'm-copy': () => copyText(id, '여행 id'),
+          'm-delete': () => { closeSheet(); deleteTrip(id, title); },
+        }));
       },
     }),
   };

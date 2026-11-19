@@ -885,6 +885,7 @@ export function likeNames(store, memberIds) {
 
 // 내 찜 켜고 끄기 + 누가 찜했는지 토스트
 export function toggleLikeWithToast(store, placeId) {
+  if (store.readOnly) { store.blockWrite(); return; }
   if (!store.toggleLike(placeId)) { toast('이 기기는 멤버로 연결되어 있지 않아 찜할 수 없어요.', 'error'); return; }
   const names = likeNames(store, store.likeMap().get(placeId) || []);
   const mine = store.likedByMe(placeId);
@@ -1007,7 +1008,7 @@ export function openPlaceDetail(store, id, from) {
       closeSheet();
       try { sessionStorage.setItem('guide:focus', id); } catch {}
       window.dispatchEvent(new Event('app:guide-focus'));   // 이미 가이드 탭이면 바로 스크롤
-      navigate(`/trip/${store.tripId}/guides`, { replace: true });
+      navigate(`${store.readOnly ? '/admin' : ''}/trip/${store.tripId}/guides`, { replace: true });
     },
   }));
 }

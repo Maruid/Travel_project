@@ -84,7 +84,9 @@ function ts(s) {
 
 export class TripStore {
   // headless: 화면 없이 잠깐 받아서 저장만 (자동 미리 받기) → 이벤트 · 타이머 · 실시간 구독 없음
-  constructor(tripId, userId, { headless = false } = {}) {
+  // readOnly: 관리자 보기 (멤버가 아닌 여행을 서버에서 바로 받아 보기만)
+  //   → 이 기기 캐시 · 보낼 목록 · 받은 시각 기록을 쓰지 않고, 쓰기는 'app:readonly' 알림만 보냄
+  constructor(tripId, userId, { headless = false, readOnly = false } = {}) {
     this.tripId = tripId;
     this.userId = userId;
     this.cacheKey = `trip-cache:v1:${tripId}`;
@@ -112,6 +114,7 @@ export class TripStore {
     this._flushTimer = null;
     this.lastSyncedAt = null;
     this.headless = headless;
+    this.readOnly = readOnly;
     if (headless) return;
 
     this._onOnline = () => this.sync();
@@ -148,6 +151,7 @@ export class TripStore {
 
   // ---------------------------------------------------------- 캐시
   loadCache() {
+    if (this.readOnly) return false;
     try {
       const c = JSON.parse(localStorage.getItem(this.cacheKey) || 'null');
       if (c) {
@@ -174,7 +178,7 @@ export class TripStore {
   saveCacheNow() {
     clearTimeout(this._cacheTimer);
     this._cacheTimer = null;
-    if (!this.trip) return;
+    if (!this.trip || this.readOnly) return;
     try {
       localStorage.setItem(this.cacheKey, JSON.stringify({
         trip: this.trip, budget: this.budget, members: this.members, devices: this.devices, invite: this.invite,
@@ -186,6 +190,7 @@ export class TripStore {
   }
 
   saveOutbox() {
+    if (this.readOnly) return;
     try { localStorage.setItem(this.outboxKey, JSON.stringify(this.outbox)); } catch {}
   }
 
@@ -228,7 +233,7 @@ export class TripStore {
       changed = await this.pull();
       this.status = this.outbox.length ? 'offline' : 'idle';
       this.lastSyncedAt = Date.now();
-      markSynced(this.tripId, this.userId, this.lastSyncedAt);
+      if (!this.readOnly) markSynced(this.tripId, this.userId, this.lastSyncedAt);
       ok = true;
     } catch (e) {
       this.status = isNetworkError(e) || isTokenError(e) ? 'offline' : 'error';
@@ -460,7 +465,15 @@ export class TripStore {
   }
 
   // ---------------------------------------------------------- 쓰기 API
+  // 관리자 보기: 바꾸지 않고 알림만 (화면이 'app:readonly' 를 받아 안내)
+  blockWrite() {
+    if (!this.readOnly) return false;
+    globalThis.dispatchEvent?.(new Event('app:readonly'));
+    return true;
+  }
+
   insert(table, data) {
+    if (this.blockWrite()) return null;
     const now = new Date().toISOString();
     const row = { id: crypto.randomUUID(), trip_id: this.tripId, ...data };
     this.tables[table].set(row.id, { ...row, created_at: now, updated_at: now, created_by: this.userId });
@@ -471,6 +484,7 @@ export class TripStore {
   }
 
   update(table, id, patch) {
+    if (this.blockWrite()) return;
     const cur = this.tables[table].get(id);
     if (cur) this.tables[table].set(id, { ...cur, ...patch });
     this.enqueue({ op: 'update', table, id, data: patch });
@@ -483,6 +497,7 @@ export class TripStore {
   }
 
   updateBudget(patch) {
+    if (this.blockWrite()) return;
     this.budget = { ...(this.budget || {}), ...patch };
     const prev = this.outbox.find((o) => o.table === 'trip_budgets' && !o.sending);
     if (prev) { prev.data = { ...prev.data, ...patch }; this.saveOutbox(); }
@@ -526,6 +541,7 @@ export class TripStore {
   }
   // 내 찜 켜고 끄기. 내 멤버를 모르면(참여 정보 없음) false
   toggleLike(placeId) {
+    if (this.blockWrite()) return false;
     const me = this.me;
     if (!me) return false;
     const id = likeId(placeId, me.id);

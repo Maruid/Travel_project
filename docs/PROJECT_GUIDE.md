@@ -675,6 +675,16 @@ Supabase 설정: Data API의 "새 테이블 자동 노출"이 **OFF**입니다. 
   - 지난 코드는 하나씩 또는 한 번에 완전 삭제(`admin_delete_codes`)할 수 있습니다. 사용 가능한 코드는 먼저 폐기해야 삭제됩니다(`CODE_IN_USE`).
 - 생성 코드를 삭제해도 여행은 남고, 여행의 `creation_code_id`만 null이 됩니다.
 
+### 7-10-1. 관리자 화면 · 관리자 보기 (2026-11-19)
+
+- **관리자 화면** (`views/admin.js`): 맨 위 요약(여행 수 · 7일 활성 · DB 용량 막대) + 탭 4개(마지막 탭은 `sessionStorage admin:tab`).
+  - [여행]: 검색(이름 · 여행지 · owner · 코드), 정렬(최근 활동 · 만든 날 · 여행 날짜), 상태 표시(D-n · 여행 중 · 지남, 이 기기 날짜 기준). 행을 누르면 관리자 보기, ⋯ = 열기 · id 복사 · 삭제.
+  - [생성 코드] 발급 · 사용 가능 · 지난 코드 / [AI 권한] (요청 건수 배지) / [사용량] 통계 전체 · 구글 조회 한도 · 사진.
+- **관리자 보기** `#/admin/trip/:id/:tab?` (`trip.js` 의 `params.admin`): 멤버가 아닌 여행도 읽기 전용으로 엶. DB 변경 없음 — 표 조회 정책에 이미 `or is_admin()` 이 있음(`trip_invites` · `trip_view_links` 는 없어서 빈 값).
+  - `TripStore({ readOnly: true })`: 이 기기 캐시 · 보낼 목록 · `markSynced`(trip-sync-index) 를 쓰지 않음 → 홈 내 여행 목록 · 자동 미리 받기에 안 남음. `insert/update/remove/updateBudget/toggleLike` 는 바꾸지 않고 `app:readonly` 알림 → "관리자 보기에서는 고칠 수 없어요" (편집 버튼은 그대로 보임).
+  - `touch_trip` · 사진 상태 · 사진 미리 받기 · 삭제 임박 띠 안 함. 머리줄에 [관리자 보기] 표시, [←] 는 관리자 화면으로(`sessionStorage nav:fromAdmin`).
+  - 설정 탭 자리는 [관리](`tabs/admin-info.js`): 여행 정보 · 데이터 개수 · 멤버별 최근 활동 · 여행 삭제(관리자, 이름 확인).
+
 ---
 
 ## 8. Edge Functions
