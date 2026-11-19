@@ -43,3 +43,71 @@ export function balances(expenses, memberIds, toAmount) {
   const ids = [...new Set([...memberIds, ...paid.keys(), ...owed.keys()])];
   return ids.map((id) => ({ id, paid: paid.get(id) || 0, owed: owed.get(id) || 0, net: (paid.get(id) || 0) - (owed.get(id) || 0) }));
 }
+
+// ---------------------------------------------------------------------
+// 공금 지갑 (migration_018)
+//   충전(charge): 지갑에 amount(현지 돈) 들어옴. shares {member: 금액} 이 넣은 사람, 없으면 그때 멤버 모두 같은 금액
+//   인출(withdraw): from_wallet → wallet_id 로 옮김 (공금 카드 → 공금 현금)
+//   지출: wallet_id 가 있으면 그 지갑에서 나감 (낸 사람 없음), 없으면 paid_by 개인 돈
+// ---------------------------------------------------------------------
+export function walletBalances(wallets, topups, expenses, toAmount) {
+  const bal = new Map(wallets.map((w) => [w.id, 0]));
+  const add = (id, v) => { if (id && bal.has(id)) bal.set(id, bal.get(id) + v); };
+  for (const t of topups) {
+    const a = Number(t.amount) || 0;
+    if (t.kind === 'charge') add(t.wallet_id, a);
+    else if (t.kind === 'withdraw') { add(t.from_wallet, -a); add(t.wallet_id, a); }
+  }
+  for (const e of expenses) if (e.wallet_id) add(e.wallet_id, -(toAmount(e) || 0));
+  return bal;
+}
+
+// 충전 한 건을 누가 얼마 넣었나 → Map(member → 금액)
+export function chargeShares(t, memberIds) {
+  const out = new Map();
+  const a = Number(t.amount) || 0;
+  const s = t.shares && typeof t.shares === 'object' ? Object.entries(t.shares).filter(([, v]) => Number(v) > 0) : [];
+  if (s.length) for (const [id, v] of s) out.set(id, Number(v));
+  else if (memberIds.length) memberIds.forEach((id) => out.set(id, a / memberIds.length));
+  return out;
+}
+
+// 사람별: 낸 돈(충전 + 개인 돈 지출) · 쓴 몫 · 들고 있는 공금 · 차액
+//   차액 = 낸 돈 - 쓴 몫 - 들고 있는 공금  (합은 0 → settleTransfers 로 송금 목록)
+//   지갑에 들고 있는 사람이 없으면 남은 공금은 모두가 같이 들고 있는 것으로 침
+export function poolBalances({ expenses, topups = [], wallets = [], memberIds, toAmount }) {
+  const paid = new Map(); const owed = new Map(); const held = new Map();
+  const plus = (m, id, v) => m.set(id, (m.get(id) || 0) + v);
+  for (const t of topups) {
+    if (t.kind !== 'charge') continue;
+    for (const [id, v] of chargeShares(t, memberIds)) plus(paid, id, v);
+  }
+  for (const e of expenses) {
+    const amt = toAmount(e);
+    if (!amt) continue;
+    if (!e.wallet_id && e.paid_by) plus(paid, e.paid_by, amt);
+    const split = e.split_with?.length ? e.split_with : memberIds;
+    split.forEach((mid) => plus(owed, mid, amt / split.length));
+  }
+  const wb = walletBalances(wallets, topups, expenses, toAmount);
+  for (const w of wallets) {
+    const b = wb.get(w.id) || 0;
+    if (!b) continue;
+    if (w.holder) plus(held, w.holder, b);
+    else memberIds.forEach((id) => plus(held, id, b / memberIds.length));
+  }
+  const ids = [...new Set([...memberIds, ...paid.keys(), ...owed.keys(), ...held.keys()])];
+  return ids.map((id) => {
+    const p = paid.get(id) || 0; const o = owed.get(id) || 0; const h = held.get(id) || 0;
+    return { id, paid: p, owed: o, held: h, net: p - o - h };
+  });
+}
+
+// 충전 기록으로 낸 실제 환율 (현지 1 = 원화 ?) — 원화를 적은 충전만
+export function chargedRate(topups) {
+  let local = 0; let home = 0;
+  for (const t of topups) {
+    if (t.kind === 'charge' && Number(t.home_amount) > 0 && Number(t.amount) > 0) { local += Number(t.amount); home += Number(t.home_amount); }
+  }
+  return local > 0 ? home / local : null;
+}

@@ -25,8 +25,11 @@ export const expenseFilterCount = (f) => f.method.length + f.payer.length + f.sh
 
 export const sharesOf = (e, memberIds) => (e.split_with?.length ? e.split_with : memberIds);
 
+// "어디서 냈나" 필터 값: 공금 지갑이면 w:<id>, 개인 돈이면 결제 수단(cash · card · other)
+export const sourceKey = (e) => (e.wallet_id ? `w:${e.wallet_id}` : e.method || 'other');
+
 export function filterExpenses(list, f, memberIds) {
-  return list.filter((e) => (!f.method.length || f.method.includes(e.method))
+  return list.filter((e) => (!f.method.length || f.method.includes(sourceKey(e)))
     && (!f.payer.length || f.payer.includes(e.paid_by))
     && (!f.share.length || sharesOf(e, memberIds).some((id) => f.share.includes(id)))
     && (!f.cat.length || f.cat.includes(e.category || '기타')));
